@@ -1,20 +1,57 @@
 # PaperLite · 论文速写编辑器
 
-仿 Overleaf 的**本地论文写作工具**：左侧写 LaTeX，右侧实时预览，流程图可视化改样式，一键导出 PDF；支持**打开本地文件夹**——文件树 + 多标签编辑，Markdown 实时渲染、代码高亮编辑、Ctrl+S 直接写回磁盘（VSCode 式体验）。
+仿 Overleaf 的**本地论文工具**：LaTeX 实时预览 + 图样式可视化编辑，支持**打开本地文件夹**（文件树/多标签）、**Markdown 渲染与代码编辑**、**TeX 引擎真实编译（pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX）**、**多级大纲跳转**、**语法检测定位**、**多渠道 LLM（AI 修复 / 对话改写）**。
 
-当前为 **React + Vite 实现**（v2）；最早的零依赖 vanilla 版本保留在 [`legacy/`](legacy/)（双击 `legacy/index.html` 即可用，无需 Node）。两个版本共用同一套渲染引擎逻辑。
+当前为 **React + Vite 实现**；最早的零依赖 vanilla 版本保留在 [`legacy/`](legacy/)。
 
-## 快速开始（React 版）
+## 快速开始
 
 ```bash
-npm install        # 已配置 npmmirror 源（.npmrc）
+npm install
 npm run dev        # 开发：http://localhost:5173
-npm run build      # 构建 → dist/（相对路径产物，可直接双击 dist/index.html）
-npm run preview    # 本地预览构建产物
-npm test           # Node 冒烟测试（真实 KaTeX + Markdown，41 项断言）
+npm run build      # 构建 → dist/
+npm test           # 冒烟测试（48 项断言）
+node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http://localhost:8788
 ```
 
-首次打开即载入中文示例论文（含流程图、公式、三线表、参考文献）；草稿自动保存在浏览器 localStorage。
+> 真正的 TeX 编译与 LLM Mock 需通过 `node server.mjs` 访问（dev server 只有富文本预览）。
+
+## TeX 引擎编译（pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX）
+
+1. 本机安装 [MiKTeX](https://miktex.org) 或 TeX Live 并加入 PATH
+2. `npm run build && node server.mjs`，顶栏引擎下拉自动列出可用引擎
+3. 「⚙ TeX 编译」→ 编译两遍（解析目录/引用）→ 预览区直接看 PDF（可下载/新窗口）；`latex` 引擎自动经 `dvipdfmx` 转 PDF
+4. **编译失败**：自动切换日志视图，`!` 错误与 `l.NN` 行号被解析成可点击条目，一键跳到源码行（进入「⚠ 问题」面板同样可跳转）
+
+未安装 TeX / 静态打开时按钮自动禁用并给出指引，浏览器打印导出 PDF 依然可用。
+
+## 大纲窗口
+
+左侧栏「☰」：多级大纲（LaTeX 章节 + 子节 / Markdown 标题，带编号缩进）。点击任意条目 → **编辑器跳到对应行（黄色闪烁）+ 预览滚动到对应标题**。
+
+## 语法检测
+
+左侧栏「⚠」（状态栏计数可点）汇总三类问题，全部**点击跳转到源码行**：
+
+- 静态检测（`src/engines/linter.js`，行号级）：环境未闭合/不匹配、花括号不配对、行内 `$` 奇数、未定义 `\ref`/`\cite`、列表外 `\item`
+- 渲染警告（引擎实时产生）
+- 编译错误（TeX 日志解析）
+
+## AI（多渠道 LLM）
+
+「🤖 AI 设置」：兼容 OpenAI 协议（OpenAI / DeepSeek / GLM / 通义 / Kimi / Ollama…），可添加多个渠道，每渠道独立配置：
+
+- Base URL / API Key / **对话模型** / **检索模型**（embedding，用于文档检索增强）
+- **思维链开关**（发送推理提示；模型返回 `reasoning_content` 时在对话中可折叠查看 💭）
+- **上下文上限**（字符）
+- **测试连接**（/models 或对话探活，内联显示结果）
+
+两种用法：
+
+- **✨ AI 修复**：问题面板一键把「问题清单 + 文档」交给模型，返回修复后的完整文档（代码块中，可预览后「替换全文」，Ctrl+Z 可撤销）
+- **💬 AI 助手**：对话面板流式输出；上下文范围可选 **选区 / 光标段落 / 全文 / 检索增强**（调用检索模型对文档分块嵌入取 top-k，不可用时回退全文截断）；回复中的代码块支持 **复制 / 替换选区 / 插入光标 / 替换全文**
+
+离线体验：`node server.mjs` 内置 OpenAI 兼容 Mock（`/v1/chat/completions` 流式、`/v1/embeddings`），设置里「添加渠道」默认预填。
 
 ## 打开本地文件夹（需 Chrome / Edge）
 

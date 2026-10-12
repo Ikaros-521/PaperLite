@@ -475,7 +475,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       }
       var inner = renderFlow(g1.text, ctx, base + g1.start, false, true);
       var hid = 'h-' + ctx.headings.length;
-      ctx.headings.push({ level: lvl, num: num, text: stripTags(inner), id: hid });
+      ctx.headings.push({ level: lvl, num: num, text: stripTags(inner), id: hid, offset: base + i });
       // 标题内的 \label
       var lm = g1.text.match(/\\label\{([^}]+)\}/);
       if (lm) ctx.labels[lm[1]] = num || '';

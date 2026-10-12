@@ -38,7 +38,31 @@ function atob64(s) {
 }
 
 export function renderMarkdown(src) {
-  let html = md.render(String(src || ''));
+  return renderMarkdownFull(src).html;
+}
+
+// 渲染 + 提取大纲（标题层级/行号/锚点 id），供大纲面板跳转
+export function renderMarkdownFull(src) {
+  const str = String(src || '');
+  // 扫描标题（跳过代码围栏），生成与渲染顺序一致的 id
+  const headings = [];
+  let inFence = false;
+  str.split('\n').forEach((line, idx) => {
+    if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return; }
+    if (inFence) return;
+    const m = line.match(/^(#{1,6})\s+(.*)$/);
+    if (m) headings.push({ level: m[1].length, text: m[2].replace(/[*`_#]/g, '').trim(), line: idx, id: 'mdh-' + headings.length });
+  });
+
+  let html = md.render(str);
+  // 按顺序注入 id
+  let hi = 0;
+  html = html.replace(/<(h[1-6])>/g, (_, tag) => {
+    const id = hi < headings.length ? headings[hi].id : '';
+    hi++;
+    return id ? '<' + tag + ' id="' + id + '">' : '<' + tag + '>';
+  });
+
   // mermaid 代码块 → 占位 div（由 PreviewPane 懒渲染）
   html = html.replace(/<pre><code class="language-mermaid[\s\S]*?<\/code><\/pre>/g, (m) => {
     const code = m.replace(/^<pre><code[^>]*>/, '').replace(/<\/code><\/pre>$/, '')
@@ -53,5 +77,5 @@ export function renderMarkdown(src) {
     if (raw.startsWith('@@D@@')) return '<div class="equation"><span class="eq-body">' + renderMathSafe(raw.slice(5), true) + '</span></div>';
     return renderMathSafe(raw.slice(5), false);
   });
-  return html;
+  return { html, headings };
 }

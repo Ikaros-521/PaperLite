@@ -4,15 +4,16 @@ import { exportSvg, exportPng } from '../exporter.js';
 let mermaidInited = false;
 let mermaidSeq = 0;
 
-/* 预览面板：HTML 注入 + Mermaid 懒加载 + 图工具条 + 节点选中联动 + 工具栏 */
+/* 预览面板：HTML 注入 + Mermaid 懒加载 + 图工具条 + 节点选中联动 + 编译栏 */
 export default function PreviewPane({
   result, selection, onSelectNode, onScrollRatio, zoom, onZoom,
-  panelOpen, onTogglePanel, syncScroll, onSyncToggle
+  panelOpen, onTogglePanel, syncScroll, onSyncToggle,
+  engines, engine, setEngine, compiling, onCompile, hasCompile,
+  onOpenSettings, onOpenChat
 }) {
   const scrollRef = useRef(null);
   const paperRef = useRef(null);
 
-  // Mermaid 懒加载渲染
   useEffect(() => {
     const paper = paperRef.current;
     if (!paper) return;
@@ -41,7 +42,6 @@ export default function PreviewPane({
     return () => { cancelled = true; };
   }, [result]);
 
-  // 每个图块的悬浮导出工具条
   useEffect(() => {
     const paper = paperRef.current;
     if (!paper) return;
@@ -65,7 +65,6 @@ export default function PreviewPane({
     });
   }, [result]);
 
-  // 选中节点高亮
   useEffect(() => {
     const paper = paperRef.current;
     if (!paper) return;
@@ -99,11 +98,24 @@ export default function PreviewPane({
     <section id="previewPane">
       <div id="previewBar">
         <span className="pb-title">预览</span>
+        {result.isMd && <span className="pb-chip">Markdown</span>}
         <label className="pb-toggle" title="编辑器与预览同步滚动">
-          <input type="checkbox" checked={syncScroll} onChange={e => onSyncToggle(e.target.checked)} /> 同步滚动
+          <input type="checkbox" checked={syncScroll} onChange={e => onSyncToggle(e.target.checked)} /> 同步
         </label>
+
+        <span className="pb-compile" title={engines && engines.length ? '本机 TeX 引擎真实编译' : '未检测到 TeX 引擎（需安装 MiKTeX/TeX Live 并用 node server.mjs 访问）'}>
+          <select value={engine} onChange={e => setEngine(e.target.value)} disabled={!engines || !engines.length}>
+            {(engines && engines.length ? engines : ['无引擎']).map(en => <option key={en} value={en}>{en}</option>)}
+          </select>
+          <button className={'btn sm' + (compiling ? ' busy' : '')} disabled={compiling || !engines || !engines.length} onClick={onCompile}>
+            {compiling ? '⟳ 编译中…' : '⚙ 编译'}
+          </button>
+        </span>
+
         <span className="pb-spacer"></span>
-        <button className={'btn sm' + (panelOpen ? ' on' : '')} title="图样式编辑面板" onClick={onTogglePanel}>🎨 图样式</button>
+        <button className="btn sm" title="AI 设置（多渠道 / 测试连接 / 思维链）" onClick={onOpenSettings}>🤖⚙</button>
+        <button className={'btn sm' + (onTogglePanel ? '' : '')} title="图样式编辑面板" onClick={onTogglePanel}>🎨</button>
+        <button className="btn sm" title="AI 对话 / 改写" onClick={onOpenChat}>💬 AI</button>
         <span className="pb-zoom">
           <button className="btn sm" onClick={() => onZoom(-0.1)}>−</button>
           <span>{Math.round(zoom * 100)}%</span>

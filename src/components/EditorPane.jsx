@@ -51,6 +51,8 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     cb.current.onInit && cb.current.onInit(cm);
     setTimeout(() => cm.refresh(), 50);
     return () => {
+      // 先脱开共享 Doc（避免 StrictMode 双挂载时 "document is already in use"）
+      try { cm.swapDoc(new CodeMirror.Doc('', 'stex')); } catch (e) { /* ignore */ }
       const el = cm.getWrapperElement();
       if (el && el.parentNode) el.parentNode.removeChild(el);
     };
