@@ -13,6 +13,7 @@
   "dependencies": {
     "codemirror": "^5.65.16",
     "katex": "^0.16.11",
+    "markdown-it": "^15.0.2",
     "mermaid": "^10.9.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

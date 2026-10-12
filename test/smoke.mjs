@@ -1,5 +1,6 @@
-/* PaperLite React 版冒烟测试（Node + 真实 KaTeX） */
+/* PaperLite 冒烟测试（Node + 真实 KaTeX） */
 import { renderLatex } from '../src/engines/latex.js';
+import { renderMarkdown } from '../src/engines/markdown.js';
 import * as TIKZ from '../src/engines/tikz.js';
 import { samples } from '../src/engines/samples.js';
 
@@ -66,6 +67,41 @@ console.log('== blank / 颜色 ==');
 ok(renderLatex(samples.blank).html.includes('摘要内容'), 'blank 渲染');
 ok(TIKZ.parseColor('blue!20') === '#ccccff', 'blue!20');
 ok(TIKZ.parseColor('red!50!blue') === '#800080', 'red!50!blue');
+
+// ---------- Markdown 引擎 ----------
+console.log('== Markdown 引擎 ==');
+const mdSrc = [
+  '# 项目笔记',
+  '',
+  '行内公式 $E=mc^2$ 与显示公式：',
+  '',
+  '$$\\int_0^1 x^2\\,dx = \\frac{1}{3}$$',
+  '',
+  '| 列A | 列B |',
+  '| --- | --- |',
+  '| 1 | 2 |',
+  '',
+  '```mermaid',
+  'flowchart LR',
+  '  A-->B',
+  '```',
+  '',
+  '```js',
+  'const x = 1; // 代码中的 $ 不应被当数学处理',
+  '```',
+  '',
+  '**加粗** 与 *斜体*，[链接](https://example.com)。'
+].join('\n');
+const mdHtml = renderMarkdown(mdSrc);
+ok(mdHtml.includes('<h1>项目笔记</h1>'), 'md 一级标题');
+ok((mdHtml.match(/class="katex"/g) || []).length >= 2, 'md 数学渲染（行内+行间）');
+ok(mdHtml.includes('int_0^1') === false || mdHtml.includes('katex'), 'md 数学已转 KaTeX');
+ok(mdHtml.includes('<table>') && mdHtml.includes('<th>列A</th>'), 'md 表格');
+ok(mdHtml.includes('mermaid-block') && mdHtml.includes('flowchart'), 'md mermaid 块');
+ok(mdHtml.includes('language-js') || mdHtml.includes('language-js'.replace('js','javascript')), 'md 代码块语言类');
+ok(mdHtml.includes('const x = 1') && !/language-[\s\S]{0,40}class="katex"/.test(mdHtml.split('language-')[1] || ''), '代码块内 $ 未误处理');
+ok(mdHtml.includes('<strong>加粗</strong>'), 'md 加粗');
+ok(mdHtml.includes('<a href="https://example.com"'), 'md 链接');
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

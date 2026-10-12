@@ -115,7 +115,7 @@ export default function PreviewPane({
           <div
             id="paper"
             ref={paperRef}
-            className={'paper' + (result.meta.twocolumn ? ' twocolumn' : '') + (result.meta.ctex ? ' ctex' : '')}
+            className={'paper' + (result.isMd ? ' md-view' : '') + (result.meta.twocolumn ? ' twocolumn' : '') + (result.meta.ctex ? ' ctex' : '')}
             style={{ zoom }}
             dangerouslySetInnerHTML={{ __html: result.html }}
           />

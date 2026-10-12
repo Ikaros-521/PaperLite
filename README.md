@@ -1,6 +1,6 @@
 # PaperLite · 论文速写编辑器
 
-仿 Overleaf 的**本地论文写作工具**：左侧写 LaTeX，右侧实时预览，流程图可视化改样式，一键导出 PDF。
+仿 Overleaf 的**本地论文写作工具**：左侧写 LaTeX，右侧实时预览，流程图可视化改样式，一键导出 PDF；支持**打开本地文件夹**——文件树 + 多标签编辑，Markdown 实时渲染、代码高亮编辑、Ctrl+S 直接写回磁盘（VSCode 式体验）。
 
 当前为 **React + Vite 实现**（v2）；最早的零依赖 vanilla 版本保留在 [`legacy/`](legacy/)（双击 `legacy/index.html` 即可用，无需 Node）。两个版本共用同一套渲染引擎逻辑。
 
@@ -11,12 +11,32 @@ npm install        # 已配置 npmmirror 源（.npmrc）
 npm run dev        # 开发：http://localhost:5173
 npm run build      # 构建 → dist/（相对路径产物，可直接双击 dist/index.html）
 npm run preview    # 本地预览构建产物
-npm test           # Node 冒烟测试（真实 KaTeX，32 项断言）
+npm test           # Node 冒烟测试（真实 KaTeX + Markdown，41 项断言）
 ```
 
-首次打开即载入中文示例论文（含流程图、公式、三线表、参考文献）。文档自动保存在浏览器 localStorage。
+首次打开即载入中文示例论文（含流程图、公式、三线表、参考文献）；草稿自动保存在浏览器 localStorage。
 
-## 核心功能
+## 打开本地文件夹（需 Chrome / Edge）
+
+点顶栏「📂 打开文件夹」并授权读写后：
+
+- **文件树**：懒加载展开、文件夹优先排序（自动隐藏 `node_modules`/`.git`/`dist` 等目录）；悬停条目可重命名 ✏️ / 删除 🗑，悬停文件夹可就地新建文件 ＋📄 / 新建文件夹 ＋📁
+- **多标签**：点击文件打开为标签（独立撤销历史与光标）；未保存显示 ● 圆点，关闭前有确认；图片文件直接预览
+- **按类型预览/编辑**：
+
+| 文件类型 | 行为 |
+| --- | --- |
+| `.tex/.sty/.cls/.bib` | PaperLite 全功能：LaTeX 实时预览 + 图样式面板 |
+| `.md/.markdown` | Markdown 实时渲染（表格、`$..$`/`$$..$$` 数学走 KaTeX、\`\`\`mermaid 图、代码高亮块） |
+| `.js/.ts/.py/.cpp/.go/.rs/.sql/.yaml/.html/...` 等代码 | 语法高亮编辑（CodeMirror 15+ 语言模式），右侧显示文件信息卡 |
+| `.png/.jpg/.gif/...` | 图片预览 |
+| 其他文本（`.txt/.log/...`） | 纯文本编辑 |
+| 二进制/超大文件（>2MB） | 拒绝打开并提示 |
+
+- **保存**：`Ctrl+S` 或「💾 保存」——文件标签写回磁盘原位置；草稿标签存浏览器；未保存关闭会确认
+- **文件夹记忆**：根目录句柄存 IndexedDB，重开浏览器后点「🔓 恢复上次文件夹」即可（需重新授权，浏览器安全策略）
+
+## 核心功能（论文）
 
 | 功能 | 说明 |
 | --- | --- |
@@ -37,19 +57,24 @@ paperlite/
 ├── index.html            # Vite 入口
 ├── src/
 │   ├── main.jsx          # 挂载
-│   ├── App.jsx           # 状态中枢（source/视图/缩放/选择/同步滚动/快捷键/拖拽分栏）
-│   ├── app.css           # 界面 + 论文排版样式
+│   ├── App.jsx           # 多标签状态中枢（文件夹/标签/预览路由/保存/同步滚动/快捷键）
+│   ├── fs.js             # File System Access API（目录遍历/读写/增删改 + IndexedDB 持久化）
+│   ├── fileTypes.js      # 扩展名 → 编辑器模式 / 预览类型 / 图标
+│   ├── app.css           # 界面 + 论文/Markdown 排版样式
 │   ├── engines/          # ★ 纯渲染引擎（无 React/DOM 依赖，Node 可直接单测）
 │   │   ├── latex.js      #   LaTeX → HTML（注释等长抹除，保证源码偏移可回写）
 │   │   ├── tikz.js       #   TikZ 子集 → SVG（记录节点/样式源码区间）
+│   │   ├── markdown.js   #   Markdown → HTML（KaTeX 数学 + mermaid 块 + 代码保护）
 │   │   └── samples.js    #   内置模板
 │   ├── styleMutations.js # 图样式回写纯逻辑（面板 UI 与源码修改解耦）
 │   ├── exporter.js       # PDF 打印 / .tex / HTML / SVG / PNG
 │   └── components/
-│       ├── EditorPane.jsx    # CodeMirror 封装
+│       ├── FileTree.jsx      # 文件树（懒加载/新建/重命名/删除）
+│       ├── TabsBar.jsx       # 多标签栏
+│       ├── EditorPane.jsx    # CodeMirror 封装（每 Tab 独立 Doc，swapDoc 切换）
 │       ├── PreviewPane.jsx   # 预览 + Mermaid 懒加载 + 图工具条 + 选中联动
 │       ├── StylePanel.jsx    # 图样式编辑面板（应用时直读 DOM 控件值）
-│       └── Toolbar.jsx       # 顶栏 / 模板 / 导出 / 插入工具
+│       └── Toolbar.jsx       # 顶栏 / 文件夹 / 模板 / 导出 / 插入工具
 ├── legacy/               # v1 vanilla 版（双击 legacy/index.html 可用）
 └── test/smoke.mjs        # 冒烟测试（npm test）
 ```

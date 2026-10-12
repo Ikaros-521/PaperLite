@@ -1,9 +1,8 @@
-import { useRef, useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-/* 顶栏：模板 / 文件 / 导出 + 编辑插入工具 */
-export default function Toolbar({ actions, viewMode, setViewMode }) {
+/* 顶栏：文件夹 / 模板 / 导出 + 编辑插入工具 */
+export default function Toolbar({ actions, viewMode, setViewMode, latexOk }) {
   const [tplOpen, setTplOpen] = useState(false);
-  const fileRef = useRef(null);
   const rootRef = useRef(null);
 
   useEffect(() => {
@@ -52,17 +51,24 @@ export default function Toolbar({ actions, viewMode, setViewMode }) {
             </div>
           )}
         </div>
-        <button className="btn" title="打开 .tex 文件" onClick={() => fileRef.current && fileRef.current.click()}>📂 打开</button>
-        <button className="btn" title="下载 .tex（可导入 Overleaf / 本地 TeX 编译）" onClick={actions.exportTex}>💾 下载 .tex</button>
-        <button className="btn" title="导出独立 HTML" onClick={actions.exportHtml}>🌐 导出 HTML</button>
+        <button className="btn" title="打开本地文件夹（文件树 + 读写保存，需 Chrome/Edge）" onClick={actions.openFolder}>📂 打开文件夹</button>
+        <button className="btn" title="打开单个文件" onClick={actions.openFile}>🗎 打开文件</button>
+        <button className="btn" title="保存当前标签（Ctrl+S）：草稿→浏览器，文件→写回磁盘" onClick={actions.save}>💾 保存</button>
+        <button className="btn" title="下载当前 .tex（可导入 Overleaf / 本地 TeX 编译）" onClick={actions.exportTex}>⬇ .tex</button>
         <button className="btn primary" title="调起浏览器打印，选择「另存为 PDF」即得矢量 PDF" onClick={actions.exportPdf}>🖨 导出 PDF</button>
-        <input ref={fileRef} type="file" accept=".tex,.txt,.latex,image/*" hidden onChange={e => { actions.openFile(e.target.files && e.target.files[0]); e.target.value = ''; }} />
       </div>
 
       <div className="tb-group edit-tools">
         {T.map((t, i) => t === null
           ? <span key={i} className="tsep"></span>
-          : <button key={t[0]} id={t[0]} className={'btn sm' + (t[0] === 'tFlow' ? ' accent' : '')} title={t[2]} onClick={() => actions.tool(t[0])}>
+          : <button
+              key={t[0]}
+              id={t[0]}
+              className={'btn sm' + (t[0] === 'tFlow' ? ' accent' : '')}
+              title={latexOk ? t[2] : t[2] + '（当前文件非 .tex/.md，不可用）'}
+              disabled={!latexOk}
+              onClick={() => latexOk && actions.tool(t[0])}
+            >
               {t[1] === 'B' ? <b>B</b> : t[1] === 'I' ? <i>I</i> : t[1] === 'U' ? <u>U</u> : t[1]}
             </button>
         )}

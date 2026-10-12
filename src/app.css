@@ -52,11 +52,78 @@ body {
 /* ---------- 主体布局 ---------- */
 #layout { flex: 1; display: flex; min-height: 0; --split: 52%; }
 #layout[data-mode="edit"] #previewPane, #layout[data-mode="edit"] #divider { display: none; }
-#layout[data-mode="preview"] #editorPane, #layout[data-mode="preview"] #divider { display: none; }
+#layout[data-mode="preview"] #editorCol, #layout[data-mode="preview"] #divider, #layout[data-mode="preview"] #workspace { display: none; }
+#layout[data-ws="off"] #workspace { display: none; }
 
-#editorPane { width: var(--split); min-width: 260px; display: flex; flex-direction: column; background: #fff; }
+/* ---------- 文件树（工作区） ---------- */
+#workspace {
+  width: 232px; flex: none; background: #f8f9fb; border-right: 1px solid #e3e6ea;
+  display: flex; flex-direction: column; min-height: 0; font-size: 13px;
+}
+#workspace.restore { align-items: center; justify-content: center; gap: 8px; padding: 12px; }
+.ft-head {
+  display: flex; align-items: center; padding: 6px 8px; border-bottom: 1px solid #e8ebf0;
+  background: #fff; font-weight: 600; color: #33415c; gap: 6px;
+}
+.ft-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ft-head-acts { display: flex; gap: 2px; }
+.ft-body { flex: 1; overflow: auto; padding: 4px 0 20px; }
+.ft-row {
+  display: flex; align-items: center; gap: 5px; padding: 3px 8px; cursor: pointer;
+  border-radius: 4px; margin: 0 4px; user-select: none; position: relative;
+}
+.ft-row:hover { background: #edf1f7; }
+.ft-row.sel { background: #e1e9fb; }
+.ft-icon { flex: none; font-size: 12px; }
+.ft-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #2a3346; }
+.ft-acts { display: none; gap: 2px; }
+.ft-row:hover .ft-acts { display: flex; }
+.ft-acts button {
+  border: 0; background: none; cursor: pointer; font-size: 10px; padding: 1px 2px; border-radius: 3px;
+  line-height: 1.2;
+}
+.ft-acts button:hover { background: #d9e2f2; }
+.ft-acts button:disabled { opacity: .3; cursor: default; }
+.ft-hint { color: #93a0b4; padding: 4px 12px; }
+.ft-error { color: #b42318; padding: 3px 8px; font-size: 12px; }
+
+/* ---------- 标签栏 ---------- */
+#editorCol { width: var(--split); min-width: 260px; display: flex; flex-direction: column; background: #fff; min-height: 0; }
+#tabsBar {
+  display: flex; background: #f2f4f8; border-bottom: 1px solid #e3e6ea; overflow-x: auto; flex: none;
+}
+.tab {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 12.5px;
+  cursor: pointer; border-right: 1px solid #e3e6ea; color: #5a6577; white-space: nowrap;
+  background: #f2f4f8; max-width: 200px;
+}
+.tab.on { background: #fff; color: #17325c; font-weight: 600; box-shadow: inset 0 2px 0 #2563eb; }
+.tab-icon { font-size: 11px; }
+.tab-name { overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.tab-dot { width: 7px; height: 7px; border-radius: 50%; background: #f0b429; flex: none; }
+.tab-close {
+  border: 0; background: none; cursor: pointer; font-size: 11px; color: #8a93a3;
+  border-radius: 3px; padding: 0 3px; line-height: 1;
+}
+.tab-close:hover { background: #d9e2f2; color: #333; }
 #editorHost { flex: 1; min-height: 0; overflow: hidden; }
 #editorHost .CodeMirror { height: 100%; font-size: 14px; font-family: Consolas, "Courier New", monospace; }
+.binary-note {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; color: #5a6577; font-size: 15px;
+}
+.binary-note .hint { color: #93a0b4; font-size: 12.5px; }
+
+/* 代码/文本文件的预览占位卡 */
+.code-placeholder { text-align: center; padding: 80px 20px; color: #5a6577; }
+.cp-icon { font-size: 44px; }
+.cp-name { font-size: 17px; font-weight: 700; color: #17325c; margin: 10px 0 16px; }
+.cp-line { font-size: 13.5px; margin: 6px 0; }
+.cp-line.hint { color: #93a0b4; font-size: 12.5px; }
+.paper.image-view { display: flex; align-items: center; justify-content: center; min-height: 400px; }
+.st-flash { color: #15803d; font-weight: 600; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:disabled:hover { background: #fff; border-color: #d7dbe2; }
 
 #divider { width: 5px; cursor: col-resize; background: #e8ebef; transition: background .15s; }
 #divider:hover, body.dragging #divider { background: #bcd0f5; }
@@ -227,6 +294,32 @@ figure.float .diagram { display: block; }
 
 /* KaTeX 微调 */
 .paper .katex { font-size: 1.06em; }
+
+/* ---------- Markdown 预览 ---------- */
+.paper.md-view { text-indent: 0; }
+.paper.md-view > *:first-child { margin-top: 0; }
+.paper.md-view h1 { font-size: 25px; margin: 1em 0 .5em; border-bottom: 1px solid #e4e6ea; padding-bottom: .25em; }
+.paper.md-view h2 { font-size: 21px; margin: 1.1em 0 .45em; }
+.paper.md-view h3 { font-size: 17.5px; margin: 1em 0 .4em; }
+.paper.md-view h4, .paper.md-view h5 { font-size: 15.5px; margin: .9em 0 .35em; }
+.paper.md-view p { text-indent: 0; margin: .6em 0; }
+.paper.md-view ul, .paper.md-view ol { margin: .5em 0 .5em 1.8em; padding: 0; }
+.paper.md-view li { margin: .25em 0; }
+.paper.md-view pre {
+  font-family: Consolas, "Courier New", monospace; font-size: .86em; background: #f6f7f9;
+  border: 1px solid #e4e7ec; border-radius: 6px; padding: .7em .9em; overflow-x: auto; text-indent: 0;
+}
+.paper.md-view code {
+  font-family: Consolas, "Courier New", monospace; font-size: .88em;
+  background: #f0f2f5; border-radius: 3px; padding: .1em .35em;
+}
+.paper.md-view pre code { background: none; padding: 0; }
+.paper.md-view table { border-collapse: collapse; margin: .8em auto; font-size: .93em; }
+.paper.md-view th, .paper.md-view td { border: 1px solid #d7dbe2; padding: .3em .8em; }
+.paper.md-view th { background: #f4f6f9; }
+.paper.md-view blockquote { margin: .8em 1.2em; padding: .2em 1em; border-left: 3px solid #b9c2d0; color: #46505e; background: #fafbfc; }
+.paper.md-view hr { border: 0; border-top: 1px solid #dfe3e9; margin: 1.6em 0; }
+.paper.md-view img { max-width: 100%; }
 
 /* 打印（页内直接 Ctrl+P 时也尽量可用） */
 @media print {
