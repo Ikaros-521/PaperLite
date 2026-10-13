@@ -7,9 +7,13 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const [busy, setBusy] = useState(false);
   const [scope, setScope] = useState('selection');
   const [showReasoning, setShowReasoning] = useState({});
+  const [pos, setPos] = useState(null);      // null=停靠右侧；{x,y}=浮动位置（同样式面板）
+  const [width, setWidth] = useState(null);  // null=默认 360；左缘可拉伸
+  const [height, setHeight] = useState(null);
   const abortRef = useRef(null);
   const listRef = useRef(null);
   const taRef = useRef(null);
+  const panelRef = useRef(null);
 
   const channel = useMemo(
     () => channels.filter(c => c.id === activeChannelId)[0] || channels[0] || null,
@@ -32,6 +36,60 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   }, [inject && inject.n]);
 
   if (!open) return null;
+
+  // 拖拽：按下标题栏（按钮除外）浮窗化并跟随指针，双击标题回停靠（同图样式面板）
+  const startDrag = (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    const el = panelRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const off = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    setPos({ x: rect.left, y: rect.top });
+    setHeight(rect.height);
+    const move = (ev) => {
+      const w = el.offsetWidth;
+      const x = Math.min(Math.max(ev.clientX - off.dx, 60 - w), window.innerWidth - 60);
+      const y = Math.min(Math.max(ev.clientY - off.dy, 8), window.innerHeight - 44);
+      setPos({ x, y });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'grabbing';
+    e.preventDefault();
+  };
+
+  // 左缘拉伸宽度：右缘保持不动（浮动态同时回移 left）
+  const startResize = (e) => {
+    if (e.button !== 0) return;
+    const el = panelRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const startW = rect.width;
+    const startX = e.clientX;
+    const fixedRight = rect.right;
+    const move = (ev) => {
+      const maxW = Math.min(720, window.innerWidth - 80);
+      const w = Math.min(maxW, Math.max(300, startW + (startX - ev.clientX)));
+      setWidth(w);
+      if (pos) setPos(p => (p ? { ...p, x: fixedRight - w } : p));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  };
 
   const send = async () => {
     const q = input.trim();
@@ -116,9 +174,23 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   };
 
   return (
-    <aside id="chatPanel" className="open">
-      <div className="sp-title">
-        AI 助手
+    <aside
+      id="chatPanel"
+      ref={panelRef}
+      className={'open' + (pos ? ' floating' : '')}
+      style={{
+        ...(width ? { width: width + 'px' } : {}),
+        ...(pos ? {
+          left: pos.x + 'px', top: pos.y + 'px',
+          height: (height || 420) + 'px',
+          maxHeight: 'calc(100vh - ' + (pos.y + 12) + 'px)'
+        } : {})
+      }}
+    >
+      <span className="cp-resize" title="拖拽调整宽度" onPointerDown={startResize}></span>
+      <div className="sp-title" onPointerDown={startDrag} onDoubleClick={() => setPos(null)}>
+        <span className="sp-drag" title="拖拽移动面板（双击标题回到停靠）">⠿</span>
+        <span className="sp-t">AI 助手</span>
         <span className="cp-head-acts">
           <button title="AI 设置" onClick={onOpenSettings}>⚙</button>
           <button title="清空对话" onClick={() => setMessages([])}>清</button>

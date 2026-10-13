@@ -219,11 +219,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   position: fixed; top: 64px; bottom: 36px; right: -380px; width: 360px;
   background: var(--paper); border: 1px solid var(--line); border-right: 0; border-radius: 10px 0 0 10px;
   box-shadow: -8px 6px 24px rgba(64, 54, 34, .18); overflow: hidden;
-  transition: right .22s ease; z-index: 20; font-size: 13px;
+  transition: right .22s ease; z-index: 70; font-size: 13px;
   display: flex; flex-direction: column;
 }
 #chatPanel.open { right: 0; }
-#chatPanel .sp-title { display: flex; align-items: center; gap: 6px; }
+#chatPanel.floating {
+  right: auto !important; bottom: auto !important;
+  border-right: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(52, 43, 24, .24); transition: none;
+}
+#chatPanel .sp-title { display: flex; align-items: center; gap: 6px; cursor: grab; }
+#chatPanel .sp-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-resize {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+  cursor: ew-resize; z-index: 5; touch-action: none;
+}
+.cp-resize:hover { background: rgba(31, 58, 95, .12); }
 .cp-head-acts { margin-left: auto; display: flex; gap: 2px; }
 .cp-head-acts button, .ch-acts button {
   border: 0; background: none; cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; color: var(--ink-soft);
