@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { exportSvg, exportPng } from '../exporter.js';
 import { useT } from '../useI18n.js';
 
@@ -7,7 +7,7 @@ let mermaidSeq = 0;
 
 /* 预览面板：HTML 注入 + Mermaid 懒加载 + 图工具条 + 节点选中联动 + 编译栏 */
 export default function PreviewPane({
-  result, selection, onSelectNode, onScrollRatio, zoom, onZoom,
+  result, selection, onSelectNode, onSelMermaid, onScrollRatio, zoom, onZoom,
   panelOpen, onTogglePanel, syncScroll, onSyncToggle,
   engines, engine, setEngine, compiling, onCompile, hasCompile,
   onOpenSettings, onOpenChat
@@ -15,6 +15,7 @@ export default function PreviewPane({
   const t = useT();
   const scrollRef = useRef(null);
   const paperRef = useRef(null);
+  const [mmdTick, setMmdTick] = useState(0); // Mermaid 异步渲染完成后自增，驱动选中态重放
 
   useEffect(() => {
     const paper = paperRef.current;
@@ -36,8 +37,10 @@ export default function PreviewPane({
           b.innerHTML = r.svg;
           const svg = b.querySelector('svg');
           if (svg) { svg.style.maxWidth = '100%'; svg.removeAttribute('height'); }
+          setMmdTick(x => x + 1); // innerHTML 被替换，选中高亮需要重放
         }).catch(err => {
           b.innerHTML = '<div class="render-error">' + t('prev.mermaidErr') + ' ' + String(err && err.message || err).slice(0, 160) + '</div>';
+          setMmdTick(x => x + 1);
         });
       });
     });
@@ -79,7 +82,62 @@ export default function PreviewPane({
     });
   }, [selection, result]);
 
+  // Mermaid 选中高亮（sel: {type:'mermaid', block, id}）；mmdTick：异步渲染完成后重放
+  useEffect(() => {
+    const paper = paperRef.current;
+    if (!paper) return;
+    paper.querySelectorAll('.mermaid-block g.node.selected').forEach(el => el.classList.remove('selected'));
+    if (!selection || !selection.sel || selection.sel.type !== 'mermaid' || !selection.sel.id) return;
+    const block = paper.querySelectorAll('.mermaid-block')[selection.sel.block];
+    const gn = block && block.querySelector('g.node[data-id="' + selection.sel.id + '"]');
+    if (gn) gn.classList.add('selected');
+  }, [selection, result, mmdTick]);
+
+  function rgbToHex(v) {
+    const m = String(v).match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
+    if (!m) return null;
+    const q = x => { const s = (+x).toString(16); return s.length < 2 ? '0' + s : s; };
+    return '#' + q(m[1]) + q(m[2]) + q(m[3]);
+  }
+  function mermaidNodeColors(g) {
+    const shape = g.querySelector('rect, polygon, circle, ellipse');
+    let fill = null, stroke = null, color = null;
+    if (shape) {
+      const cs = getComputedStyle(shape);
+      fill = rgbToHex(cs.fill); stroke = rgbToHex(cs.stroke);
+    }
+    const label = g.querySelector('span, p, text');
+    if (label) { const cs = getComputedStyle(label); color = rgbToHex(cs.color || cs.fill); }
+    return { fill, stroke, color };
+  }
+  function mermaidBlockColors(block) {
+    const shape = block.querySelector('g.node rect, g.node polygon');
+    let fill = null, stroke = null;
+    if (shape) { const cs = getComputedStyle(shape); fill = rgbToHex(cs.fill); stroke = rgbToHex(cs.stroke); }
+    const label = block.querySelector('g.node span, g.node p, g.node text');
+    const color = label ? rgbToHex(getComputedStyle(label).color || getComputedStyle(label).fill) : null;
+    const edge = block.querySelector('path.flowchart-link');
+    const line = edge ? rgbToHex(getComputedStyle(edge).stroke) : null;
+    return { primary: fill, border: stroke, text: color, line };
+  }
+  function mermaidBlockIndex(block) {
+    const paper = paperRef.current;
+    if (!paper) return 0;
+    return [...paper.querySelectorAll('.mermaid-block')].indexOf(block);
+  }
+
   const handleClick = (e) => {
+    const mmNode = e.target && e.target.closest ? e.target.closest('.mermaid-block svg g.node') : null;
+    if (mmNode) {
+      const block = mmNode.closest('.mermaid-block');
+      if (onSelMermaid) onSelMermaid(mermaidBlockIndex(block), mmNode.getAttribute('data-id'), mermaidNodeColors(mmNode));
+      return;
+    }
+    const mmBlock = e.target && e.target.closest ? e.target.closest('.mermaid-block') : null;
+    if (mmBlock && e.target.closest('svg')) {
+      if (onSelMermaid) onSelMermaid(mermaidBlockIndex(mmBlock), null, mermaidBlockColors(mmBlock));
+      return;
+    }
     const g = e.target && e.target.closest ? e.target.closest('.tk-node, .tk-label') : null;
     if (!g) return;
     const sidx = g.getAttribute('data-sidx');

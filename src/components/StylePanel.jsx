@@ -5,8 +5,13 @@ import {
   FONT_NAMES, SHAPES, SHAPE_NAMES, LW_OPTIONS, nearestFontPx,
   getRecord, applyChanges, addNewStyle
 } from '../styleMutations.js';
+import {
+  findMermaidBlocks, readMermaidInit, readMermaidNodeStyle,
+  readMermaidDirection, applyMermaidNodeStyle, applyMermaidTheme, applyMermaidDirection
+} from '../mermaidMutations.js';
 
-/* 图样式编辑面板：样式(tikzset)批量改 + 单节点内联覆盖，修改精确写回源码。
+/* 图样式编辑面板：TikZ 样式(tikzset)批量改 + 单节点内联覆盖 + 布局；
+ * Mermaid 节点颜色（style 行）与全局主题/方向/间距（init 头），修改精确写回源码。
  * 标题栏可拖拽浮窗化（双击标题回停靠），右上 ✕ 关闭。 */
 export default function StylePanel({ open, onClose, result, cm, selection, setSelection }) {
   const t = useT();
@@ -18,9 +23,46 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
   }, [result, selection.did]);
 
   const record = useMemo(
-    () => (cm && result && selection.sel ? getRecord(cm, result, { type: selection.sel.type, did: selection.did, ...selection.sel }) : null),
+    () => (cm && result && selection.sel && selection.sel.type !== 'mermaid'
+      ? getRecord(cm, result, { type: selection.sel.type, did: selection.did, ...selection.sel }) : null),
     [cm, result, selection]
   );
+
+  // Mermaid 记录：{kind:'mermaidNode'|'mermaidTheme', block, id?, range, code, props}
+  const mmRecord = useMemo(() => {
+    if (!cm || !selection.sel || selection.sel.type !== 'mermaid') return null;
+    const src = cm.getValue();
+    const range = findMermaidBlocks(src)[selection.sel.block];
+    if (!range) return null;
+    const code = src.slice(range.start, range.end);
+    const cur = selection.sel.cur || {};
+    if (selection.sel.id) {
+      const st = readMermaidNodeStyle(code, selection.sel.id) || {};
+      return {
+        kind: 'mermaidNode', block: selection.sel.block, id: selection.sel.id, range, code,
+        props: {
+          fill: st.fill || cur.fill || null,
+          stroke: st.stroke || cur.stroke || null,
+          color: st.color || cur.color || null
+        }
+      };
+    }
+    const init = readMermaidInit(code);
+    const vars = (init && init.json.themeVariables) || {};
+    const fl = (init && init.json.flowchart) || {};
+    return {
+      kind: 'mermaidTheme', block: selection.sel.block, range, code,
+      props: {
+        dir: readMermaidDirection(code) || 'TB',
+        nodeSpacing: fl.nodeSpacing != null ? fl.nodeSpacing : 50,
+        rankSpacing: fl.rankSpacing != null ? fl.rankSpacing : 50,
+        primary: vars.primaryColor || cur.primary || null,
+        border: vars.primaryBorderColor || cur.border || null,
+        text: vars.primaryTextColor || cur.text || null,
+        line: vars.lineColor || cur.line || null
+      }
+    };
+  }, [cm, selection, result]);
 
   const cmText = (start, end) => {
     try { return cm.getRange(cm.posFromIndex(start), cm.posFromIndex(end)); } catch (e) { return ''; }
@@ -146,6 +188,13 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
               cm={cm}
             />
           )}
+          {!record && mmRecord && (
+            <MermaidForm
+              key={'m-' + mmRecord.kind + '-' + mmRecord.block + '-' + (mmRecord.id || '') + '-' + mmRecord.range.start}
+              record={mmRecord}
+              cm={cm}
+            />
+          )}
         </>
       )}
     </aside>
@@ -257,6 +306,102 @@ function RecordForm({ record, cm }) {
       {record.kind === 'node' && (
         <div className="sp-hint">{t('style.nodeTip')}</div>
       )}
+    </div>
+  );
+}
+
+/* Mermaid 表单：节点颜色（写回 style 行）与全局主题/方向/间距（写回 %%{init:…}%% 头）。
+ * Mermaid 为 dagre 自动布局，节点坐标不可自由指定，布局维度为方向与间距。 */
+function MermaidForm({ record, cm }) {
+  const p = record.props;
+  const formElRef = useRef(null);
+
+  const apply = () => {
+    const el = formElRef.current;
+    if (!el) return;
+    const g = name => el.querySelector('[name="' + name + '"]');
+    const colorVal = (onName, hexName) => (g(onName) && g(onName).checked ? g(hexName).value : null);
+    let code = record.code;
+    if (record.kind === 'mermaidNode') {
+      // 只写有变化或被取消勾选的键：勾选且未改动 = 维持现状，避免把主题默认值固化进 style 行
+      const diff = (onName, hexName, key) => {
+        if (!g(onName).checked) return [key, null];
+        const v = g(hexName).value;
+        return [key, v && v.toLowerCase() !== String(p[key] || '').toLowerCase() ? v : undefined];
+      };
+      const colors = {};
+      [diff('fillOn', 'fill', 'fill'), diff('strokeOn', 'stroke', 'stroke'), diff('colorOn', 'color', 'color')]
+        .forEach(([k, v]) => { colors[k] = v; });
+      code = applyMermaidNodeStyle(code, record.id, colors);
+    } else {
+      code = applyMermaidDirection(code, g('dir').value);
+      const vars = {};
+      const put = (k, onName, hexName) => { const v = colorVal(onName, hexName); if (v) vars[k] = v; };
+      put('primaryColor', 'pOn', 'primary');
+      put('primaryBorderColor', 'bOn', 'border');
+      put('primaryTextColor', 'tOn', 'text');
+      put('lineColor', 'lOn', 'line');
+      const flow = {};
+      const num = (name, def) => { const v = parseFloat(g(name).value); return isNaN(v) || v < 4 ? def : Math.round(v); };
+      flow.nodeSpacing = num('nodeSpacing', p.nodeSpacing);
+      flow.rankSpacing = num('rankSpacing', p.rankSpacing);
+      code = applyMermaidTheme(code, { themeVariables: vars, flowchart: flow });
+    }
+    cm.replaceRange(code, cm.posFromIndex(record.range.start), cm.posFromIndex(record.range.end));
+  };
+
+  const colorRow = (label, onName, hexName, onInit, hexInit) => (
+    <label className="sp-row">
+      <span className="sp-lb">{label}</span>
+      <span className="sp-cw">
+        <input type="checkbox" name={onName} defaultChecked={onInit}
+          onClick={e => { e.target.nextElementSibling.disabled = !e.target.checked; }} />
+        <input type="color" name={hexName} defaultValue={hexInit || '#ffffff'} disabled={!onInit} />
+      </span>
+    </label>
+  );
+
+  const isNode = record.kind === 'mermaidNode';
+  return (
+    <div className="sp-form" ref={formElRef}>
+      <div className="sp-form-h">{isNode ? 'Mermaid 节点 ' + record.id : 'Mermaid 全局样式'}</div>
+      {isNode ? (
+        <>
+          {colorRow('填充色', 'fillOn', 'fill', !!p.fill, p.fill || '#ffffff')}
+          {colorRow('边框色', 'strokeOn', 'stroke', !!p.stroke, p.stroke || '#333333')}
+          {colorRow('文字色', 'colorOn', 'color', !!p.color, p.color || '#333333')}
+          <div className="sp-hint">取消勾选该项即回到主题默认；写回为源码中的 style 行。</div>
+        </>
+      ) : (
+        <>
+          <label className="sp-row">
+            <span className="sp-lb">方向</span>
+            <select name="dir" defaultValue={p.dir || 'TB'}>
+              <option value="TB">竖排 ↓（TB）</option>
+              <option value="LR">横排 →（LR）</option>
+              <option value="RL">横排 ←（RL）</option>
+              <option value="BT">竖排 ↑（BT）</option>
+            </select>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">节点间距</span>
+            <input type="number" name="nodeSpacing" min="4" step="2" style={{ width: 70 }} defaultValue={p.nodeSpacing} />
+            <span className="sp-unit">px</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">层级间距</span>
+            <input type="number" name="rankSpacing" min="4" step="2" style={{ width: 70 }} defaultValue={p.rankSpacing} />
+            <span className="sp-unit">px</span>
+          </label>
+          <div className="sp-geo-h">主题色</div>
+          {colorRow('节点填充', 'pOn', 'primary', true, p.primary || '#ececff')}
+          {colorRow('节点边框', 'bOn', 'border', true, p.border || '#9370db')}
+          {colorRow('文字', 'tOn', 'text', true, p.text || '#333333')}
+          {colorRow('连线', 'lOn', 'line', true, p.line || '#333333')}
+          <div className="sp-hint">写回为代码块头部的 {'%%{init: …}%%'} 配置；点击图中空白处进入这里。</div>
+        </>
+      )}
+      <button className="sp-apply" onClick={apply}>✓ 应用到源码</button>
     </div>
   );
 }

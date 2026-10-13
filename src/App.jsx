@@ -777,6 +777,7 @@ export default function App() {
               result={previewResult}
               selection={selection}
               onSelectNode={(did, sidx) => { setSelection({ did, sel: { type: 'node', sidx } }); setPanelOpen(true); setChatOpen(false); }}
+              onSelMermaid={(block, id, cur) => { setSelection({ did: 0, sel: { type: 'mermaid', block, id, cur } }); setPanelOpen(true); setChatOpen(false); }}
               onScrollRatio={handleScrollRatio}
               zoom={zoom} onZoom={setZoomClamped}
               panelOpen={panelOpen} onTogglePanel={() => { setPanelOpen(o => !o); setChatOpen(false); }}

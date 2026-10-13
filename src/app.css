@@ -575,6 +575,13 @@ figure.float .diagram { display: block; }
   stroke: var(--seal) !important; stroke-width: 2.4 !important;
 }
 .mermaid-block svg { max-width: 100%; }
+.mermaid-block svg g.node { cursor: pointer; }
+.mermaid-block svg g.node.selected rect,
+.mermaid-block svg g.node.selected polygon,
+.mermaid-block svg g.node.selected circle,
+.mermaid-block svg g.node.selected ellipse {
+  stroke: var(--seal) !important; stroke-width: 2.4px !important;
+}
 .dgrid-tools { position: absolute; top: -10px; right: -6px; display: none; gap: 4px; z-index: 5; }
 .diagram:hover .dgrid-tools { display: flex; }
 .dgrid-tools button {
