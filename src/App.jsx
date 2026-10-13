@@ -86,6 +86,7 @@ export default function App() {
   const [channels, setChannels] = useState(() => llm.loadChannels());
   const [activeChannelId, setActiveChannelId] = useState(() => (llm.loadChannels()[0] || {}).id || '');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(null); // 'keys' | 'about' | null
   const [chatMessages, setChatMessages] = useState([]);
   const [aiBusy, setAiBusy] = useState(false);
 
@@ -537,6 +538,14 @@ export default function App() {
             else downloadFile(activeTab.name, activeValue, 'text/plain;charset=utf-8');
           },
           exportPdf: exportPdfPrint,
+          editOp: (op) => {
+            const c = cm();
+            if (!c) return;
+            if (op === 'undo') c.undo();
+            else if (op === 'redo') c.redo();
+            else if (op === 'selectAll') c.execCommand('selectAll');
+            c.focus();
+          },
           tool: (id) => {
             if (!isTexLike && !isMd) return;
             switch (id) {
@@ -567,7 +576,12 @@ export default function App() {
         }}
         viewMode={viewMode} setViewMode={setViewMode} latexOk={isTexLike || isMd}
         engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile}
+        downloadPdf={compileResult && compileResult.pdfUrl ? () => downloadCompiled(compileResult) : null}
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
+        onAiFix={aiFix}
+        syncScroll={syncScroll} setSyncScroll={setSyncScroll}
+        zoom={zoom} onZoom={setZoomClamped}
+        onHelp={setHelpOpen}
       />
 
       <main id="layout" data-mode={viewMode} style={{ '--split': splitPct + '%' }}>
@@ -584,7 +598,7 @@ export default function App() {
                   <button className="btn sm" onClick={restoreFolder}>🔓 恢复上次文件夹（{restorePrompt.name}）</button>
                 </div>
               ) : rootDir ? <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey} />
-                : <div className="side-pad hint">未打开文件夹<br />点顶栏「📂 打开文件夹」</div>
+                : <div className="side-pad hint">未打开文件夹<br />菜单「文件 ▸ 打开文件夹」</div>
             )}
             {sideTab === 'outline' && <OutlinePanel kind={outlineKind} headings={outlineItems} onJump={jumpToHeading} />}
             {sideTab === 'issues' && (
@@ -728,6 +742,46 @@ export default function App() {
         activeChannelId={activeChannelId}
         setActiveChannelId={setActiveChannelId}
       />
+
+      {helpOpen === 'keys' && (
+        <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
+          <div className="modal help-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-h">⌨ 快捷键 <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
+            <div className="modal-body">
+              <table className="keys-table">
+                <tbody>
+                  {[['Ctrl+S', '保存当前标签（草稿 → 浏览器，文件 → 写回磁盘）'],
+                    ['Ctrl+B / Ctrl+I', '加粗 / 斜体（.tex 与 .md）'],
+                    ['Ctrl+Z / Ctrl+Shift+Z', '撤销 / 重做'],
+                    ['Ctrl+A', '全选'],
+                    ['Tab / Shift+Tab', '缩进 / 反缩进选区']].map(([k, d]) => (
+                    <tr key={k}><td><kbd>{k}</kbd></td><td>{d}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {helpOpen === 'about' && (
+        <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
+          <div className="modal help-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-h">ℹ️ 关于 PaperLite <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
+            <div className="modal-body about-body">
+              <div className="about-logo">📄 PaperLite</div>
+              <div className="about-slogan">本地优先的论文速写编辑器 · LaTeX 实时预览</div>
+              <ul className="about-list">
+                <li>纯浏览器渲染：LaTeX → HTML + KaTeX 数学 + TikZ/Mermaid 流程图</li>
+                <li>本地文件夹工作区：文件树 · 多标签 · Markdown/代码编辑</li>
+                <li>TeX 真实编译（pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX，需本机引擎 + server.mjs）</li>
+                <li>多渠道 LLM：语法修复 · 对话改写 · 文档检索（OpenAI 兼容协议）</li>
+              </ul>
+              <div className="about-stack">React 18 · CodeMirror 5 · KaTeX · Mermaid · Vite</div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

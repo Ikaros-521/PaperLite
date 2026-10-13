@@ -8,14 +8,70 @@ body {
 }
 #root { display: flex; flex-direction: column; }
 
-/* ---------- 顶栏 ---------- */
+/* ---------- 顶栏（菜单栏 + 上下文工具条双层） ---------- */
 #topbar {
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-  padding: 8px 14px; background: #fff; border-bottom: 1px solid #e3e6ea;
-  box-shadow: 0 1px 4px rgba(0,0,0,.04); z-index: 30;
+  background: #fff; border-bottom: 1px solid #e3e6ea;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04); z-index: 30; flex: none;
 }
-.brand { font-weight: 700; font-size: 16px; color: #17325c; white-space: nowrap; }
-.brand .sub { font-weight: 400; color: #8a93a3; font-size: 12px; margin-left: 6px; }
+#menubar { display: flex; align-items: center; gap: 10px; padding: 3px 10px; min-height: 34px; }
+.brand.compact { font-weight: 700; font-size: 14.5px; color: #17325c; white-space: nowrap; margin-right: 2px; }
+
+.menus { display: flex; align-items: center; gap: 1px; }
+.mb-item { position: relative; }
+.mb-item.disabled { opacity: .45; }
+.mb-title {
+  border: 0; background: none; font: inherit; font-size: 13.5px; color: #2a3346;
+  padding: 4px 10px; border-radius: 6px; cursor: default;
+}
+.mb-title:hover { background: #eef2f8; }
+.mb-item.open > .mb-title { background: #e3edff; color: #17325c; }
+
+.mb-menu {
+  position: absolute; top: calc(100% + 4px); left: 0;
+  background: #fff; border: 1px solid #dfe3e9; border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(20,30,50,.14); padding: 6px; z-index: 120;
+}
+.mi {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+  border: 0; background: none; padding: 6px 10px; border-radius: 6px;
+  cursor: default; font: inherit; font-size: 13.5px; color: #2a3346;
+}
+.mi:hover { background: #f0f4fa; }
+.mi:disabled { color: #9aa3b2; }
+.mi:disabled:hover { background: none; }
+.mi-check { width: 16px; flex: none; color: #2563eb; font-size: 12px; text-align: center; }
+.mi-ico { width: 20px; flex: none; text-align: center; font-size: 12px; color: #5a6577; }
+.mi-label { flex: 1; white-space: nowrap; }
+.mi-hint { color: #8a93a3; font-size: 12px; margin-left: 18px; white-space: nowrap; }
+.mi-sep { height: 1px; background: #eef0f4; margin: 5px 8px; }
+.mi-note { padding: 6px 10px; font-size: 12px; color: #8a93a3; max-width: 220px; line-height: 1.5; }
+
+/* 二级子菜单：悬停展开到右侧 */
+.mi-sub { position: relative; cursor: default; }
+.mb-menu.sub { display: none; position: absolute; left: calc(100% - 4px); top: -7px; }
+.mi-sub:hover > .mb-menu.sub { display: block; }
+
+.mb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+#toolbelt {
+  display: flex; align-items: center; gap: 6px; padding: 5px 12px;
+  background: #f8f9fc; border-top: 1px solid #eef0f4;
+}
+
+/* 帮助 / 关于 弹窗 */
+.help-modal { width: 430px; }
+.keys-table { border-collapse: collapse; width: 100%; }
+.keys-table td { padding: 6px 8px; border-bottom: 1px solid #f0f2f6; font-size: 13px; }
+.keys-table tr:last-child td { border-bottom: 0; }
+.keys-table kbd {
+  background: #f2f4f8; border: 1px solid #dfe3e9; border-bottom-width: 2px; border-radius: 4px;
+  padding: 1px 6px; font-family: Consolas, "Courier New", monospace; font-size: 12px; white-space: nowrap;
+}
+.about-body { text-align: center; padding: 22px 18px 16px; }
+.about-logo { font-size: 20px; font-weight: 700; color: #17325c; }
+.about-slogan { color: #5a6577; margin: 6px 0 14px; font-size: 13px; }
+.about-list { text-align: left; margin: 0 auto 14px; max-width: 350px; color: #2a3346; font-size: 13px; line-height: 1.8; padding-left: 18px; }
+.about-stack { color: #8a93a3; font-size: 12px; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
 .tb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
