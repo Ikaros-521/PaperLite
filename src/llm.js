@@ -1,14 +1,16 @@
 /* PaperLite · LLM 多渠道接入（OpenAI 兼容协议 + Anthropic Claude 协议）
  * 渠道配置存 localStorage；支持流式对话（含思维链 reasoning/thinking）、
  * 嵌入检索（可选检索模型）、模型列表拉取、内置平台预设、测试连接。
+ * 用户可见消息经 i18n 模块级 t() 输出（App 渲染时同步当前语言）。
  */
+import { t, getLang } from './i18n.js';
 
 const LS_KEY = 'paperlite.llm.channels.v1';
 
 // ---------------- 协议与平台预设 ----------------
 
 export const PROTOCOLS = [
-  { id: 'openai', label: 'OpenAI 兼容', desc: 'OpenAI / DeepSeek / GLM / 通义 / Kimi / Ollama 等' },
+  { id: 'openai', label: 'OpenAI 兼容', labelEn: 'OpenAI-compatible', desc: 'OpenAI / DeepSeek / GLM / 通义 / Kimi / Ollama 等' },
   { id: 'anthropic', label: 'Anthropic (Claude)', desc: 'Claude 官方 API 及 Claude 协议网关' }
 ];
 
@@ -22,22 +24,22 @@ export const PLATFORM_PRESETS = [
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'o4-mini', 'text-embedding-3-small', 'text-embedding-3-large'] },
   { id: 'anthropic', name: 'Anthropic Claude', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com',
     models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest'] },
-  { id: 'deepseek', name: 'DeepSeek 深度求索', protocol: 'openai', baseUrl: 'https://api.deepseek.com/v1',
+  { id: 'deepseek', name: 'DeepSeek 深度求索', nameEn: 'DeepSeek', protocol: 'openai', baseUrl: 'https://api.deepseek.com/v1',
     models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { id: 'zhipu', name: '智谱 GLM', protocol: 'openai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  { id: 'zhipu', name: '智谱 GLM', nameEn: 'Zhipu GLM', protocol: 'openai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     models: ['glm-4.5', 'glm-4.5-air', 'glm-4-plus', 'glm-4-flash', 'embedding-3'] },
-  { id: 'qwen', name: '通义千问 Qwen', protocol: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  { id: 'qwen', name: '通义千问 Qwen', nameEn: 'Alibaba Qwen', protocol: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     models: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen-long', 'text-embedding-v3'] },
-  { id: 'moonshot', name: 'Kimi (月之暗面)', protocol: 'openai', baseUrl: 'https://api.moonshot.cn/v1',
+  { id: 'moonshot', name: 'Kimi (月之暗面)', nameEn: 'Kimi (Moonshot)', protocol: 'openai', baseUrl: 'https://api.moonshot.cn/v1',
     models: ['kimi-k2-0905-preview', 'kimi-latest', 'moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
-  { id: 'siliconflow', name: '硅基流动 SiliconFlow', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1',
+  { id: 'siliconflow', name: '硅基流动 SiliconFlow', nameEn: 'SiliconFlow', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1',
     models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-72B-Instruct', 'BAAI/bge-m3'] },
-  { id: 'openrouter', name: 'OpenRouter 聚合', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1',
+  { id: 'openrouter', name: 'OpenRouter 聚合', nameEn: 'OpenRouter', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1',
     models: ['openai/gpt-4o', 'anthropic/claude-sonnet-4.5', 'google/gemini-2.0-flash-001', 'deepseek/deepseek-chat'] },
-  { id: 'ollama', name: 'Ollama（本机）', protocol: 'openai', baseUrl: 'http://localhost:11434/v1',
+  { id: 'ollama', name: 'Ollama（本机）', nameEn: 'Ollama (local)', protocol: 'openai', baseUrl: 'http://localhost:11434/v1',
     models: ['qwen2.5', 'llama3.1', 'deepseek-r1'] },
-  { id: 'lmstudio', name: 'LM Studio（本机）', protocol: 'openai', baseUrl: 'http://localhost:1234/v1', models: [] },
-  { id: 'mock', name: 'PaperLite Mock（本机演示）', protocol: 'openai', baseUrl: 'http://localhost:8788/v1',
+  { id: 'lmstudio', name: 'LM Studio（本机）', nameEn: 'LM Studio (local)', protocol: 'openai', baseUrl: 'http://localhost:1234/v1', models: [] },
+  { id: 'mock', name: 'PaperLite Mock（本机演示）', nameEn: 'PaperLite Mock (local demo)', protocol: 'openai', baseUrl: 'http://localhost:8788/v1',
     models: ['paperlite-mock', 'paperlite-mock-pro', 'paperlite-mock-embed'] }
 ];
 
@@ -66,7 +68,7 @@ export function saveChannels(list) {
 export function newChannel() {
   return {
     id: 'ch-' + Date.now().toString(36),
-    name: '新渠道',
+    name: t('llm.newChannel'),
     protocol: 'openai',
     baseUrl: 'http://localhost:8788/v1',
     apiKey: '',
@@ -131,11 +133,11 @@ export async function testConnection(channel) {
       ids = (await fetchModels(channel)).slice(0, 5);
     } catch (e) {
       await chat(channel, [{ role: 'user', content: 'ping' }], { maxTokens: 5 });
-      return { ok: true, msg: '连接成功（对话接口可用；/models 不可用：' + (e.message || e) + '）' };
+      return { ok: true, msg: t('llm.okChatOnly', { msg: e.message || e }) };
     }
-    return { ok: true, msg: '连接成功' + (ids.length ? '，可用模型：' + ids.join('、') : '') };
+    return { ok: true, msg: ids.length ? t('llm.ok', { models: t('llm.okModels', { models: ids.join(getLang() === 'en' ? ', ' : '、') }) }) : t('llm.ok', { models: '' }) };
   } catch (e) {
-    return { ok: false, msg: '失败：' + (e.message || e) };
+    return { ok: false, msg: t('llm.fail', { msg: e.message || e }) };
   }
 }
 
@@ -151,7 +153,7 @@ function chatOpenAI(channel, messages, opts) {
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (channel.cot) {
     body.messages = [
-      { role: 'system', content: '你是一个严谨的学术写作助手。请先在内部逐步推理（思维链），再输出最终答案。最终答案中不要展示推理过程。' },
+      { role: 'system', content: t('ai.systemCoT') },
       ...body.messages
     ];
   }
@@ -247,7 +249,7 @@ async function parseAnthropicStream(u, channel, body, opts) {
 
   if (!body.stream) {
     const j = await r.json();
-    if (j.type === 'error') throw new Error((j.error && j.error.message) || 'Anthropic 错误');
+    if (j.type === 'error') throw new Error((j.error && j.error.message) || t('llm.anthropicErr'));
     let content = '', reasoning = '';
     for (const b of j.content || []) {
       if (b.type === 'text') content += b.text || '';
@@ -272,7 +274,7 @@ async function parseAnthropicStream(u, channel, body, opts) {
       if (!payload || payload === '[DONE]') continue;
       let j;
       try { j = JSON.parse(payload); } catch (e) { continue; }
-      if (j.type === 'error') throw new Error((j.error && j.error.message) || 'Anthropic 错误');
+      if (j.type === 'error') throw new Error((j.error && j.error.message) || t('llm.anthropicErr'));
       if (j.type !== 'content_block_delta') continue;
       const d = j.delta || {};
       if (d.type === 'text_delta' && d.text) { content += d.text; opts.onDelta && opts.onDelta(d.text); }

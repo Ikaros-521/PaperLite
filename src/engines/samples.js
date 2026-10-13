@@ -57,7 +57,7 @@ var DEMO = [
 '  \\node[data, text width=2.6cm] (raw) {原始影评语料\\\\(豆瓣 / ChnSentiCorp)};',
 '  \\node[proc, right of=raw, node distance=3.2cm, text width=2.2cm] (clean) {清洗与分词\\\\jieba + 自定义词典};',
 '  \\node[data, right of=clean, node distance=3.2cm, text width=2.0cm] (emb) {预训练词向量\\\\(300d fastText)};',
-'  \\node[block, below of=clean, text width=3.4cm] (enc) {\\model{} 编码器\\\\BiLSTM $\\times$ 2 层 + Attention};',
+'  \\node[block, below of=clean, node distance=2.4cm, text width=3.4cm] (enc) {\\model{} 编码器\\\\BiLSTM $\\times$ 2 层 + Attention};',
 '  \\node[decision, below of=emb, node distance=2.0cm] (dec) {置信度 $>\\tau$?};',
 '  \\node[io, below left of=dec, node distance=2.6cm] (auto) {自动输出极性};',
 '  \\node[note, below right of=dec, node distance=2.6cm] (man) {人工复核队列};',

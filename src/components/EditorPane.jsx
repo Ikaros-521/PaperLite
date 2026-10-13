@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { tr, getLang } from '../i18n.js';
 import CodeMirror from 'codemirror';
 import 'codemirror/mode/stex/stex';
 import 'codemirror/mode/markdown/markdown';
@@ -95,7 +96,7 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
 
     for (const [ln, list] of byLine) {
       const isErr = list.some(d => d.severity === 'error');
-      const tip = (isErr ? '错误' : '警告') + '：' + list.map(d => d.msg).join('\n') + '\n（点击：让 AI 修复这个问题）';
+      const tip = tr(getLang(), isErr ? 'ed.error' : 'ed.warning') + ': ' + list.map(d => d.msg).join('\n') + '\n' + tr(getLang(), 'ed.clickFix');
 
       const dot = document.createElement('div');
       dot.className = 'pl-diag-dot ' + (isErr ? 'err' : 'warn');

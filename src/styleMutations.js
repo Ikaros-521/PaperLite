@@ -7,10 +7,11 @@ export const FONT_NAMES = { 8: '\\tiny', 9: '\\scriptsize', 10: '\\footnotesize'
 export const DASH_KEYS = ['dashed', 'densely dashed', 'loosely dashed', 'dotted', 'densely dotted', 'loosely dotted'];
 export const LW_KEYS = ['ultra thin', 'very thin', 'thin', 'semithick', 'thick', 'very thick', 'ultra thick'];
 export const SHAPES = ['rectangle', 'circle', 'ellipse', 'diamond'];
-export const SHAPE_NAMES = { rectangle: '矩形', circle: '圆', ellipse: '椭圆', diamond: '菱形' };
+// 显示名走 i18n 字典（shape.* / lw.*），此处存 key
+export const SHAPE_NAMES = { rectangle: 'shape.rectangle', circle: 'shape.circle', ellipse: 'shape.ellipse', diamond: 'shape.diamond' };
 export const LW_OPTIONS = [
-  { v: '0.2', label: '极细' }, { v: '0.4', label: '细(默认)' },
-  { v: '0.8', label: '中' }, { v: '1.2', label: '粗' }, { v: '1.6', label: '特粗' }
+  { v: '0.2', key: 'lw.0.2' }, { v: '0.4', key: 'lw.0.4' },
+  { v: '0.8', key: 'lw.0.8' }, { v: '1.2', key: 'lw.1.2' }, { v: '1.6', key: 'lw.1.6' }
 ];
 
 export function nearestFontPx(px) {
@@ -36,7 +37,9 @@ export function getRecord(cm, result, sel) {
       props: {
         fill: nd.fill, border: nd.drawOn, borderColor: nd.draw || '#000000',
         textColor: nd.textColor, lwPt: nd.lwPt, dashed: !!nd.dash,
-        roundedPt: nd.roundedPt || 0, shape: nd.shape, fontpx: nd.fontpx
+        roundedPt: nd.roundedPt || 0, shape: nd.shape, fontpx: nd.fontpx,
+        posX: nd.posCm.x, posY: nd.posCm.y, wcm: nd.sizeCm.w, hcm: nd.sizeCm.h,
+        placed: !!nd.placed, minWcm: nd.declaredMinWcm || 0, minHcm: nd.declaredMinHcm || 0
       }
     };
   }
@@ -74,6 +77,16 @@ export function applyChanges(cm, rec, v) {
   if (v.round !== undefined && Math.abs(v.round - (p.roundedPt || 0)) > 0.4) ch.round = v.round;
   if (v.fontPx && +v.fontPx !== nearestFontPx(p.fontpx)) ch.fontPx = +v.fontPx;
 
+  // 布局：位置（写 at 绝对坐标）与最小宽高（写 minimum width/height）
+  if (rec.kind === 'node') {
+    if (v.posX !== undefined && !isNaN(+v.posX) && !isNaN(+v.posY) &&
+        (Math.abs(+v.posX - p.posX) > 0.015 || Math.abs(+v.posY - p.posY) > 0.015)) {
+      ch.at = { x: +(+v.posX).toFixed(2), y: +(+v.posY).toFixed(2) };
+    }
+    if (v.wcm !== undefined && !isNaN(+v.wcm) && Math.abs(+v.wcm - p.wcm) > 0.015) ch.minWcm = Math.max(0, +v.wcm);
+    if (v.hcm !== undefined && !isNaN(+v.hcm) && Math.abs(+v.hcm - p.hcm) > 0.015) ch.minHcm = Math.max(0, +v.hcm);
+  }
+
   let list, from, to, wrap = false;
   if (rec.kind === 'style') {
     list = TIKZ.parseOpts(cmRangeText(cm, rec.range.start, rec.range.end) || '');
@@ -81,6 +94,15 @@ export function applyChanges(cm, rec, v) {
     to = cm.posFromIndex(rec.range.end);
   } else {
     const nd = rec.node;
+    // 先回写 at 区间（位于选项之后，先改不影响选项偏移），再回写选项
+    if (ch.at) {
+      const atText = 'at (' + ch.at.x + 'cm,' + ch.at.y + 'cm)';
+      if (nd.atStart >= 0 && nd.atEnd > nd.atStart) {
+        cm.replaceRange(atText, cm.posFromIndex(nd.atStart), cm.posFromIndex(nd.atEnd));
+      } else if (nd.atInsert >= 0) {
+        cm.replaceRange(' ' + atText, cm.posFromIndex(nd.atInsert), cm.posFromIndex(nd.atInsert));
+      }
+    }
     if (nd.optStart >= 0 && nd.optEnd > nd.optStart) {
       list = TIKZ.parseOpts(cm.getRange(cm.posFromIndex(nd.optStart), cm.posFromIndex(nd.optEnd)));
       from = cm.posFromIndex(nd.optStart);
@@ -128,6 +150,17 @@ function mutateOpts(list, ch) {
     const name = FONT_NAMES[nearestFontPx(ch.fontPx)];
     if (name === '\\normalsize') TIKZ.setOpt(list, 'font', null);
     else TIKZ.setOpt(list, 'font', name);
+  }
+  if (ch.minWcm !== undefined || ch.minHcm !== undefined) {
+    TIKZ.delOptAny(list, ['minimum size']); // 显式宽/高会与 minimum size 叠加取最大，先移除
+    if (ch.minWcm !== undefined) {
+      if (ch.minWcm > 0) TIKZ.setOpt(list, 'minimum width', ch.minWcm + 'cm');
+      else TIKZ.setOpt(list, 'minimum width', null);
+    }
+    if (ch.minHcm !== undefined) {
+      if (ch.minHcm > 0) TIKZ.setOpt(list, 'minimum height', ch.minHcm + 'cm');
+      else TIKZ.setOpt(list, 'minimum height', null);
+    }
   }
 }
 

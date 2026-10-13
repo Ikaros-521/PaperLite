@@ -662,13 +662,15 @@ function renderEnv(env, ctx, absInnerStart) {
       var labM = inner.match(/\\label\{([^}]+)\}/);
       if (labM) label = labM[1];
       // caption/label 命令渲染为空（由本环境统一编号），无需从内容中删除
-      var content = inner;
+      // 浮动体位置选项（[h]/[!htbp] 等）不参与排版，吞掉避免渲染成正文
+      var content = inner.replace(/^\s*\[[^\]]*\]/, '');
 
       var n2 = isFig ? ++ctx.counters.fig : ++ctx.counters.tab;
       if (label) ctx.labels[label] = String(n2);
 
       var capHtml = cap !== null ? renderFlow(cap, ctx, base, false, true) : '';
-      var contentHtml = renderFlow(content, ctx, base, false);
+      // content 相对 inner 截去了前导 [..]，base 需同步平移，否则子环境（tikzpicture）的源码偏移会错位
+      var contentHtml = renderFlow(content, ctx, base + (inner.length - content.length), false);
       var capName = isFig ? '图' : '表';
       return '<figure class="float ' + (isFig ? 'fig' : 'tab') + '">' + contentHtml +
         (cap !== null ? '<figcaption>' + capName + '&nbsp;' + n2 + '：' + capHtml + '</figcaption>' : '') + '</figure>';

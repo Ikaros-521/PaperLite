@@ -1,6 +1,9 @@
 /* PaperLite · LaTeX 静态语法检测（行号级诊断，Node 可单测）
  * 返回 [{ line, msg, severity: 'error'|'warn', kind }]，line 为 0 起。
+ * 文案经 i18n 模块级 t() 输出（App 渲染时同步当前语言；Node 测试默认中文）。
  */
+import { t } from '../i18n.js';
+
 export function lintLaTeX(src) {
   const out = [];
   const text = String(src || '').replace(/\r\n?/g, '\n');
@@ -27,16 +30,16 @@ export function lintLaTeX(src) {
     if (m[1] === 'begin') stack.push({ name: m[2], line });
     else {
       const top = stack[stack.length - 1];
-      if (!top) out.push({ line, msg: `\\end{${m[2]}} 没有对应的 \\begin`, severity: 'error', kind: 'env' });
+      if (!top) out.push({ line, msg: t('lint.envNoBegin', { name: m[2] }), severity: 'error', kind: 'env' });
       else if (top.name !== m[2]) {
-        out.push({ line, msg: `环境不匹配：\\begin{${top.name}}（第 ${top.line + 1} 行）被 \\end{${m[2]}} 关闭`, severity: 'error', kind: 'env' });
+        out.push({ line, msg: t('lint.envMismatch', { name: top.name, line: top.line + 1, end: m[2] }), severity: 'error', kind: 'env' });
         // 尝试从栈中找回匹配
         const idx = [...stack].reverse().findIndex(s => s.name === m[2]);
         if (idx >= 0) stack.splice(stack.length - 1 - idx, 1);
       } else stack.pop();
     }
   }
-  stack.forEach(s => out.push({ line: s.line, msg: `环境 ${s.name} 未关闭（\\begin 在此行）`, severity: 'error', kind: 'env' }));
+  stack.forEach(s => out.push({ line: s.line, msg: t('lint.envUnclosed', { name: s.name }), severity: 'error', kind: 'env' }));
 
   // 2) 花括号配对（全文净深度；负值即报错行）
   let depth = 0;
@@ -49,12 +52,12 @@ export function lintLaTeX(src) {
       if (c === '{') depth++;
       else if (c === '}') {
         depth--;
-        if (depth < 0) { out.push({ line: li, msg: '多余的 `}`（花括号不配对）', severity: 'error', kind: 'brace' }); depth = 0; }
+        if (depth < 0) { out.push({ line: li, msg: t('lint.extraBrace'), severity: 'error', kind: 'brace' }); depth = 0; }
       }
       bs = 0;
     }
   }
-  if (depth > 0) out.push({ line: Math.max(0, lines.length - 1), msg: '文档末尾缺少 ' + depth + ' 个闭合花括号 }', severity: 'error', kind: 'brace' });
+  if (depth > 0) out.push({ line: Math.max(0, lines.length - 1), msg: t('lint.missingBraces', { n: depth }), severity: 'error', kind: 'brace' });
 
   // 3) 行内 $ 配对（逐行粗查，$$ 视为一对）
   for (let li = 0; li < lines.length; li++) {
@@ -66,7 +69,7 @@ export function lintLaTeX(src) {
       if (c === '$' && bs % 2 === 0) count++;
       bs = 0;
     }
-    if (count % 2 !== 0) out.push({ line: li, msg: '本行 $ 数量为奇数（数学环境可能未闭合，或跨行公式请用 \\[ \\] / equation）', severity: 'warn', kind: 'math' });
+    if (count % 2 !== 0) out.push({ line: li, msg: t('lint.oddDollar'), severity: 'warn', kind: 'math' });
   }
 
   // 4) 未定义引用
@@ -81,14 +84,14 @@ export function lintLaTeX(src) {
     const key = m[2].trim();
     if (!labels.has(key)) {
       const line = clean.slice(0, m.index).split('\n').length - 1;
-      out.push({ line, msg: `引用了未定义的标签「${key}」（缺少 \\label{${key}}）`, severity: 'warn', kind: 'ref' });
+      out.push({ line, msg: t('lint.badRef', { key }), severity: 'warn', kind: 'ref' });
     }
   }
   let citeRe = /\\cite[pt]?\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/g;
   while ((m = citeRe.exec(clean))) {
     const line = clean.slice(0, m.index).split('\n').length - 1;
     m[1].split(',').map(s => s.trim()).filter(Boolean).forEach(key => {
-      if (!bibs.has(key)) out.push({ line, msg: `引用了不存在的文献「${key}」（thebibliography 中无此 \\bibitem）`, severity: 'warn', kind: 'cite' });
+      if (!bibs.has(key)) out.push({ line, msg: t('lint.badCite', { key }), severity: 'warn', kind: 'cite' });
     });
   }
 
@@ -101,7 +104,7 @@ export function lintLaTeX(src) {
     else if (m[2]) inList = Math.max(0, inList - 1);
     else if (inList === 0) {
       const line = clean.slice(0, m.index).split('\n').length - 1;
-      out.push({ line, msg: '\\item 出现在列表环境之外', severity: 'warn', kind: 'item' });
+      out.push({ line, msg: t('lint.itemOutside'), severity: 'warn', kind: 'item' });
     }
   }
 

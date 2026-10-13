@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useT } from '../useI18n.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
  * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复） */
 export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject }) {
+  const t = useT();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [scope, setScope] = useState('selection');
@@ -94,7 +96,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const send = async () => {
     const q = input.trim();
     if (!q || busy) return;
-    if (!channel) { alert('请先在「AI 设置」中添加渠道'); onOpenSettings(); return; }
+    if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
     setInput('');
     const ctx = await buildContext(scope, q, channel);
     const userMsg = { role: 'user', content: q, ctxNote: ctx.note };
@@ -104,13 +106,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      const sys = {
-        role: 'system',
-        content: '你是论文写作与 LaTeX/Markdown 排版助手。回答简洁、结构化，使用 Markdown。' +
-          '当用户要求改写/修复时，把完整结果放在 ```latex 或 ```markdown 代码块中，便于一键应用。'
-      };
+      const sys = { role: 'system', content: t('ai.system') };
       const payload = [sys];
-      if (ctx.text) payload.push({ role: 'system', content: '当前文档上下文（供参考，不要原样复述）：\n' + ctx.text });
+      if (ctx.text) payload.push({ role: 'system', content: t('ai.ctxHeader') + '\n' + ctx.text });
       payload.push(...history.slice(-10).map(m => ({ role: m.role, content: m.content })));
 
       await import('../llm.js').then(async (llm) => {
@@ -124,7 +122,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     } catch (e) {
       if (e.name !== 'AbortError') {
         setMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content
-          ? { ...m, content: '⚠ 请求失败：' + (e.message || e) + '\n\n请检查渠道配置（Base URL / Key / 模型名）或点「测试连接」。' }
+          ? { ...m, content: t('chat.reqFailed', { msg: e.message || e }) }
           : m));
       }
     } finally {
@@ -137,10 +135,10 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     const cm = buildContext.cm && buildContext.cm();
     if (!cm) return;
     if (mode === 'replaceDoc') {
-      if (!window.confirm('用 AI 结果替换整个文档？（Ctrl+Z 可撤销）')) return;
+      if (!window.confirm(t('chat.replaceDocConfirm'))) return;
       cm.setValue(code);
     } else if (mode === 'replaceSel') {
-      if (!cm.getSelection()) { alert('当前无选区，将改为插入到光标处'); cm.replaceSelection(code); }
+      if (!cm.getSelection()) { alert(t('chat.noSelInsert')); cm.replaceSelection(code); }
       else cm.replaceSelection(code);
     } else {
       cm.replaceSelection(code);
@@ -148,7 +146,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     cm.focus();
   };
 
-  const copy = (t) => navigator.clipboard && navigator.clipboard.writeText(t);
+  const copy = (text) => navigator.clipboard && navigator.clipboard.writeText(text);
 
   const renderBlocks = (text, mi) => {
     const parts = [];
@@ -161,9 +159,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <div key={'c' + bi} className="chat-code">
           <pre>{code}</pre>
           <div className="chat-code-acts">
-            <button onClick={() => copy(code)}>复制</button>
-            <button onClick={() => applyBlock(code, 'replaceSel')}>替换选区/插入</button>
-            <button onClick={() => applyBlock(code, 'replaceDoc')}>替换全文</button>
+            <button onClick={() => copy(code)}>{t('chat.copy')}</button>
+            <button onClick={() => applyBlock(code, 'replaceSel')}>{t('chat.replaceSel')}</button>
+            <button onClick={() => applyBlock(code, 'replaceDoc')}>{t('chat.replaceDoc')}</button>
           </div>
         </div>
       );
@@ -187,37 +185,37 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         } : {})
       }}
     >
-      <span className="cp-resize" title="拖拽调整宽度" onPointerDown={startResize}></span>
+      <span className="cp-resize" title={t('chat.resize')} onPointerDown={startResize}></span>
       <div className="sp-title" onPointerDown={startDrag} onDoubleClick={() => setPos(null)}>
-        <span className="sp-drag" title="拖拽移动面板（双击标题回到停靠）">⠿</span>
-        <span className="sp-t">AI 助手</span>
+        <span className="sp-drag" title={t('chat.drag')}>⠿</span>
+        <span className="sp-t">{t('chat.title')}</span>
         <span className="cp-head-acts">
-          <button title="AI 设置" onClick={onOpenSettings}>⚙</button>
-          <button title="清空对话" onClick={() => setMessages([])}>清</button>
-          <button title="关闭" onClick={onClose}>✕</button>
+          <button title={t('chat.settings')} onClick={onOpenSettings}>⚙</button>
+          <button title={t('chat.clear')} onClick={() => setMessages([])}>清</button>
+          <button title={t('chat.close')} onClick={onClose}>✕</button>
         </span>
       </div>
 
       <div className="chat-config">
         <select value={channel ? channel.id : ''} onChange={e => setActiveChannelId(e.target.value)}>
-          {!channels.length && <option value="">（未配置渠道）</option>}
-          {channels.map(c => <option key={c.id} value={c.id}>{c.name} · {c.chatModel || '未设模型'}</option>)}
+          {!channels.length && <option value="">{t('chat.noChannelOpt')}</option>}
+          {channels.map(c => <option key={c.id} value={c.id}>{c.name} · {c.chatModel || t('chat.noModel')}</option>)}
         </select>
-        <select value={scope} onChange={e => setScope(e.target.value)} title="发送给 AI 的上下文范围">
-          <option value="selection">上下文：选区</option>
-          <option value="paragraph">上下文：光标段落</option>
-          <option value="full">上下文：全文</option>
-          <option value="retrieve">上下文：检索增强</option>
+        <select value={scope} onChange={e => setScope(e.target.value)} title={t('chat.scopeTip')}>
+          <option value="selection">{t('chat.scopeSel')}</option>
+          <option value="paragraph">{t('chat.scopePara')}</option>
+          <option value="full">{t('chat.scopeFull')}</option>
+          <option value="retrieve">{t('chat.scopeRag')}</option>
         </select>
-        {channel && channel.cot && <span className="cot-badge" title="该渠道已启用思维链">◈ 思维链</span>}
+        {channel && channel.cot && <span className="cot-badge" title={t('chat.cotTip')}>{t('chat.cot')}</span>}
       </div>
 
       <div className="chat-list" ref={listRef}>
         {!messages.length && (
           channel ? (
             <div className="chat-empty">
-              <div className="chat-suggest-h">试试：</div>
-              {['把引言改写得更学术', '润色这段并解释修改点', '帮我把这个公式转成 align 环境'].map(s => (
+              <div className="chat-suggest-h">{t('chat.try')}</div>
+              {[t('chat.sug1'), t('chat.sug2'), t('chat.sug3')].map(s => (
                 <button key={s} className="chat-suggest"
                   onClick={() => { setInput('「' + s + '」'); taRef.current && taRef.current.focus(); }}>
                   「{s}」
@@ -226,9 +224,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             </div>
           ) : (
             <div className="chat-guide">
-              <div className="chat-guide-t">还没有配置 AI 渠道</div>
-              <p>添加一个 OpenAI 兼容或 Anthropic 协议的渠道后，即可在这里改写引言、润色段落、修复语法。</p>
-              <button className="btn sm primary" onClick={onOpenSettings}>前往 AI 设置</button>
+              <div className="chat-guide-t">{t('chat.noChannelT')}</div>
+              <p>{t('chat.noChannelP')}</p>
+              <button className="btn sm primary" onClick={onOpenSettings}>{t('chat.openSettings')}</button>
             </div>
           )
         )}
@@ -238,12 +236,12 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             {m.role === 'assistant' && m.reasoning ? (
               <div className="chat-cot">
                 <button className="cot-toggle" onClick={() => setShowReasoning(s => ({ ...s, [i]: !s[i] }))}>
-                  💭 思维链 {showReasoning[i] ? '▾' : '▸'}
+                  {t('chat.cotToggle')} {showReasoning[i] ? '▾' : '▸'}
                 </button>
                 {showReasoning[i] && <div className="cot-body">{m.reasoning}</div>}
               </div>
             ) : null}
-            {m.content ? renderBlocks(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">思考中…</span> : null}
+            {m.content ? renderBlocks(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
           </div>
         ))}
       </div>
@@ -252,7 +250,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <textarea
           ref={taRef}
           value={input}
-          placeholder={channel ? '描述你的需求…（Enter 发送 / Shift+Enter 换行）' : '配置渠道后即可在此对话'}
+          placeholder={channel ? t('chat.phReady') : t('chat.phNoChannel')}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -260,8 +258,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         />
         <div className="chat-input-acts">
           {busy
-            ? <button className="btn sm" onClick={() => abortRef.current && abortRef.current.abort()}>■ 停止</button>
-            : <button className="btn sm primary" onClick={send} disabled={!channel}>发送 ▸</button>}
+            ? <button className="btn sm" onClick={() => abortRef.current && abortRef.current.abort()}>{t('chat.stop')}</button>
+            : <button className="btn sm primary" onClick={send} disabled={!channel}>{t('chat.send')}</button>}
         </div>
       </div>
     </aside>

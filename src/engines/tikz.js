@@ -350,6 +350,7 @@ function expandTextMacros(t, macros) {
     });
   }
   t = t.replace(/\\textbf\{([^}]*)\}/g, '$1').replace(/\\emph\{([^}]*)\}/g, '$1');
+  t = t.replace(/\{\}/g, ''); // LaTeX 空组（如 \model{} 展开后残留）
   return mathToUnicode(t);
 }
 
@@ -557,12 +558,14 @@ function render(picBody, picOpts, base, ctx) {
         if (pe > 0) { name = rest.slice(i + 1, pe).replace(/\s/g, ''); i = pe + 1; }
       }
       i = skipWs(rest, i);
-      var atTok = null;
+      var atTok = null, atStart = -1, atEnd = -1;
+      var atInsert = stmtAbs + mNode[0].length + i; // 无 at 时可插入 " at (...)" 的位置
       if (/^at[\s(]/.test(rest.slice(i))) {
+        atStart = stmtAbs + mNode[0].length + i;
         var afterAt = skipWs(rest, i + 2);
         if (rest.charAt(afterAt) === '(') {
           var ae = rest.indexOf(')', afterAt);
-          if (ae > 0) { atTok = rest.slice(afterAt + 1, ae); i = ae + 1; }
+          if (ae > 0) { atTok = rest.slice(afterAt + 1, ae); i = ae + 1; atEnd = stmtAbs + mNode[0].length + i; }
         } else i = afterAt;
       }
       i = skipWs(rest, i);
@@ -614,7 +617,9 @@ function render(picBody, picOpts, base, ctx) {
         rounded: shape === 'rectangle' ? (itp.roundedPt !== null && itp.roundedPt !== undefined ? itp.roundedPt * PT : 0) : 0,
         lines: lines, fontpx: fname.size, bold: fname.bold, align: itp.align || 'center',
         innerSep: innerSep, opacity: itp.opacity, isCoord: isCoord,
-        optStart: optStart, optEnd: optEnd, optInsert: optInsert
+        optStart: optStart, optEnd: optEnd, optInsert: optInsert,
+        atStart: atStart, atEnd: atEnd, atInsert: atInsert, placed: placed,
+        declaredMinW: itp.minW || itp.minSize || 0, declaredMinH: itp.minH || itp.minSize || 0
       };
       if (name) byName[name] = node;
       nodes.push(node);
@@ -805,6 +810,11 @@ function render(picBody, picOpts, base, ctx) {
     return {
       sidx: n.sidx, name: n.name, text: n.lines.join(' / '),
       optStart: n.optStart, optEnd: n.optEnd, optInsert: n.optInsert, styles: n.styles,
+      atStart: n.atStart, atEnd: n.atEnd, atInsert: n.atInsert, placed: n.placed,
+      posCm: { x: +(n.cx / CM).toFixed(2), y: +(-n.cy / CM).toFixed(2) },
+      sizeCm: { w: +(n.w / CM).toFixed(2), h: +(n.h / CM).toFixed(2) },
+      declaredMinWcm: +((n.declaredMinW || 0) / CM).toFixed(2),
+      declaredMinHcm: +((n.declaredMinH || 0) / CM).toFixed(2),
       fill: n.fill && n.fill !== 'none' ? n.fill : null,
       drawOn: !(n.draw === undefined || n.draw === null || n.draw === 'none'),
       draw: (n.draw && n.draw !== 'none') ? n.draw : '#000000',
@@ -854,4 +864,4 @@ function render(picBody, picOpts, base, ctx) {
 
 
 
-export { render, parseOpts, buildOpts, setOpt, delOptAny, parseTikzsetBody, parseColor, colorToTikz, nearestNamed, interpret, SHAPES, DASH_KEYS, FONT_FAMILY };
+export { render, parseOpts, buildOpts, setOpt, delOptAny, parseTikzsetBody, parseColor, colorToTikz, nearestNamed, interpret, SHAPES, DASH_KEYS, FONT_FAMILY, CM };

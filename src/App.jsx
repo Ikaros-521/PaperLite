@@ -18,21 +18,24 @@ import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.
 import { infoFor } from './fileTypes.js';
 import * as fs from './fs.js';
 import * as llm from './llm.js';
+import { LS_LANG, detectLang, getLang, setLang as setModuleLang, tr } from './i18n.js';
+import { LangContext, useT } from './useI18n.js';
 
 const LS_KEY = 'paperlite.doc.v2';
 const LS_MODE = 'paperlite.viewmode.v2';
 let lastRenderMs = 0;
 let tabSeq = 0;
 
-const SNIPPETS = {
+// 插入片段中的示例文字随界面语言变化（LaTeX 命令本身不变）
+const makeSnippets = (t) => ({
   tEq: '\n\\begin{equation}\n  \n\\end{equation}\n',
   tList: '\n\\begin{itemize}\n  \\item \n\\end{itemize}\n',
   tEnum: '\n\\begin{enumerate}\n  \\item \n\\end{enumerate}\n',
-  tTable: '\n\\begin{table}[h]\n\\centering\n\\begin{tabular}{lcc}\n\\toprule\n列一 & 列二 & 列三 \\\\\n\\midrule\nA & B & C \\\\\n\\bottomrule\n\\end{tabular}\n\\caption{表标题}\n\\label{tab:mytab}\n\\end{table}\n',
-  tFlow: '\n\\begin{tikzpicture}[node distance=1.5cm]\n  \\node[rectangle, rounded corners=6pt, fill=blue!15, draw=blue!60!black] (a) {开始};\n  \\node[rectangle, rounded corners=6pt, fill=teal!12, draw=teal!70!black, right of=a, node distance=3cm] (b) {处理步骤};\n  \\node[diamond, fill=yellow!25, draw=orange!80!black, right of=b, node distance=3cm] (c) {判断?};\n  \\node[rectangle, rounded corners=10pt, fill=green!12, draw=green!50!black, below of=b, node distance=2cm] (d) {结束};\n  \\draw[-stealth, thick] (a) -- (b);\n  \\draw[-stealth, thick] (b) -- (c);\n  \\draw[-stealth, thick] (c) -- node[above, font=\\\\small]{是} (d);\n\\end{tikzpicture}\n',
-  tMermaid: '\n\\begin{mermaid}\nflowchart LR\n  A[开始] --> B{条件?}\n  B -- 是 --> C[处理]\n  B -- 否 --> D[结束]\n\\end{mermaid}\n',
+  tTable: '\n\\begin{table}[h]\n\\centering\n\\begin{tabular}{lcc}\n\\toprule\n' + t('sn.col', { n: 1 }) + ' & ' + t('sn.col', { n: 2 }) + ' & ' + t('sn.col', { n: 3 }) + ' \\\\\n\\midrule\nA & B & C \\\\\n\\bottomrule\n\\end{tabular}\n\\caption{' + t('sn.tblCaption') + '}\n\\label{tab:mytab}\n\\end{table}\n',
+  tFlow: '\n\\begin{tikzpicture}[node distance=1.5cm]\n  \\node[rectangle, rounded corners=6pt, fill=blue!15, draw=blue!60!black] (a) {' + t('sn.start') + '};\n  \\node[rectangle, rounded corners=6pt, fill=teal!12, draw=teal!70!black, right of=a, node distance=3cm] (b) {' + t('sn.step') + '};\n  \\node[diamond, fill=yellow!25, draw=orange!80!black, right of=b, node distance=3cm] (c) {' + t('sn.decision') + '};\n  \\node[rectangle, rounded corners=10pt, fill=green!12, draw=green!50!black, below of=b, node distance=2cm] (d) {' + t('sn.end') + '};\n  \\draw[-stealth, thick] (a) -- (b);\n  \\draw[-stealth, thick] (b) -- (c);\n  \\draw[-stealth, thick] (c) -- node[above, font=\\\\small]{' + t('sn.yes') + '} (d);\n\\end{tikzpicture}\n',
+  tMermaid: '\n\\begin{mermaid}\nflowchart LR\n  A[' + t('sn.start') + '] --> B{' + t('sn.decision') + '}\n  B -- ' + t('sn.yes') + ' --> C[' + t('sn.process') + ']\n  B -- ' + t('sn.no') + ' --> D[' + t('sn.end') + ']\n\\end{mermaid}\n',
   tBib: '\\cite{key}'
-};
+});
 
 function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl }) {
   const id = ++tabSeq;
@@ -47,12 +50,16 @@ function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, i
 }
 
 export default function App() {
+  const [lang, setLang] = useState(detectLang);
+  setModuleLang(lang); // 引擎模块（linter/llm）读模块级语言；渲染期同步保证当帧文案正确
+  const t = useT();
+
   // ---- 多标签 ----
   const [tabs, setTabs] = useState(() => {
     let saved = '';
     try { saved = localStorage.getItem(LS_KEY) || ''; } catch (e) { /* ignore */ }
     const text = saved.trim() ? saved : samples.demo;
-    return [makeTab({ name: '草稿.tex', path: '(浏览器草稿)', kind: 'draft', text, modeSpec: 'stex', saved: text })];
+    return [makeTab({ name: tr(detectLang(), 'app.draftName'), path: tr(detectLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text })];
   });
   const [activeId, setActiveId] = useState(() => 1);
   const [activeValue, setActiveValue] = useState(() => tabsInitValue());
@@ -113,6 +120,13 @@ export default function App() {
     if (channels.length && !channels.some(c => c.id === activeChannelId)) setActiveChannelId(channels[0].id);
   }, [channels, activeChannelId]);
 
+  // ---- 语言持久化 + <html lang> + 标题 ----
+  useEffect(() => {
+    try { localStorage.setItem(LS_LANG, lang); } catch (e) { /* ignore */ }
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+    document.title = t('app.title');
+  }, [lang, t]);
+
   // ---- 恢复文件夹 & 检测 TeX 引擎 ----
   useEffect(() => {
     (async () => {
@@ -140,8 +154,8 @@ export default function App() {
       setRootDir(h); setRestorePrompt(null);
       await fs.saveRootHandle(h);
       setSideTab('files');
-      flash('已打开文件夹：' + h.name);
-    } catch (e) { if (e && e.name !== 'AbortError') alert('打开文件夹失败：' + (e.message || e)); }
+      flash(t('app.folderOpened', { name: h.name }));
+    } catch (e) { if (e && e.name !== 'AbortError') alert(t('app.openFolderFailed', { msg: e.message || e })); }
   };
   const closeFolder = async () => { setRootDir(null); setRestorePrompt(null); await fs.clearRootHandle(); };
   const restoreFolder = async () => {
@@ -152,7 +166,7 @@ export default function App() {
 
   // ---- 打开文件 ----
   const openFileTab = useCallback(async (fileHandle, path, parentDir) => {
-    const name = fileHandle.name || (path ? path.split('/').pop() : '未命名');
+    const name = fileHandle.name || (path ? path.split('/').pop() : tr(getLang(), 'app.untitled'));
     const info = infoFor(name);
     const exist = tabsRef.current.filter(t => t.handle === fileHandle)[0];
     if (exist) { setActiveId(exist.id); return exist; }
@@ -167,15 +181,15 @@ export default function App() {
       const t = makeTab({ name, path, kind: info.kind, handle: fileHandle, parentDir, text, modeSpec: info.mode, saved: text });
       setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue(text);
       return t;
-    } catch (e) { alert('无法打开 ' + name + '：' + (e.message || e)); return null; }
+    } catch (e) { alert(tr(getLang(), 'app.cannotOpen', { name, msg: e.message || e })); return null; }
   }, []);
 
   useEffect(() => {
     window.__plInject = (name, content) => {
       const info = infoFor(name);
-      const t = makeTab({ name, path: '(内存) ' + name, kind: info.kind, text: content, modeSpec: info.mode, saved: content });
-      setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue(content);
-      return t.id;
+      const nt = makeTab({ name, path: t('app.memPath') + ' ' + name, kind: info.kind, text: content, modeSpec: info.mode, saved: content });
+      setTabs(ts => ts.concat([nt])); setActiveId(nt.id); setActiveValue(content);
+      return nt.id;
     };
     window.__plTabs = () => tabsRef.current.map(t => ({ id: t.id, name: t.name, kind: t.kind, dirty: t.dirty }));
   }, []);
@@ -210,16 +224,17 @@ export default function App() {
   // ---- 新建文件（未保存标签；Ctrl+S 时另存到已开文件夹，或弹出系统另存为）----
   const newFile = () => {
     let n = 1;
+    const base = t('app.newFileDefault', { n: '' });
     const existNames = new Set(tabsRef.current.map(t => t.name));
-    while (existNames.has('未命名' + (n > 1 ? n : '') + '.tex')) n++;
-    const input = window.prompt('新建文件名（支持 .tex / .md / 代码文件等）', '未命名' + (n > 1 ? n : '') + '.tex');
+    while (existNames.has(base.replace('.tex', (n > 1 ? n : '') + '.tex'))) n++;
+    const input = window.prompt(t('app.newFilePrompt'), base.replace('.tex', (n > 1 ? n : '') + '.tex'));
     if (!input) return;
     const name = input.trim();
-    if (!name || /[\\/:*?"<>|]/.test(name)) { alert('文件名不能为空，且不能包含 \\ / : * ? " < > |'); return; }
+    if (!name || /[\\/:*?"<>|]/.test(name)) { alert(t('app.badFileName')); return; }
     const info = infoFor(name);
-    const t = makeTab({ name, path: '(未保存)', kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
-    setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue('');
-    flash('已新建「' + name + '」，Ctrl+S 保存到本地');
+    const t2 = makeTab({ name, path: t('app.unsavedPath'), kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
+    setTabs(ts => ts.concat([t2])); setActiveId(t2.id); setActiveValue('');
+    flash(t('app.created', { name }));
   };
 
   // 另存为：无磁盘句柄的标签保存时走这里。
@@ -229,31 +244,31 @@ export default function App() {
     if (rootDir) {
       try {
         await rootDir.getFileHandle(t.name);
-        if (!window.confirm('文件夹中已存在「' + t.name + '」，覆盖？')) return false;
+        if (!window.confirm(t('app.overwriteConfirm', { name: t.name }))) return false;
       } catch (e) { /* 不存在，直接创建 */ }
       try {
         const h = await fs.createFile(rootDir, t.name);
         await fs.writeFileText(h, value);
         setTabs(ts => ts.map(x => x.id === t.id ? { ...x, handle: h, parentDir: rootDir, path: t.name, saved: value, dirty: false } : x));
         setTreeKey(k => k + 1);
-        flash('已保存到文件夹：' + t.name);
+        flash(t('app.savedToFolder', { name: t.name }));
         return true;
-      } catch (e) { alert('保存失败：' + (e.message || e)); return false; }
+      } catch (e) { alert(t('app.saveFailed', { msg: e.message || e })); return false; }
     }
     if (typeof window.showSaveFilePicker === 'function') {
       try {
         const h = await window.showSaveFilePicker({ suggestedName: t.name });
         await fs.writeFileText(h, value);
         setTabs(ts => ts.map(x => x.id === t.id ? { ...x, name: h.name, handle: h, path: h.name, saved: value, dirty: false } : x));
-        flash('已保存：' + h.name);
+        flash(t('app.saved', { name: h.name }));
         return true;
       } catch (e) {
-        if (e && e.name !== 'AbortError') alert('保存失败：' + (e.message || e));
+        if (e && e.name !== 'AbortError') alert(t('app.saveFailed', { msg: e.message || e }));
         return false;
       }
     }
     downloadFile(t.name, value, 'text/plain;charset=utf-8');
-    flash('当前浏览器不支持选择保存位置，已改为下载「' + t.name + '」');
+    flash(t('app.downloadFallback', { name: t.name }));
     return false;
   };
 
@@ -264,27 +279,27 @@ export default function App() {
     if (t.kind === 'draft') {
       try { localStorage.setItem(LS_KEY, t.doc ? t.doc.getValue() : ''); } catch (e) { /* ignore */ }
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
-      flash('草稿已保存到浏览器');
+      flash(tr(getLang(), 'app.draftSaved'));
       return;
     }
     if (!t.handle) { await saveTabAs(t); return; }
     try {
       await fs.writeFileText(t.handle, t.doc.getValue());
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
-      flash('已保存：' + t.name);
-    } catch (e) { alert('保存失败：' + (e.message || e)); }
+      flash(tr(getLang(), 'app.saved', { name: t.name }));
+    } catch (e) { alert(tr(getLang(), 'app.saveFailed', { msg: e.message || e })); }
   }, [activeId, rootDir, flash]);
 
   // ---- 关闭标签 ----
   const closeTab = useCallback((id) => {
     const t = tabsRef.current.filter(x => x.id === id)[0];
-    if (t && t.dirty && !window.confirm(`「${t.name}」有未保存的修改，关闭将丢失。继续？`)) return;
+    if (t && t.dirty && !window.confirm(tr(getLang(), 'app.dirtyClose', { name: t.name }))) return;
     if (t && t.imageUrl) URL.revokeObjectURL(t.imageUrl);
     setTabs(ts => {
       const rest = ts.filter(x => x.id !== id);
       if (!rest.length) {
         const text = samples.blank;
-        const nt = makeTab({ name: '草稿.tex', path: '(浏览器草稿)', kind: 'draft', text, modeSpec: 'stex', saved: text });
+        const nt = makeTab({ name: tr(getLang(), 'app.draftName'), path: tr(getLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text });
         setActiveId(nt.id); setActiveValue(text);
         return [nt];
       }
@@ -363,26 +378,26 @@ export default function App() {
   // ---- 文件/模板 ----
   const openSingleFile = async () => {
     if (typeof window.showOpenFilePicker !== 'function') {
-      alert('当前浏览器不支持直接打开文件（需 Chrome / Edge）。可改用「打开文件夹」。');
+      alert(t('app.noFilePicker'));
       return;
     }
     try {
       const [h] = await window.showOpenFilePicker({ multiple: false });
       await openFileTab(h, h.name, null);
-    } catch (e) { if (e && e.name !== 'AbortError') alert('打开失败：' + (e.message || e)); }
+    } catch (e) { if (e && e.name !== 'AbortError') alert(t('app.openFailed', { msg: e.message || e })); }
   };
 
   const loadTemplate = (key) => {
     const t = tabsRef.current.filter(x => x.id === activeId)[0];
     const useDraft = t && (t.kind === 'draft' || t.kind === 'tex');
-    if (!window.confirm(useDraft ? '载入模板将替换当前内容（可先导出 .tex 备份）。继续？' : '模板将载入到新的草稿标签。继续？')) return;
+    if (!window.confirm(useDraft ? tr(getLang(), 'app.tplReplace') : tr(getLang(), 'app.tplNewTab'))) return;
     const text = samples[key] || '';
     if (useDraft && t.doc) {
       t.doc.setValue(text);
       setActiveValue(text);
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: text, dirty: false } : x));
     } else {
-      const nt = makeTab({ name: '草稿.tex', path: '(浏览器草稿)', kind: 'draft', text, modeSpec: 'stex', saved: text });
+      const nt = makeTab({ name: tr(getLang(), 'app.draftName'), path: tr(getLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text });
       setTabs(ts => ts.concat([nt])); setActiveId(nt.id); setActiveValue(text);
     }
   };
@@ -390,9 +405,9 @@ export default function App() {
   // ---- 编译 ----
   const doCompile = async () => {
     if (compiling) return;
-    if (!isTexLike) { flash('仅 .tex 文件可编译'); return; }
+    if (!isTexLike) { flash(t('app.onlyTexCompile')); return; }
     if (!engines.length) {
-      alert('未检测到本机 TeX 引擎。\n\n请安装 MiKTeX 或 TeX Live（加入 PATH），并通过 node server.mjs 启动本应用后重试。');
+      alert(t('app.noEngine'));
       return;
     }
     setCompiling(true);
@@ -411,13 +426,13 @@ export default function App() {
         pdfUrlRef.current = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
         setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log: j.log || '', errors: j.errors || [], engine });
         setPreviewMode('pdf');
-        flash(engine + ' 编译成功');
+        flash(t('app.compileOk', { engine }));
       } else {
-        setCompileResult({ ok: false, log: j.log || '', errors: j.errors || [], error: j.error || '编译失败', engine });
+        setCompileResult({ ok: false, log: j.log || '', errors: j.errors || [], error: j.error || t('app.compileFailed'), engine });
         setPreviewMode('log');
       }
     } catch (e) {
-      alert('编译请求失败：' + (e.message || e) + '\n（需通过 node server.mjs 访问）');
+      alert(t('app.compileReqFailed', { msg: e.message || e }));
     } finally { setCompiling(false); }
   };
 
@@ -428,7 +443,7 @@ export default function App() {
     const t0 = performance.now();
     let r;
     try { r = renderLatex(deferred, {}); }
-    catch (e) { r = { html: '<div class="render-error">渲染器异常：' + String(e && e.message || e) + '</div>', meta: {}, warnings: [String(e)], diagrams: [], stats: countOf(deferred), headings: [] }; }
+    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + String(e && e.message || e) + '</div>', meta: {}, warnings: [String(e)], diagrams: [], stats: countOf(deferred), headings: [] }; }
     lastRenderMs = performance.now() - t0;
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -439,7 +454,7 @@ export default function App() {
     const t0 = performance.now();
     let r;
     try { r = renderMarkdownFull(deferred); }
-    catch (e) { r = { html: '<div class="render-error">Markdown 渲染异常：' + String(e && e.message || e) + '</div>', headings: [] }; }
+    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.mdRenderErr') + String(e && e.message || e) + '</div>', headings: [] }; }
     lastRenderMs = performance.now() - t0;
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -450,7 +465,7 @@ export default function App() {
   // 编辑器内联诊断：lint 问题 + TeX 编译错误（渲染警告无行号，不进 gutter）
   const editorIssues = useMemo(() => {
     const cs = compileResult && compileResult.errors
-      ? compileResult.errors.map(e => ({ line: e.line, msg: e.msg || '编译错误', severity: 'error', src: 'compile' }))
+      ? compileResult.errors.map(e => ({ line: e.line, msg: e.msg || tr(getLang(), 'app.compileErr'), severity: 'error', src: 'compile' }))
       : [];
     return diagnostics.concat(cs);
   }, [diagnostics, compileResult]);
@@ -518,10 +533,11 @@ export default function App() {
     const c = cm();
     const doc = valueRef.current || '';
     const limit = channel && channel.contextLimit ? channel.contextLimit : 24000;
-    const trunc = (t) => t.length > limit ? t.slice(0, Math.floor(limit * 0.7)) + '\n\n……（中略）……\n\n' + t.slice(-Math.floor(limit * 0.3)) : t;
+    const L = getLang();
+    const trunc = (t) => t.length > limit ? t.slice(0, Math.floor(limit * 0.7)) + '\n\n' + tr(L, 'app.ctxOmitted') + '\n\n' + t.slice(-Math.floor(limit * 0.3)) : t;
     if (scope === 'selection') {
       const sel = c ? c.getSelection() : '';
-      return { text: sel || '', note: sel ? '📎 上下文：选区' : '📎 上下文：选区（空）' };
+      return { text: sel || '', note: sel ? tr(L, 'app.ctxSel') : tr(L, 'app.ctxSelEmpty') };
     }
     if (scope === 'paragraph') {
       if (!c) return { text: '', note: '' };
@@ -531,60 +547,61 @@ export default function App() {
       while (a > 0 && (c.getLine(a - 1) || '').trim()) a--;
       while (b < n - 1 && (c.getLine(b + 1) || '').trim()) b++;
       const text = rangeText(c, a, b);
-      return { text: trunc(text), note: `📎 上下文：光标段落（${a + 1}-${b + 1} 行）` };
+      return { text: trunc(text), note: tr(L, 'app.ctxPara', { a: a + 1, b: b + 1 }) };
     }
     if (scope === 'retrieve') {
       if (channel && channel.embedModel) {
         const chunks = await llm.retrieve(channel, query, doc, 6);
         if (chunks && chunks.length) {
-          return { text: chunks.join('\n\n——\n\n').slice(0, limit), note: `📎 上下文：检索增强（top ${chunks.length} 段）` };
+          return { text: chunks.join('\n\n——\n\n').slice(0, limit), note: tr(L, 'app.ctxRag', { n: chunks.length }) };
         }
       }
-      return { text: trunc(doc), note: '📎 上下文：全文（检索模型不可用，已回退）' };
+      return { text: trunc(doc), note: tr(L, 'app.ctxFallback') };
     }
-    return { text: trunc(doc), note: '📎 上下文：全文' + (doc.length > limit ? '（已截断）' : '') };
+    return { text: trunc(doc), note: tr(L, 'app.ctxFull') + (doc.length > limit ? tr(L, 'app.ctxTruncated') : '') };
   }, []);
   buildContext.cm = () => cmRef.current;
 
   // ---- AI 修复 ----
   const aiFix = async () => {
+    const L = getLang();
     const channel = channels.filter(c => c.id === activeChannelId)[0];
-    if (!channel) { setSettingsOpen(true); alert('请先添加并选择 AI 渠道。'); return; }
-    if (!isTexLike) { flash('仅 .tex 文件支持 AI 修复'); return; }
+    if (!channel) { setSettingsOpen(true); alert(tr(L, 'app.needChannel')); return; }
+    if (!isTexLike) { flash(tr(L, 'app.onlyTexAiFix')); return; }
     const issues = [
       ...(compileResult && compileResult.errors ? compileResult.errors.map(e => ({ line: e.line, msg: e.msg })) : []),
       ...diagnostics
     ].slice(0, 20);
-    if (!issues.length) { flash('当前没有可修复的问题'); return; }
+    if (!issues.length) { flash(tr(L, 'app.noFixable')); return; }
     setAiBusy(true);
     setChatOpen(true); setPanelOpen(false);
-    const prompt = '请修复以下 LaTeX 文档中的语法问题，输出修复后的【完整文档】于 ```latex 代码块中，并用一两句话说明修改点。\n\n' +
-      '问题清单：\n' + issues.map(d => `- 第 ${d.line != null ? d.line + 1 : '?'} 行：${d.msg}`).join('\n') +
-      '\n\n文档：\n```latex\n' + activeValue.slice(0, channel.contextLimit || 24000) + '\n```';
-    setChatMessages(ms => ms.concat([{ role: 'user', content: '(AI 修复请求) 已附问题清单与文档', ctxNote: `🛠 ${issues.length} 个问题` }, { role: 'assistant', content: '', reasoning: '' }]));
+    const prompt = tr(L, 'ai.fixPrompt', {
+      issues: issues.map(d => tr(L, 'ai.errLine', { n: d.line != null ? d.line + 1 : '?', msg: d.msg })).join('\n'),
+      doc: activeValue.slice(0, channel.contextLimit || 24000)
+    });
+    setChatMessages(ms => ms.concat([{ role: 'user', content: tr(L, 'app.aiFixReq'), ctxNote: '🛠 ' + tr(L, 'app.nIssues', { n: issues.length }) }, { role: 'assistant', content: '', reasoning: '' }]));
     try {
       const r = await llm.chat(channel, [{ role: 'user', content: prompt }], { temperature: 0.2 });
       setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, content: r.content, reasoning: r.reasoning || '' } : m));
     } catch (e) {
-      setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content ? { ...m, content: '⚠ 修复请求失败：' + (e.message || e) } : m));
+      setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content ? { ...m, content: tr(L, 'app.aiFixFailed', { msg: e.message || e }) } : m));
     } finally { setAiBusy(false); }
   };
 
   // ---- AI 修复（单问题：编辑器诊断红橙点点击，预填提示词到对话输入框）----
   const aiFixIssue = (issue, list) => {
+    const L = getLang();
     const channel = channels.filter(c => c.id === activeChannelId)[0];
-    if (!channel) { setSettingsOpen(true); alert('请先添加并选择 AI 渠道。'); return; }
-    if (!isTexLike) { flash('仅 .tex 文件支持 AI 修复'); return; }
+    if (!channel) { setSettingsOpen(true); alert(tr(L, 'app.needChannel')); return; }
+    if (!isTexLike) { flash(tr(L, 'app.onlyTexAiFix')); return; }
     const all = (list && list.length ? list : [issue]);
     const lines = activeValue.split('\n');
     setChatOpen(true); setPanelOpen(false);
     const detail = all.map(d => {
       const t = d.line != null ? (lines[d.line] || '').slice(0, 300) : '';
-      return `- 第 ${d.line != null ? d.line + 1 : '?'} 行：${d.msg}` + (t ? `\n  出错行内容：\`${t.trim()}\`` : '');
+      return tr(L, 'ai.errLineSrc', { n: d.line != null ? d.line + 1 : '?', msg: d.msg, src: t.trim() });
     }).join('\n');
-    const prompt = '请修复以下编辑器检测到的 LaTeX 问题：\n' + detail +
-      '\n\n要求：先一句话说明原因，再给出修复。小问题给最小修改片段（```latex 代码块）；涉及结构调整时给修复后的完整文档（```latex 代码块，可一键替换全文）。' +
-      '\n\n修复方向（可直接发送，或在此补充说明后发送）：';
+    const prompt = tr(L, 'ai.fixIssuePrompt', { detail });
     setChatInject({ text: prompt, n: Date.now() });
   };
 
@@ -599,15 +616,16 @@ export default function App() {
     exportPDF(tmp.innerHTML, (isTexLike && latexResult) ? latexResult.meta : {});
   };
 
+  const SNIP = makeSnippets(t);
   const stats = previewResult && previewResult.stats ? previewResult.stats : countOf(activeValue);
-  const wordText = (stats.cjk ? stats.cjk + ' 字' : '') + (stats.cjk && stats.words - stats.cjk > 0 ? ' + ' : '') + (stats.words - stats.cjk > 0 ? (stats.words - stats.cjk) + ' words' : '');
+  const wordText = (stats.cjk ? t('st.chars', { n: stats.cjk }) : '') + (stats.cjk && stats.words - stats.cjk > 0 ? ' + ' : '') + (stats.words - stats.cjk > 0 ? t('st.words', { n: stats.words - stats.cjk }) : '');
   const renderWarnCount = previewResult && previewResult.warnings ? previewResult.warnings.length : 0;
   const issueCount = diagnostics.length + renderWarnCount + (compileResult && compileResult.errors ? compileResult.errors.length : 0);
   const hasEditor = activeTab && activeTab.kind !== 'image';
   const channelCount = channels.length;
 
   return (
-    <>
+    <LangContext.Provider value={lang}>
       <Toolbar
         actions={{
           newFile, loadTemplate, openFile: openSingleFile, openFolder, save: saveActive,
@@ -642,13 +660,13 @@ export default function App() {
                   const f = inp.files && inp.files[0];
                   if (!f) return;
                   const r = new FileReader();
-                  r.onload = () => insert('\n\\begin{figure}[h]\n\\centering\n\\includegraphics[width=0.7\\textwidth]{' + r.result + '}\n\\caption{图片说明}\n\\label{fig:img}\n\\end{figure}\n');
+                  r.onload = () => insert('\n\\begin{figure}[h]\n\\centering\n\\includegraphics[width=0.7\\textwidth]{' + r.result + '}\n\\caption{' + t('app.imageCaption') + '}\n\\label{fig:img}\n\\end{figure}\n');
                   r.readAsDataURL(f);
                 };
                 inp.click();
                 return;
               }
-              default: if (SNIPPETS[id]) insert(SNIPPETS[id]);
+              default: if (SNIP[id]) insert(SNIP[id]);
             }
           }
         }}
@@ -660,23 +678,24 @@ export default function App() {
         syncScroll={syncScroll} setSyncScroll={setSyncScroll}
         zoom={zoom} onZoom={setZoomClamped}
         onHelp={setHelpOpen}
+        lang={lang} setLang={setLang}
       />
 
       <main id="layout" data-mode={viewMode} style={{ '--split': splitPct + '%' }}>
         <div id="sidebar">
           <div className="side-tabs">
-            <button className={sideTab === 'files' ? 'on' : ''} title="文件" onClick={() => setSideTab('files')} disabled={!rootDir && !restorePrompt}>文</button>
-            <button className={sideTab === 'outline' ? 'on' : ''} title="大纲" onClick={() => setSideTab('outline')}>纲</button>
-            <button className={sideTab === 'issues' ? 'on' : ''} title="问题" onClick={() => setSideTab('issues')}>{'⚠\uFE0E'}{issueCount ? <em>{issueCount}</em> : null}</button>
+            <button className={sideTab === 'files' ? 'on' : ''} title={t('side.files')} onClick={() => setSideTab('files')} disabled={!rootDir && !restorePrompt}>{lang === 'zh' ? '文' : '▤'}</button>
+            <button className={sideTab === 'outline' ? 'on' : ''} title={t('side.outline')} onClick={() => setSideTab('outline')}>{lang === 'zh' ? '纲' : '≣'}</button>
+            <button className={sideTab === 'issues' ? 'on' : ''} title={t('side.issues')} onClick={() => setSideTab('issues')}>{'⚠\uFE0E'}{issueCount ? <em>{issueCount}</em> : null}</button>
           </div>
           <div className="side-body">
             {sideTab === 'files' && (
               restorePrompt && !rootDir ? (
                 <div className="side-pad">
-                  <button className="btn sm" onClick={restoreFolder}>恢复上次文件夹（{restorePrompt.name}）</button>
+                  <button className="btn sm" onClick={restoreFolder}>{t('side.restore', { name: restorePrompt.name })}</button>
                 </div>
               ) : rootDir ? <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey} />
-                : <div className="side-pad hint">未打开文件夹<br />菜单「文件 ▸ 打开文件夹」</div>
+                : <div className="side-pad hint">{t('side.noFolder1')}<br />{t('side.noFolder2')}</div>
             )}
             {sideTab === 'outline' && <OutlinePanel kind={outlineKind} headings={outlineItems} onJump={jumpToHeading} />}
             {sideTab === 'issues' && (
@@ -706,17 +725,17 @@ export default function App() {
           ) : (
             <div className="binary-note">
               <div>{activeTab.name}</div>
-              <div className="hint">图片文件不提供文本编辑，请看右侧预览。</div>
+              <div className="hint">{t('prev.imageNote')}</div>
             </div>
           )}
         </section>
 
-        {viewMode === 'split' && <div id="divider" title="拖动调整分栏" onMouseDown={dragDivider}></div>}
+        {viewMode === 'split' && <div id="divider" title={lang === 'zh' ? '拖动调整分栏' : 'Drag to resize split'} onMouseDown={dragDivider}></div>}
 
         {viewMode !== 'edit' && (
           activeTab && activeTab.kind === 'image' ? (
             <section id="previewPane">
-              <div id="previewBar"><span className="pb-title">预览</span></div>
+              <div id="previewBar"><span className="pb-title">{t('prev.title')}</span></div>
               <div id="previewScroll"><div id="preview"><div id="paper" className="paper image-view" style={{ zoom }}>
                 <img src={activeTab.imageUrl} alt={activeTab.name} style={{ maxWidth: '100%' }} />
               </div></div></div>
@@ -724,20 +743,20 @@ export default function App() {
           ) : previewMode === 'pdf' && compileResult && compileResult.ok ? (
             <section id="previewPane">
               <div id="previewBar">
-                <span className="pb-title">✓ {compileResult.engine} 编译成功</span>
+                <span className="pb-title">✓ {compileResult.engine} {t('prev.compileOk')}</span>
                 <span className="pb-spacer"></span>
-                <button className="btn sm" onClick={() => downloadCompiled(compileResult)}>⬇ 下载 PDF</button>
-                <button className="btn sm" onClick={() => window.open(compileResult.pdfUrl, '_blank')}>新窗口</button>
-                <button className="btn sm" onClick={() => setPreviewMode('rich')}>✕ 关闭</button>
+                <button className="btn sm" onClick={() => downloadCompiled(compileResult)}>{t('prev.dlPdf')}</button>
+                <button className="btn sm" onClick={() => window.open(compileResult.pdfUrl, '_blank')}>{t('prev.newWindow')}</button>
+                <button className="btn sm" onClick={() => setPreviewMode('rich')}>{t('prev.close')}</button>
               </div>
               <div className="pdf-host"><iframe src={compileResult.pdfUrl} title="PDF" /></div>
             </section>
           ) : previewMode === 'log' && compileResult ? (
             <section id="previewPane">
               <div id="previewBar">
-                <span className="pb-title bad">✕ {compileResult.engine} 编译失败</span>
+                <span className="pb-title bad">✕ {compileResult.engine} {t('prev.compileFail')}</span>
                 <span className="pb-spacer"></span>
-                <button className="btn sm" onClick={() => setPreviewMode('rich')}>返回预览</button>
+                <button className="btn sm" onClick={() => setPreviewMode('rich')}>{t('prev.back')}</button>
               </div>
               <div id="previewScroll">
                 <div className="compile-log">
@@ -745,7 +764,7 @@ export default function App() {
                     <div key={i} className="diag-item error" onClick={() => e.line != null && jumpToLine(e.line)}>
                       <span className="diag-sev">✖</span>
                       <span className="diag-msg">{e.msg}</span>
-                      {e.line != null && <span className="diag-line">第 {e.line + 1} 行</span>}
+                      {e.line != null && <span className="diag-line">{t('diag.line', { n: e.line + 1 })}</span>}
                     </div>
                   ))}
                   <pre>{(compileResult.log || '').split('\n').slice(-120).join('\n')}</pre>
@@ -768,14 +787,14 @@ export default function App() {
             />
           ) : (
             <section id="previewPane">
-              <div id="previewBar"><span className="pb-title">预览</span></div>
+              <div id="previewBar"><span className="pb-title">{t('prev.title')}</span></div>
               <div id="previewScroll"><div id="preview"><div id="paper" className="paper">
                 <div className="code-placeholder">
                   <div className="cp-icon">{infoFor(activeTab ? activeTab.name : '').icon}</div>
                   <div className="cp-name">{activeTab ? activeTab.name : ''}</div>
-                  <div className="cp-line">代码/文本文件：直接在左侧编辑即可（Ctrl+S 保存回磁盘）</div>
-                  <div className="cp-line hint">行数：{activeValue ? activeValue.split('\n').length : 0} · 大小：{fmtSize(activeValue)}</div>
-                  <div className="cp-line hint">切到 .tex / .md 文件即可实时预览与查看大纲</div>
+                  <div className="cp-line">{t('prev.codeNote1')}</div>
+                  <div className="cp-line hint">{t('prev.codeLines', { n: activeValue ? activeValue.split('\n').length : 0, size: fmtSize(activeValue) })}</div>
+                  <div className="cp-line hint">{t('prev.codeNote2')}</div>
                 </div>
               </div></div></div>
             </section>
@@ -788,14 +807,14 @@ export default function App() {
         <span className="sep">·</span>
         <span>{wordText}</span>
         <span className="sep">·</span>
-        <span>{isTexLike || isMd ? lastRenderMs.toFixed(0) + ' ms' : '文本模式'}</span>
+        <span>{isTexLike || isMd ? lastRenderMs.toFixed(0) + ' ms' : t('st.textMode')}</span>
         <span className="sep">·</span>
         <span className={'st-warn' + (issueCount ? ' has' : '')} onClick={() => setSideTab('issues')}>
-          {issueCount ? '⚠\uFE0E ' + issueCount : '✓ 无问题'}
+          {issueCount ? t('st.issues', { n: issueCount }) : t('st.noIssues')}
         </span>
         <span className="grow"></span>
         {flashMsg && <span className="st-flash">{flashMsg}</span>}
-        <span className="hint">Ctrl+S 保存 · 状态栏点「{'⚠\uFE0E'}」看问题</span>
+        <span className="hint">{t('st.hint')}</span>
       </footer>
 
       {viewMode !== 'edit' && isTexLike && cmReady >= 0 && (
@@ -827,15 +846,15 @@ export default function App() {
       {helpOpen === 'keys' && (
         <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
           <div className="modal help-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-h">快捷键 <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
+            <div className="modal-h">{t('help.keys')} <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
             <div className="modal-body">
               <table className="keys-table">
                 <tbody>
-                  {[['Ctrl+S', '保存当前标签（草稿 → 浏览器，文件 → 写回磁盘）'],
-                    ['Ctrl+B / Ctrl+I', '加粗 / 斜体（.tex 与 .md）'],
-                    ['Ctrl+Z / Ctrl+Shift+Z', '撤销 / 重做'],
-                    ['Ctrl+A', '全选'],
-                    ['Tab / Shift+Tab', '缩进 / 反缩进选区']].map(([k, d]) => (
+                  {[['Ctrl+S', t('help.k1')],
+                    ['Ctrl+B / Ctrl+I', t('help.k2')],
+                    ['Ctrl+Z / Ctrl+Shift+Z', t('help.k3')],
+                    ['Ctrl+A', t('help.k4')],
+                    ['Tab / Shift+Tab', t('help.k5')]].map(([k, d]) => (
                     <tr key={k}><td><kbd>{k}</kbd></td><td>{d}</td></tr>
                   ))}
                 </tbody>
@@ -848,22 +867,22 @@ export default function App() {
       {helpOpen === 'about' && (
         <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
           <div className="modal help-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-h">关于 PaperLite <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
+            <div className="modal-h">{t('help.about')} <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
             <div className="modal-body about-body">
               <div className="about-logo"><span className="brand-seal">论</span>PaperLite</div>
-              <div className="about-slogan">本地优先的论文速写编辑器 · LaTeX 实时预览</div>
+              <div className="about-slogan">{t('help.slogan')}</div>
               <ul className="about-list">
-                <li>纯浏览器渲染：LaTeX → HTML + KaTeX 数学 + TikZ/Mermaid 流程图</li>
-                <li>本地文件夹工作区：文件树 · 多标签 · Markdown/代码编辑</li>
-                <li>TeX 真实编译（pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX，需本机引擎 + server.mjs）</li>
-                <li>多渠道 LLM：语法修复 · 对话改写 · 文档检索（OpenAI 兼容协议）</li>
+                <li>{t('help.a1')}</li>
+                <li>{t('help.a2')}</li>
+                <li>{t('help.a3')}</li>
+                <li>{t('help.a4')}</li>
               </ul>
               <div className="about-stack">React 18 · CodeMirror 5 · KaTeX · Mermaid · Vite</div>
             </div>
           </div>
         </div>
       )}
-    </>
+    </LangContext.Provider>
   );
 }
 

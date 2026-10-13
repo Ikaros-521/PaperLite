@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { exportSvg, exportPng } from '../exporter.js';
+import { useT } from '../useI18n.js';
 
 let mermaidInited = false;
 let mermaidSeq = 0;
@@ -11,6 +12,7 @@ export default function PreviewPane({
   engines, engine, setEngine, compiling, onCompile, hasCompile,
   onOpenSettings, onOpenChat
 }) {
+  const t = useT();
   const scrollRef = useRef(null);
   const paperRef = useRef(null);
 
@@ -35,7 +37,7 @@ export default function PreviewPane({
           const svg = b.querySelector('svg');
           if (svg) { svg.style.maxWidth = '100%'; svg.removeAttribute('height'); }
         }).catch(err => {
-          b.innerHTML = '<div class="render-error">Mermaid 语法错误：' + String(err && err.message || err).slice(0, 160) + '</div>';
+          b.innerHTML = '<div class="render-error">' + t('prev.mermaidErr') + ' ' + String(err && err.message || err).slice(0, 160) + '</div>';
         });
       });
     });
@@ -97,27 +99,27 @@ export default function PreviewPane({
   return (
     <section id="previewPane">
       <div id="previewBar">
-        <span className="pb-title">预览</span>
+        <span className="pb-title">{t('prev.title')}</span>
         {result.isMd && <span className="pb-chip">Markdown</span>}
-        <label className="pb-toggle" title="编辑器与预览同步滚动">
-          <input type="checkbox" checked={syncScroll} onChange={e => onSyncToggle(e.target.checked)} /> 同步
+        <label className="pb-toggle" title={t('prev.syncTip')}>
+          <input type="checkbox" checked={syncScroll} onChange={e => onSyncToggle(e.target.checked)} /> {t('prev.sync')}
         </label>
 
         {(engines && engines.length) ? (
-          <span className="pb-compile" title="本机 TeX 引擎真实编译">
+          <span className="pb-compile" title={t('prev.compileTip')}>
             <select value={engine} onChange={e => setEngine(e.target.value)}>
               {engines.map(en => <option key={en} value={en}>{en}</option>)}
             </select>
             <button className={'btn sm' + (compiling ? ' busy' : '')} disabled={compiling} onClick={onCompile}>
-              {compiling ? '⟳ 编译中…' : '编译'}
+              {compiling ? t('prev.compiling') : t('prev.compile')}
             </button>
           </span>
         ) : null}
 
         <span className="pb-spacer"></span>
-        <button className="btn sm" title="AI 设置（多渠道 / 测试连接 / 思维链）" onClick={onOpenSettings}>{'⚙︎'}</button>
-        <button className={'btn sm' + (onTogglePanel ? '' : '')} title="图样式编辑面板" onClick={onTogglePanel}>样式</button>
-        <button className="btn sm" title="AI 对话 / 改写" onClick={onOpenChat}>AI</button>
+        <button className="btn sm" title={t('prev.settingsTip')} onClick={onOpenSettings}>{'⚙︎'}</button>
+        <button className={'btn sm' + (onTogglePanel ? '' : '')} title={t('prev.styleTip')} onClick={onTogglePanel}>{t('prev.style')}</button>
+        <button className="btn sm" title={t('prev.chatTip')} onClick={onOpenChat}>AI</button>
         <span className="pb-zoom">
           <button className="btn sm" onClick={() => onZoom(-0.1)}>−</button>
           <span>{Math.round(zoom * 100)}%</span>

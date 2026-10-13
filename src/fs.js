@@ -1,16 +1,17 @@
 /* PaperLite · 本地文件夹访问（File System Access API）
  * Chrome/Edge 支持；读写权限、目录遍历、增删改、根句柄 IndexedDB 持久化。
  */
+import { t } from './i18n.js';
 
 export function supported() {
   return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 }
 
 export async function pickDirectory() {
-  if (!supported()) throw new Error('当前浏览器不支持文件夹访问（需 Chrome / Edge）');
+  if (!supported()) throw new Error(t('fs.noSupport'));
   const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
   const perm = await handle.requestPermission({ mode: 'readwrite' });
-  if (perm !== 'granted') throw new Error('未授予读写权限');
+  if (perm !== 'granted') throw new Error(t('fs.noPerm'));
   return handle;
 }
 
@@ -36,9 +37,9 @@ export async function listDir(dirHandle) {
 
 export async function readFileText(fileHandle, maxBytes) {
   const file = await fileHandle.getFile();
-  if (file.size > (maxBytes || 2 * 1024 * 1024)) throw new Error(`文件过大（${(file.size / 1048576).toFixed(1)} MB），仅支持 2MB 内的文本文件`);
+  if (file.size > (maxBytes || 2 * 1024 * 1024)) throw new Error(t('fs.tooLarge', { size: (file.size / 1048576).toFixed(1) }));
   const text = await file.text();
-  if (text.includes('\u0000')) throw new Error('二进制文件');
+  if (text.includes('\u0000')) throw new Error(t('fs.binary'));
   return text;
 }
 
@@ -62,7 +63,7 @@ export function canRename(handle) {
   return typeof handle.move === 'function';
 }
 export async function renameEntry(handle, newName) {
-  if (!canRename(handle)) throw new Error('当前浏览器不支持重命名，可用删除+新建代替');
+  if (!canRename(handle)) throw new Error(t('fs.noRename'));
   await handle.move(newName);
 }
 

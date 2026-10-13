@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { useT } from '../useI18n.js';
 import * as TIKZ from '../engines/tikz.js';
 import {
   FONT_NAMES, SHAPES, SHAPE_NAMES, LW_OPTIONS, nearestFontPx,
@@ -8,6 +9,7 @@ import {
 /* 图样式编辑面板：样式(tikzset)批量改 + 单节点内联覆盖，修改精确写回源码。
  * 标题栏可拖拽浮窗化（双击标题回停靠），右上 ✕ 关闭。 */
 export default function StylePanel({ open, onClose, result, cm, selection, setSelection }) {
+  const t = useT();
   const panelRef = useRef(null);
   const [pos, setPos] = useState(null); // null=停靠右侧；{x,y}=浮动位置
   const diagram = useMemo(() => {
@@ -66,17 +68,17 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
       style={pos ? { left: pos.x + 'px', top: pos.y + 'px', maxHeight: 'calc(100vh - ' + (pos.y + 16) + 'px)' } : undefined}
     >
       <div className="sp-title" onPointerDown={startDrag} onDoubleClick={() => setPos(null)}>
-        <span className="sp-drag" title="拖拽移动面板（双击标题回到停靠）">⠿</span>
-                <span className="sp-t">图样式编辑</span>
+        <span className="sp-drag" title={t('style.drag')}>⠿</span>
+                <span className="sp-t">{t('style.title')}</span>
         <span className="sp-head-acts">
-          <button title="关闭" onClick={onClose}>✕</button>
+          <button title={t('style.close')} onClick={onClose}>✕</button>
         </span>
       </div>
 
       {!result || !result.diagrams.length ? (
         <div className="sp-empty">
-          文档中还没有 tikzpicture 流程图。
-          <div className="sp-hint">在工具栏点「流程图」插入一个试试。</div>
+          {t('style.empty')}
+          <div className="sp-hint">{t('style.emptyHint')}</div>
         </div>
       ) : (
         <>
@@ -87,15 +89,15 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
                   key={i}
                   className={'sp-tab' + (i === selection.did ? ' on' : '')}
                   onClick={() => setSelection({ did: i, sel: null })}
-                >图 {i + 1}</button>
+                >{t('style.fig', { n: i + 1 })}</button>
               ))}
             </div>
           )}
 
           <div className="sp-sec">
-            <div className="sp-sec-h">样式（tikzset）</div>
+            <div className="sp-sec-h">{t('style.styles')}</div>
             {!(diagram && diagram.tikzsetRanges && diagram.tikzsetRanges.length) && (
-              <div className="sp-hint">本文档还没有定义样式，可点击下方新建。</div>
+              <div className="sp-hint">{t('style.noStyles')}</div>
             )}
             {(diagram && diagram.tikzsetRanges || []).map((sr, i) => {
               const itp = TIKZ.interpret(TIKZ.parseOpts(cmText(sr.start, sr.end) || ''));
@@ -118,12 +120,12 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
               if (!cm) return;
               const name = addNewStyle(cm);
               setSelection(s => ({ did: s.did, sel: { type: 'style', key: name } }));
-            }}>＋ 新建样式</button>
+            }}>{t('style.new')}</button>
           </div>
 
           <div className="sp-sec">
-            <div className="sp-sec-h">节点（点击图可选中）</div>
-            {!(diagram && diagram.nodes && diagram.nodes.length) && <div className="sp-hint">本图没有命名节点。</div>}
+            <div className="sp-sec-h">{t('style.nodes')}</div>
+            {!(diagram && diagram.nodes && diagram.nodes.length) && <div className="sp-hint">{t('style.noNodes')}</div>}
             {(diagram && diagram.nodes || []).map((nd, i) => (
               <div
                 key={i}
@@ -152,11 +154,12 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
 
 /* 属性表单（key 变化时重挂载重置；应用时直接读控件当前值，健壮不依赖事件记账） */
 function RecordForm({ record, cm }) {
+  const t = useT();
   const p = record.props;
   const formElRef = useRef(null);
   const head = record.kind === 'style'
-    ? '样式 “' + record.name + '”'
-    : '节点 ' + (record.node.name || '');
+    ? t('style.headStyle', { name: record.name })
+    : t('style.headNode', { name: record.node.name || '' });
 
   const apply = () => {
     const el = formElRef.current;
@@ -168,7 +171,11 @@ function RecordForm({ record, cm }) {
       textOn: g('textOn').checked, text: g('text').value,
       lwPt: g('lwPt').value, dashed: g('dashed').checked,
       shape: g('shape').value, round: parseFloat(g('round').value) || 0,
-      fontPx: g('fontPx') ? g('fontPx').value : null
+      fontPx: g('fontPx') ? g('fontPx').value : null,
+      ...(record.kind === 'node' ? {
+        posX: parseFloat(g('posX').value), posY: parseFloat(g('posY').value),
+        wcm: parseFloat(g('wcm').value), hcm: parseFloat(g('hcm').value)
+      } : {})
     });
   };
 
@@ -186,40 +193,69 @@ function RecordForm({ record, cm }) {
   return (
     <div className="sp-form" ref={formElRef}>
       <div className="sp-form-h">{head}</div>
-      {colorRow('填充色', 'fillOn', 'fill', !!p.fill, p.fill || '#ffffff')}
-      {colorRow('边框', 'borderOn', 'borderColor', !!p.border, p.borderColor || '#000000')}
-      {colorRow('文字色', 'textOn', 'text', !!p.textColor, p.textColor || '#111111')}
+      {colorRow(t('style.fill'), 'fillOn', 'fill', !!p.fill, p.fill || '#ffffff')}
+      {colorRow(t('style.border'), 'borderOn', 'borderColor', !!p.border, p.borderColor || '#000000')}
+      {colorRow(t('style.text'), 'textOn', 'text', !!p.textColor, p.textColor || '#111111')}
       <label className="sp-row">
-        <span className="sp-lb">线宽</span>
+        <span className="sp-lb">{t('style.lw')}</span>
         <select name="lwPt" defaultValue={String(p.lwPt || 0.4)}>
-          {LW_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+          {LW_OPTIONS.map(o => <option key={o.v} value={o.v}>{t(o.key)}</option>)}
         </select>
       </label>
       <label className="sp-row">
-        <span className="sp-lb">虚线</span>
+        <span className="sp-lb">{t('style.dashed')}</span>
         <input type="checkbox" name="dashed" defaultChecked={!!p.dashed} />
       </label>
       <label className="sp-row">
-        <span className="sp-lb">形状</span>
+        <span className="sp-lb">{t('style.shape')}</span>
         <select name="shape" defaultValue={p.shape || 'rectangle'}>
           {SHAPES.map(s => <option key={s} value={s}>{SHAPE_NAMES[s]}</option>)}
         </select>
       </label>
       <label className="sp-row">
-        <span className="sp-lb">圆角(pt)</span>
+        <span className="sp-lb">{t('style.round')}</span>
         <input type="number" name="round" min="0" max="30" step="1" style={{ width: 70 }} defaultValue={p.roundedPt || 0} />
       </label>
       {record.kind === 'node' && (
         <label className="sp-row">
-          <span className="sp-lb">字号</span>
+          <span className="sp-lb">{t('style.font')}</span>
           <select name="fontPx" defaultValue={String(nearestFontPx(p.fontpx))}>
             {Object.keys(FONT_NAMES).map(px => <option key={px} value={px}>{px}px</option>)}
           </select>
         </label>
       )}
-      <button className="sp-apply" onClick={apply}>✓ 应用到源码</button>
       {record.kind === 'node' && (
-        <div className="sp-hint">提示：给节点指定样式名（如 block）后，改样式可一次作用于全部同类节点。</div>
+        <>
+          <div className="sp-geo-h">布局</div>
+          <label className="sp-row">
+            <span className="sp-lb">位置 X</span>
+            <input type="number" name="posX" step="0.1" style={{ width: 70 }} defaultValue={p.posX} />
+            <span className="sp-unit">cm</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">位置 Y</span>
+            <input type="number" name="posY" step="0.1" style={{ width: 70 }} defaultValue={p.posY} />
+            <span className="sp-unit">cm</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">宽度</span>
+            <input type="number" name="wcm" min="0" step="0.1" style={{ width: 70 }} defaultValue={p.wcm} />
+            <span className="sp-unit">cm</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">高度</span>
+            <input type="number" name="hcm" min="0" step="0.1" style={{ width: 70 }} defaultValue={p.hcm} />
+            <span className="sp-unit">cm</span>
+          </label>
+          <div className="sp-hint">
+            {p.placed ? '该节点原本相对定位，应用位置后会改写为绝对坐标。' : ''}
+            宽高为最小尺寸（文字更宽时以文字为准），填 0 恢复自动。
+          </div>
+        </>
+      )}
+      <button className="sp-apply" onClick={apply}>{t('style.apply')}</button>
+      {record.kind === 'node' && (
+        <div className="sp-hint">{t('style.nodeTip')}</div>
       )}
     </div>
   );

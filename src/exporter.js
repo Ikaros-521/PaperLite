@@ -1,4 +1,5 @@
 /* PaperLite · 导出模块（ESM）：打印 PDF / .tex / HTML / SVG / PNG */
+import { t } from './i18n.js';
 
 export function downloadFile(name, content, mime) {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
@@ -30,8 +31,8 @@ function collectStyleTags() {
 // 打印为 PDF：调起浏览器打印，选「另存为 PDF」得到矢量文档
 export function exportPDF(contentHtml, meta) {
   const w = window.open('', '_blank');
-  if (!w) { alert('弹窗被浏览器拦截，请允许弹出窗口后重试。'); return; }
-  const title = meta && meta.title ? meta.title.replace(/<[^>]*>/g, '') : 'PaperLite 文档';
+  if (!w) { alert(t('exp.popupBlocked')); return; }
+  const title = meta && meta.title ? meta.title.replace(/<[^>]*>/g, '') : t('exp.docTitle');
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
     collectStyleTags() +
     '<style>' + PRINT_CSS + '</style></head><body class="print-body">' +
@@ -94,7 +95,7 @@ export function exportPng(svgEl, name, scale) {
       URL.revokeObjectURL(url);
     }, 'image/png');
   };
-  img.onerror = () => { alert('PNG 导出失败：可改用 SVG 导出。'); URL.revokeObjectURL(url); };
+  img.onerror = () => { alert(t('exp.pngFailed')); URL.revokeObjectURL(url); };
   img.src = url;
 }
 

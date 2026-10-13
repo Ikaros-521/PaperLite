@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listDir, removeEntry, renameEntry, canRename, createFile, createDirectory } from '../fs.js';
 import { infoFor } from '../fileTypes.js';
+import { useLang, useT } from '../useI18n.js';
 
 /* 文件树：懒加载展开；文件点击打开；悬停操作（新建/重命名/删除） */
 export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }) {
+  const t = useT();
+  const lang = useLang();
   const [children, setChildren] = useState({});   // path -> entries[]
   const [expanded, setExpanded] = useState({});   // path -> true
   const [loading, setLoading] = useState({});
@@ -15,10 +18,10 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
       const entries = await listDir(dirHandle);
       setChildren(c => ({ ...c, [path]: entries }));
     } catch (e) {
-      setChildren(c => ({ ...c, [path]: [{ name: '（读取失败：' + (e.message || e) + '）', kind: 'error' }] }));
+      setChildren(c => ({ ...c, [path]: [{ name: t('ft.readFailed', { msg: e.message || e }), kind: 'error' }] }));
     }
     setLoading(l => ({ ...l, [path]: false }));
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (root) {
@@ -63,44 +66,44 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
   const doNewFile = async (dirPath) => {
     const dir = parentHandle(dirPath);
     if (!dir) return;
-    const name = prompt('新建文件名（含扩展名）：');
+    const name = prompt(t('ft.newFilePrompt'));
     if (!name) return;
     try {
       await createFile(dir, name);
       refresh(dirPath);
       const fh = await dir.getFileHandle(name);
       onOpenFile(fh, (dirPath ? dirPath + '/' : '') + name, dir);
-    } catch (e) { alert('新建失败：' + (e.message || e)); }
+    } catch (e) { alert(t('ft.createFailed', { msg: e.message || e })); }
   };
 
   const doNewDir = async (dirPath) => {
     const dir = parentHandle(dirPath);
     if (!dir) return;
-    const name = prompt('新建文件夹名：');
+    const name = prompt(t('ft.newDirPrompt'));
     if (!name) return;
     try { await createDirectory(dir, name); refresh(dirPath); }
-    catch (e) { alert('新建失败：' + (e.message || e)); }
+    catch (e) { alert(t('ft.createFailed', { msg: e.message || e })); }
   };
 
   const doRename = async (entry) => {
-    const name = prompt('重命名为：', entry.name);
+    const name = prompt(t('ft.renamePrompt'), entry.name);
     if (!name || name === entry.name) return;
     try {
       await renameEntry(entry.handle, name);
       const parent = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : '';
       refresh(parent);
-    } catch (e) { alert('重命名失败：' + (e.message || e)); }
+    } catch (e) { alert(t('ft.renameFailed', { msg: e.message || e })); }
   };
 
   const doDelete = async (entry) => {
     const parent = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : '';
     const dir = parentHandle(parent);
     if (!dir) return;
-    if (!window.confirm(`删除「${entry.name}」${entry.kind === 'directory' ? '及其全部内容' : ''}？此操作不可撤销。`)) return;
+    if (!window.confirm(t('ft.delConfirm', { name: entry.name, extra: entry.kind === 'directory' ? t('ft.delDirExtra') : '' }))) return;
     try {
       await removeEntry(dir, entry.name, entry.kind === 'directory');
       refresh(parent);
-    } catch (e) { alert('删除失败：' + (e.message || e)); }
+    } catch (e) { alert(t('ft.delFailed', { msg: e.message || e })); }
   };
 
   const renderNodes = (entries, depth) => entries.map(entry => {
@@ -120,16 +123,16 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
           <span className="ft-name" title={entry.path}>{entry.name}</span>
           <span className="ft-acts">
             {isDir && <>
-              <button title="在此新建文件" onClick={e => { e.stopPropagation(); doNewFile(entry.path); }}>＋文</button>
-              <button title="在此新建文件夹" onClick={e => { e.stopPropagation(); doNewDir(entry.path); }}>＋夹</button>
+              <button title={t('ft.newFileHere')} onClick={e => { e.stopPropagation(); doNewFile(entry.path); }}>{lang === 'zh' ? '＋文' : '＋f'}</button>
+              <button title={t('ft.newDirHere')} onClick={e => { e.stopPropagation(); doNewDir(entry.path); }}>{lang === 'zh' ? '＋夹' : '＋d'}</button>
             </>}
-            <button title="重命名" disabled={!canRename(entry.handle)} onClick={e => { e.stopPropagation(); doRename(entry); }}>✎</button>
-            <button title="删除" onClick={e => { e.stopPropagation(); doDelete(entry); }}>✕</button>
+            <button title={t('ft.rename')} disabled={!canRename(entry.handle)} onClick={e => { e.stopPropagation(); doRename(entry); }}>✎</button>
+            <button title={t('ft.del')} onClick={e => { e.stopPropagation(); doDelete(entry); }}>✕</button>
           </span>
         </div>
         {isDir && expanded[entry.path] && (
           <div className="ft-children">
-            {loading[entry.path] ? <div className="ft-hint" style={{ paddingLeft: depth * 12 + 28 }}>加载中…</div>
+            {loading[entry.path] ? <div className="ft-hint" style={{ paddingLeft: depth * 12 + 28 }}>{t('ft.loading')}</div>
               : renderNodes(children[entry.path] || [], depth + 1)}
           </div>
         )}
@@ -144,14 +147,14 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
       <div className="ft-head">
         <span className="ft-title">{root.name}</span>
         <span className="ft-acts ft-head-acts">
-          <button title="根目录新建文件" onClick={() => doNewFile('')}>＋文</button>
-          <button title="根目录新建文件夹" onClick={() => doNewDir('')}>＋夹</button>
-          <button title="刷新" onClick={() => load(root, '')}>⟳</button>
-          <button title="关闭文件夹" onClick={onCloseFolder}>✕</button>
+          <button title={t('ft.rootNewFile')} onClick={() => doNewFile('')}>{lang === 'zh' ? '＋文' : '＋f'}</button>
+          <button title={t('ft.rootNewDir')} onClick={() => doNewDir('')}>{lang === 'zh' ? '＋夹' : '＋d'}</button>
+          <button title={t('ft.refresh')} onClick={() => load(root, '')}>⟳</button>
+          <button title={t('ft.closeFolder')} onClick={onCloseFolder}>✕</button>
         </span>
       </div>
       <div className="ft-body">
-        {loading[''] && !rootEntries.length ? <div className="ft-hint">加载中…</div> : renderNodes(rootEntries, 0)}
+        {loading[''] && !rootEntries.length ? <div className="ft-hint">{t('ft.loading')}</div> : renderNodes(rootEntries, 0)}
       </div>
     </div>
   );
