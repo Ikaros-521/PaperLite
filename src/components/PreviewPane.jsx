@@ -103,19 +103,21 @@ export default function PreviewPane({
           <input type="checkbox" checked={syncScroll} onChange={e => onSyncToggle(e.target.checked)} /> 同步
         </label>
 
-        <span className="pb-compile" title={engines && engines.length ? '本机 TeX 引擎真实编译' : '未检测到 TeX 引擎（需安装 MiKTeX/TeX Live 并用 node server.mjs 访问）'}>
-          <select value={engine} onChange={e => setEngine(e.target.value)} disabled={!engines || !engines.length}>
-            {(engines && engines.length ? engines : ['无引擎']).map(en => <option key={en} value={en}>{en}</option>)}
-          </select>
-          <button className={'btn sm' + (compiling ? ' busy' : '')} disabled={compiling || !engines || !engines.length} onClick={onCompile}>
-            {compiling ? '⟳ 编译中…' : '⚙ 编译'}
-          </button>
-        </span>
+        {(engines && engines.length) ? (
+          <span className="pb-compile" title="本机 TeX 引擎真实编译">
+            <select value={engine} onChange={e => setEngine(e.target.value)}>
+              {engines.map(en => <option key={en} value={en}>{en}</option>)}
+            </select>
+            <button className={'btn sm' + (compiling ? ' busy' : '')} disabled={compiling} onClick={onCompile}>
+              {compiling ? '⟳ 编译中…' : '编译'}
+            </button>
+          </span>
+        ) : null}
 
         <span className="pb-spacer"></span>
-        <button className="btn sm" title="AI 设置（多渠道 / 测试连接 / 思维链）" onClick={onOpenSettings}>🤖⚙</button>
-        <button className={'btn sm' + (onTogglePanel ? '' : '')} title="图样式编辑面板" onClick={onTogglePanel}>🎨</button>
-        <button className="btn sm" title="AI 对话 / 改写" onClick={onOpenChat}>💬 AI</button>
+        <button className="btn sm" title="AI 设置（多渠道 / 测试连接 / 思维链）" onClick={onOpenSettings}>{'⚙︎'}</button>
+        <button className={'btn sm' + (onTogglePanel ? '' : '')} title="图样式编辑面板" onClick={onTogglePanel}>样式</button>
+        <button className="btn sm" title="AI 对话 / 改写" onClick={onOpenChat}>AI</button>
         <span className="pb-zoom">
           <button className="btn sm" onClick={() => onZoom(-0.1)}>−</button>
           <span>{Math.round(zoom * 100)}%</span>

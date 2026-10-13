@@ -94,9 +94,9 @@ export default function Toolbar({
     ['tList', '•≡', '无序列表'],
     ['tEnum', '1≡', '有序列表'],
     ['tTable', '▦', '三线表'],
-    ['tImg', '🖼', '插入本地图片（base64 内嵌）'],
-    ['tFlow', '🔀 流程图', '插入 TikZ 流程图'],
-    ['tMermaid', '🏝', '插入 Mermaid 图'],
+    ['tImg', '▣', '插入本地图片（base64 内嵌）'],
+    ['tFlow', '→ 流程图', '插入 TikZ 流程图'],
+    ['tMermaid', '≈', '插入 Mermaid 图'],
     null,
     ['tBib', '[引]', '插入引用'],
     ['tFn', '†', '脚注']
@@ -105,22 +105,23 @@ export default function Toolbar({
   return (
     <header id="topbar" ref={rootRef}>
       <div id="menubar">
-        <div className="brand compact">📄 PaperLite</div>
+        <div className="brand compact"><span className="brand-seal">论</span>PaperLite</div>
 
         <nav className="menus" role="menubar">
           <Mb title="文件" open={open} setOpen={setOpen} width={236}>
-            <Mi icon="📂" label="打开文件夹…" close={close} onClick={actions.openFolder} />
-            <Mi icon="🗎" label="打开文件…" close={close} onClick={actions.openFile} />
-            <Mi icon="💾" label="保存" hint="Ctrl+S" close={close} onClick={actions.save} />
+            <Mi label="新建文件…" hint="Ctrl+Alt+N" close={close} onClick={actions.newFile} />
+            <Mi label="打开文件夹…" close={close} onClick={actions.openFolder} />
+            <Mi label="打开文件…" close={close} onClick={actions.openFile} />
+            <Mi label="保存" hint="Ctrl+S" close={close} onClick={actions.save} />
             <MSep />
-            <MiSub icon="✨" label="从模板新建">
-              <Mi icon="📄" label="中文示例论文（推荐）" close={close} onClick={() => actions.loadTemplate('demo')} />
-              <Mi icon="🔀" label="TikZ 流程图速查" close={close} onClick={() => actions.loadTemplate('flow')} />
-              <Mi icon="✒️" label="空白论文" close={close} onClick={() => actions.loadTemplate('blank')} />
+            <MiSub label="从模板新建">
+              <Mi label="中文示例论文（推荐）" close={close} onClick={() => actions.loadTemplate('demo')} />
+              <Mi label="TikZ 流程图速查" close={close} onClick={() => actions.loadTemplate('flow')} />
+              <Mi label="空白论文" close={close} onClick={() => actions.loadTemplate('blank')} />
             </MiSub>
             <MSep />
-            <Mi icon="⬇" label="下载 .tex" close={close} onClick={actions.exportTex} />
-            <Mi icon="🖨" label="导出 PDF…" hint="打印为矢量 PDF" close={close} onClick={actions.exportPdf} />
+            <Mi label="下载 .tex" hint="LaTeX 源码" close={close} onClick={actions.exportTex} />
+            <Mi label="导出 PDF…" hint="矢量 PDF" close={close} onClick={actions.exportPdf} />
           </Mb>
 
           <Mb title="编辑" open={open} setOpen={setOpen} width={220}>
@@ -129,7 +130,7 @@ export default function Toolbar({
             <MSep />
             <Mi icon="▦" label="全选" hint="Ctrl+A" close={close} onClick={editOp('selectAll')} />
             <MSep />
-            <Mi icon="🛠" label="AI 修复语法…" disabled={!channelCount} close={close} onClick={onAiFix} />
+            <Mi label="AI 修复语法…" disabled={!channelCount} close={close} onClick={onAiFix} />
           </Mb>
 
           <Mb title="插入" open={open} setOpen={setOpen} width={220} disabled={!latexOk}>
@@ -147,24 +148,24 @@ export default function Toolbar({
             <Mi icon="•" label="无序列表 itemize" close={close} onClick={tool('tList')} />
             <Mi icon="1." label="有序列表 enumerate" close={close} onClick={tool('tEnum')} />
             <Mi icon="▦" label="三线表 booktabs" close={close} onClick={tool('tTable')} />
-            <Mi icon="🖼" label="本地图片…" close={close} onClick={tool('tImg')} />
+            <Mi label="本地图片…" close={close} onClick={tool('tImg')} />
             <MSep />
-            <Mi icon="🔀" label="TikZ 流程图" close={close} onClick={tool('tFlow')} />
-            <Mi icon="🏝" label="Mermaid 图" close={close} onClick={tool('tMermaid')} />
+            <Mi label="TikZ 流程图" close={close} onClick={tool('tFlow')} />
+            <Mi label="Mermaid 图" close={close} onClick={tool('tMermaid')} />
             <MSep />
             <Mi icon="[引]" label="引用 \\cite" close={close} onClick={tool('tBib')} />
             <Mi icon="†" label="脚注 \\footnote" close={close} onClick={tool('tFn')} />
           </Mb>
 
           <Mb title="查看" open={open} setOpen={setOpen} width={220}>
-            <MiSub icon="🖥" label="视图">
+            <MiSub label="视图">
               <Mi check={viewMode === 'edit'} label="仅编辑" close={close} onClick={() => setViewMode('edit')} />
               <Mi check={viewMode === 'split'} label="编辑 + 预览" close={close} onClick={() => setViewMode('split')} />
               <Mi check={viewMode === 'preview'} label="仅预览" close={close} onClick={() => setViewMode('preview')} />
             </MiSub>
             <Mi check={syncScroll} label="编辑器与预览同步滚动" close={close} onClick={() => setSyncScroll(!syncScroll)} />
             <MSep />
-            <MiSub icon="🔍" label="预览缩放">
+            <MiSub label="预览缩放">
               <Mi icon="＋" label="放大" close={close} onClick={() => onZoom(0.1)} />
               <Mi icon="－" label="缩小" close={close} onClick={() => onZoom(-0.1)} />
               <Mi label={`重置（当前 ${Math.round(zoom * 100)}%）`} close={close} onClick={() => onZoom(1 - zoom)} />
@@ -176,34 +177,34 @@ export default function Toolbar({
               <Mi key={en} check={engine === en} label={en} close={close} onClick={() => setEngine(en)} />
             )) : <div className="mi-note">未检测到本机 TeX 引擎</div>}
             <MSep />
-            <Mi icon="⚙" label={compiling ? '⟳ 编译中…' : '编译当前文档'}
+            <Mi label={compiling ? '⟳ 编译中…' : '编译当前文档'}
               disabled={!engineOk || compiling} close={close} onClick={onCompile} />
-            <Mi icon="⬇" label="下载编译 PDF" disabled={!downloadPdf} close={close} onClick={downloadPdf} />
+            <Mi label="下载编译 PDF" disabled={!downloadPdf} close={close} onClick={downloadPdf} />
             <MSep />
             <div className="mi-note">安装 MiKTeX / TeX Live 后，经 node server.mjs 访问即可编译</div>
           </Mb>
 
           <Mb title={'AI' + (channelCount ? '' : ' ·')} open={open} setOpen={setOpen} width={220}>
-            <Mi icon="💬" label="AI 助手" close={close} onClick={onOpenChat} />
-            <Mi icon="⚙" label="AI 设置…" close={close} onClick={onOpenSettings} />
+            <Mi label="AI 助手" close={close} onClick={onOpenChat} />
+            <Mi label="AI 设置…" close={close} onClick={onOpenSettings} />
             <MSep />
-            <Mi icon="🛠" label="AI 修复语法…" disabled={!channelCount} close={close} onClick={onAiFix} />
+            <Mi label="AI 修复语法…" disabled={!channelCount} close={close} onClick={onAiFix} />
             {!channelCount && <div className="mi-note">尚未配置渠道，请先到 AI 设置添加</div>}
           </Mb>
 
           <Mb title="帮助" open={open} setOpen={setOpen} width={200}>
-            <Mi icon="⌨" label="快捷键" close={close} onClick={() => onHelp('keys')} />
-            <Mi icon="ℹ️" label="关于 PaperLite" close={close} onClick={() => onHelp('about')} />
+            <Mi label="快捷键" close={close} onClick={() => onHelp('keys')} />
+            <Mi label="关于 PaperLite" close={close} onClick={() => onHelp('about')} />
           </Mb>
         </nav>
 
         <div className="mb-right">
           <div className="view-switch" title="视图切换：仅编辑 / 分栏 / 仅预览">
-            {[['edit', '✎', '仅编辑'], ['split', '▤▤', '分栏'], ['preview', '👁', '仅预览']].map(([m, ic, ti]) => (
+            {[['edit', '✎', '仅编辑'], ['split', '▤▤', '分栏'], ['preview', '▢', '仅预览']].map(([m, ic, ti]) => (
               <button key={m} className={'btn sm' + (viewMode === m ? ' on' : '')} title={ti} onClick={() => setViewMode(m)}>{ic}</button>
             ))}
           </div>
-          <button className="btn sm primary" title="调起浏览器打印，选择「另存为 PDF」即得矢量 PDF" onClick={actions.exportPdf}>🖨 导出 PDF</button>
+          <button className="btn sm primary" title="调起浏览器打印，选择「另存为 PDF」即得矢量 PDF" onClick={actions.exportPdf}>导出 PDF</button>
         </div>
       </div>
 

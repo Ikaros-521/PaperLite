@@ -21,17 +21,20 @@ import 'codemirror/addon/edit/matchbrackets';
 import 'codemirror/addon/selection/active-line';
 
 /* CodeMirror 5 封装：单一编辑器实例 + 每 Tab 一个 CodeMirror.Doc（swapDoc 切换，
- * 各文件独立撤销历史与光标）。mode 由 Doc 创建时指定。 */
-export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave }) {
+ * 各文件独立撤销历史与光标）。mode 由 Doc 创建时指定。
+ * 诊断：行号左侧 gutter 红橙点（点击触发 AI 修复）+ 行内波浪线（VSCode 风格）。 */
+export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue }) {
   const hostRef = useRef(null);
   const cmRef = useRef(null);
+  const marksRef = useRef([]);
   const cb = useRef({});
-  cb.current = { onChange, onInit, onScrollRatio, onSave };
+  cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue };
 
   useEffect(() => {
     const cm = CodeMirror(hostRef.current, {
       value: '',
       lineNumbers: true,
+      gutters: ['CodeMirror-linenumbers', 'pl-diag-gutter'],
       lineWrapping: true,
       autoCloseBrackets: true,
       matchBrackets: true,
@@ -42,6 +45,11 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       }
     });
     cmRef.current = cm;
+    // 关闭隐藏 textarea 的拼写检查：Chromium 会把拼写红线“透”到可见行上，造成假报错
+    const inp = cm.getInputField();
+    inp.setAttribute('spellcheck', 'false');
+    inp.setAttribute('autocorrect', 'off');
+    inp.setAttribute('autocapitalize', 'off');
     cm.on('change', () => cb.current.onChange && cb.current.onChange(cm.getDoc(), cm.getValue()));
     cm.on('scroll', () => {
       const si = cm.getScrollInfo();
@@ -67,6 +75,54 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       cm.focus();
     }
   }, [doc]);
+
+  // 诊断标记：按行分组（错误优先），gutter 圆点可点击触发 AI 修复，行内画波浪线
+  useEffect(() => {
+    const cm = cmRef.current;
+    if (!cm) return;
+    marksRef.current.forEach(m => { try { m.clear(); } catch (e) { /* ignore */ } });
+    marksRef.current = [];
+    cm.clearGutter && cm.clearGutter('pl-diag-gutter');
+
+    const issues = (diagnostics || []).filter(d => d.line != null && d.line < cm.lineCount());
+    if (!issues.length) return;
+
+    const byLine = new Map();
+    for (const d of issues) {
+      if (!byLine.has(d.line)) byLine.set(d.line, []);
+      byLine.get(d.line).push(d);
+    }
+
+    for (const [ln, list] of byLine) {
+      const isErr = list.some(d => d.severity === 'error');
+      const tip = (isErr ? '错误' : '警告') + '：' + list.map(d => d.msg).join('\n') + '\n（点击：让 AI 修复这个问题）';
+
+      const dot = document.createElement('div');
+      dot.className = 'pl-diag-dot ' + (isErr ? 'err' : 'warn');
+      dot.title = tip;
+      dot.addEventListener('click', ev => {
+        ev.preventDefault();
+        // 同一行多个问题一并发给 AI，主问题放最前
+        cb.current.onFixIssue && cb.current.onFixIssue(list[0], list);
+      });
+
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'width:100%;text-align:center;';
+      wrap.appendChild(dot);
+      cm.setGutterMarker(ln, 'pl-diag-gutter', wrap);
+
+      // 波浪线：行首非空白到行尾（去尾空白），hover 提示问题详情
+      const text = cm.getLine(ln) || '';
+      const from = (text.match(/^\s*/) || [''])[0].length;
+      const to = Math.max(from + 1, text.replace(/\s+$/, '').length);
+      try {
+        marksRef.current.push(cm.markText(
+          { line: ln, ch: from }, { line: ln, ch: to },
+          { className: 'pl-diag-' + (isErr ? 'err' : 'warn') + '-text', title: tip }
+        ));
+      } catch (e) { /* 跨行等边界忽略 */ }
+    }
+  }, [diagnostics, doc]);
 
   return <div id="editorPane"><div id="editorHost" ref={hostRef} /></div>;
 }

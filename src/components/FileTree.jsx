@@ -108,7 +108,7 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
       return <div key={entry.name} className="ft-error" style={{ paddingLeft: depth * 12 + 20 }}>{entry.name}</div>;
     }
     const isDir = entry.kind === 'directory';
-    const icon = isDir ? (expanded[entry.path] ? '📂' : '📁') : infoFor(entry.name).icon;
+    const icon = isDir ? (expanded[entry.path] ? '▾' : '▸') : infoFor(entry.name).icon;
     return (
       <div key={entry.path} className="ft-row-wrap">
         <div
@@ -120,11 +120,11 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
           <span className="ft-name" title={entry.path}>{entry.name}</span>
           <span className="ft-acts">
             {isDir && <>
-              <button title="在此新建文件" onClick={e => { e.stopPropagation(); doNewFile(entry.path); }}>＋📄</button>
-              <button title="在此新建文件夹" onClick={e => { e.stopPropagation(); doNewDir(entry.path); }}>＋📁</button>
+              <button title="在此新建文件" onClick={e => { e.stopPropagation(); doNewFile(entry.path); }}>＋文</button>
+              <button title="在此新建文件夹" onClick={e => { e.stopPropagation(); doNewDir(entry.path); }}>＋夹</button>
             </>}
-            <button title="重命名" disabled={!canRename(entry.handle)} onClick={e => { e.stopPropagation(); doRename(entry); }}>✏️</button>
-            <button title="删除" onClick={e => { e.stopPropagation(); doDelete(entry); }}>🗑</button>
+            <button title="重命名" disabled={!canRename(entry.handle)} onClick={e => { e.stopPropagation(); doRename(entry); }}>✎</button>
+            <button title="删除" onClick={e => { e.stopPropagation(); doDelete(entry); }}>✕</button>
           </span>
         </div>
         {isDir && expanded[entry.path] && (
@@ -142,10 +142,10 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
   return (
     <div id="workspace">
       <div className="ft-head">
-        <span className="ft-title">📁 {root.name}</span>
+        <span className="ft-title">{root.name}</span>
         <span className="ft-acts ft-head-acts">
-          <button title="根目录新建文件" onClick={() => doNewFile('')}>＋📄</button>
-          <button title="根目录新建文件夹" onClick={() => doNewDir('')}>＋📁</button>
+          <button title="根目录新建文件" onClick={() => doNewFile('')}>＋文</button>
+          <button title="根目录新建文件夹" onClick={() => doNewDir('')}>＋夹</button>
           <button title="刷新" onClick={() => load(root, '')}>⟳</button>
           <button title="关闭文件夹" onClick={onCloseFolder}>✕</button>
         </span>

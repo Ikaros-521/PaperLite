@@ -120,7 +120,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-dangerous-direct-browser-access'
     });
     return res.end();
   }
@@ -137,22 +137,22 @@ const server = http.createServer(async (req, res) => {
     catch (e) { return json(res, 200, { ok: false, error: String(e && e.message || e) }); }
   }
 
-  // ---- OpenAI 兼容 Mock（仅离线演示用）----
+  // ---- LLM Mock（仅离线演示用，含 OpenAI 兼容与 Anthropic 协议）----
   if (url === '/v1/models' && req.method === 'GET') {
-    return json(res, 200, { object: 'list', data: [{ id: 'paperlite-mock' }] });
+    return json(res, 200, {
+      object: 'list',
+      data: [
+        { id: 'paperlite-mock' },
+        { id: 'paperlite-mock-pro' },
+        { id: 'paperlite-mock-embed' }
+      ]
+    });
   }
   if (url === '/v1/chat/completions' && req.method === 'POST') {
     const body = await readBody(req);
     const last = (body.messages || []).filter(m => m.role === 'user').pop();
     const q = String(last && last.content || '');
-    let reply;
-    if (/修复|fix|语法|错误/i.test(q)) {
-      reply = '已分析并修复语法问题：补全未闭合的环境/花括号。\n\n```latex\n\\section{引言}\n这是修复后的段落，公式 $E=mc^2$ 正常。\n\\end{document}\n```\n\n说明：以上代码块可直接「替换全文」。';
-    } else if (q.length > 400) {
-      reply = '以下是改写后的版本：\n\n```latex\n' + q.slice(0, 200).replace(/^[#>\s]*/, '') + '\n```\n\n（Mock 渠道返回的演示改写，接入真实 LLM 渠道后为模型生成内容。）';
-    } else {
-      reply = '收到：' + q.slice(0, 80) + '\n\n我是 **Mock 渠道**（离线演示）。请在「AI 设置」中添加真实渠道（Base URL + Key + 模型）。回复中如包含代码块，可直接应用：\n\n```latex\n% 演示代码块\n\\textbf{应用我试试}\n```';
-    }
+    const reply = mockReply(q);
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
       const deltas = reply.match(/[\s\S]{1,12}/g) || [];
@@ -167,6 +167,58 @@ const server = http.createServer(async (req, res) => {
     }
     return json(res, 200, { choices: [{ message: { content: reply } }], usage: {} });
   }
+
+  // ---- Anthropic 协议 Mock（/v1/messages，供「Anthropic (Claude)」协议离线体验）----
+  if (url === '/v1/messages' && req.method === 'POST') {
+    const body = await readBody(req);
+    const last = [...(body.messages || [])].reverse().find(m => m.role === 'user');
+    const q = typeof (last && last.content) === 'string'
+      ? last.content
+      : Array.isArray(last && last.content) ? last.content.map(b => (b && b.text) || '').join('') : '';
+    const thinking = body.thinking && body.thinking.type === 'enabled'
+      ? '（Mock 思维链演示）收到问题，无需复杂推理，直接给出演示回复。'
+      : '';
+    const reply = mockReply(q);
+    const blocks = [];
+    if (thinking) blocks.push({ type: 'thinking', text: thinking });
+    blocks.push({ type: 'text', text: reply });
+
+    if (body.stream) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
+      res.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock', content: [], usage: {} } })}\n\n`);
+      let bi = 0;
+      const nextBlock = () => {
+        if (bi >= blocks.length) {
+          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } })}\n\n`);
+          res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+          res.end();
+          return;
+        }
+        const b = blocks[bi], idx = bi;
+        res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: b.type === 'thinking' ? { type: 'thinking', thinking: '' } : { type: 'text', text: '' } })}\n\n`);
+        const pieces = (b.text || '').match(/[\s\S]{1,12}/g) || [];
+        let pi = 0;
+        const t = setInterval(() => {
+          if (pi >= pieces.length) {
+            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: idx })}\n\n`);
+            clearInterval(t); bi++; nextBlock();
+            return;
+          }
+          const piece = pieces[pi++];
+          const delta = b.type === 'thinking' ? { type: 'thinking_delta', thinking: piece } : { type: 'text_delta', text: piece };
+          res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: idx, delta })}\n\n`);
+        }, 20);
+      };
+      nextBlock();
+      return;
+    }
+    return json(res, 200, {
+      id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock',
+      content: blocks.map(b => b.type === 'thinking' ? { type: 'thinking', thinking: b.text } : { type: 'text', text: b.text }),
+      stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 10 }
+    });
+  }
+
   if (url === '/v1/embeddings' && req.method === 'POST') {
     const body = await readBody(req);
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
@@ -202,6 +254,17 @@ function simpleVec(text) {
   for (let i = 0; i < text.length; i++) v[text.charCodeAt(i) % dim] += 1;
   const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1;
   return v.map(x => x / norm);
+}
+
+// Mock 回复生成（OpenAI 兼容与 Anthropic 协议共用）
+function mockReply(q) {
+  if (/修复|fix|语法|错误/i.test(q)) {
+    return '已分析并修复语法问题：补全未闭合的环境/花括号。\n\n```latex\n\\section{引言}\n这是修复后的段落，公式 $E=mc^2$ 正常。\n\\end{document}\n```\n\n说明：以上代码块可直接「替换全文」。';
+  }
+  if (q.length > 400) {
+    return '以下是改写后的版本：\n\n```latex\n' + q.slice(0, 200).replace(/^[#>\s]*/, '') + '\n```\n\n（Mock 渠道返回的演示改写，接入真实 LLM 渠道后为模型生成内容。）';
+  }
+  return '收到：' + q.slice(0, 80) + '\n\n我是 **Mock 渠道**（离线演示）。请在「AI 设置」中添加真实渠道（Base URL + Key + 模型）。回复中如包含代码块，可直接应用：\n\n```latex\n% 演示代码块\n\\textbf{应用我试试}\n```';
 }
 
 server.listen(PORT, '127.0.0.1', () => {

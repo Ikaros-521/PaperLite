@@ -1,12 +1,15 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import * as TIKZ from '../engines/tikz.js';
 import {
   FONT_NAMES, SHAPES, SHAPE_NAMES, LW_OPTIONS, nearestFontPx,
   getRecord, applyChanges, addNewStyle
 } from '../styleMutations.js';
 
-/* 图样式编辑面板：样式(tikzset)批量改 + 单节点内联覆盖，修改精确写回源码 */
-export default function StylePanel({ open, result, cm, selection, setSelection }) {
+/* 图样式编辑面板：样式(tikzset)批量改 + 单节点内联覆盖，修改精确写回源码。
+ * 标题栏可拖拽浮窗化（双击标题回停靠），右上 ✕ 关闭。 */
+export default function StylePanel({ open, onClose, result, cm, selection, setSelection }) {
+  const panelRef = useRef(null);
+  const [pos, setPos] = useState(null); // null=停靠右侧；{x,y}=浮动位置
   const diagram = useMemo(() => {
     if (!result || !result.diagrams.length) return null;
     return result.diagrams[Math.min(selection.did, result.diagrams.length - 1)] || null;
@@ -28,9 +31,47 @@ export default function StylePanel({ open, result, cm, selection, setSelection }
 
   if (!open) return null;
 
+  // 拖拽：按下标题栏（关闭按钮除外）浮窗化并跟随指针，双击标题回停靠
+  const startDrag = (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    const el = panelRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const off = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    setPos({ x: rect.left, y: rect.top });
+    const move = (ev) => {
+      const w = el.offsetWidth;
+      const x = Math.min(Math.max(ev.clientX - off.dx, 60 - w), window.innerWidth - 60);
+      const y = Math.min(Math.max(ev.clientY - off.dy, 8), window.innerHeight - 44);
+      setPos({ x, y });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'grabbing';
+    e.preventDefault();
+  };
+
   return (
-    <aside id="stylePanel" className="open">
-      <div className="sp-title"><span className="sp-icon">🎨</span> 图样式编辑</div>
+    <aside
+      id="stylePanel"
+      ref={panelRef}
+      className={'open' + (pos ? ' floating' : '')}
+      style={pos ? { left: pos.x + 'px', top: pos.y + 'px', maxHeight: 'calc(100vh - ' + (pos.y + 16) + 'px)' } : undefined}
+    >
+      <div className="sp-title" onPointerDown={startDrag} onDoubleClick={() => setPos(null)}>
+        <span className="sp-drag" title="拖拽移动面板（双击标题回到停靠）">⠿</span>
+                <span className="sp-t">图样式编辑</span>
+        <span className="sp-head-acts">
+          <button title="关闭" onClick={onClose}>✕</button>
+        </span>
+      </div>
 
       {!result || !result.diagrams.length ? (
         <div className="sp-empty">
@@ -91,7 +132,7 @@ export default function StylePanel({ open, result, cm, selection, setSelection }
               >
                 <span className="sw sw-sm" style={swatch(nd.fill, nd.draw, nd.drawOn)} />
                 <code>{nd.name || '·'}</code>
-                <span className="sp-ntext">{(nd.text || '').slice(0, 14)}</span>
+                <span className="sp-ntext" title={nd.text || ''}>{nd.text || ''}</span>
               </div>
             ))}
           </div>

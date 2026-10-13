@@ -37,21 +37,26 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 - 渲染警告（引擎实时产生）
 - 编译错误（TeX 日志解析）
 
+编辑区内为 **VSCode 风格内联标记**：出错行显示红/橙波浪线（悬停看原因），行号旁 gutter 显示红/橙圆点——**点击圆点自动打开 AI 助手并预填该问题的修复提示词**（含行号、问题描述与出错行内容，可补充修复方向后发送）。
+
 ## AI（多渠道 LLM）
 
-「🤖 AI 设置」：兼容 OpenAI 协议（OpenAI / DeepSeek / GLM / 通义 / Kimi / Ollama…），可添加多个渠道，每渠道独立配置：
+「🤖 AI 设置」：支持 **OpenAI 兼容** 与 **Anthropic (Claude)** 两种主流协议，可添加多个渠道，每渠道独立配置：
 
-- Base URL / API Key / **对话模型** / **检索模型**（embedding，用于文档检索增强）
-- **思维链开关**（发送推理提示；模型返回 `reasoning_content` 时在对话中可折叠查看 💭）
+- **平台预设**：内置 OpenAI / Anthropic / DeepSeek / 智谱 GLM / 通义千问 / Kimi / 硅基流动 / OpenRouter / Ollama / LM Studio 等，选中即自动配好协议与 Base URL（也可手动自定义）
+- **协议**：OpenAI 兼容（`/chat/completions`）或 Anthropic（`/v1/messages`，`x-api-key` + `anthropic-version`，浏览器直连自动声明）
+- Base URL / API Key / **对话模型** / **检索模型**（embedding，用于文档检索增强；Anthropic 协议无嵌入接口，检索自动回退）
+- **模型下拉**：点「获取模型」拉取该渠道可用模型列表（`/models`），输入即过滤、点选填入，也可直接手输
+- **思维链开关**（OpenAI 协议发送推理提示，`reasoning_content`；Anthropic 协议启用 extended thinking，`thinking` 块——均可在对话中折叠查看 💭）
 - **上下文上限**（字符）
-- **测试连接**（/models 或对话探活，内联显示结果）
+- **测试连接**（按协议拉取 /models 或对话探活，内联显示结果）
 
 两种用法：
 
 - **✨ AI 修复**：问题面板一键把「问题清单 + 文档」交给模型，返回修复后的完整文档（代码块中，可预览后「替换全文」，Ctrl+Z 可撤销）
 - **💬 AI 助手**：对话面板流式输出；上下文范围可选 **选区 / 光标段落 / 全文 / 检索增强**（调用检索模型对文档分块嵌入取 top-k，不可用时回退全文截断）；回复中的代码块支持 **复制 / 替换选区 / 插入光标 / 替换全文**
 
-离线体验：`node server.mjs` 内置 OpenAI 兼容 Mock（`/v1/chat/completions` 流式、`/v1/embeddings`），设置里「添加渠道」默认预填。
+离线体验：`node server.mjs` 内置 Mock（OpenAI 兼容 `/v1/chat/completions` 流式 + `/v1/embeddings`，Anthropic 协议 `/v1/messages` 流式含 thinking），设置里「添加渠道」默认预填。
 
 ## 打开本地文件夹（需 Chrome / Edge）
 
@@ -59,6 +64,8 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 
 - **文件树**：懒加载展开、文件夹优先排序（自动隐藏 `node_modules`/`.git`/`dist` 等目录）；悬停条目可重命名 ✏️ / 删除 🗑，悬停文件夹可就地新建文件 ＋📄 / 新建文件夹 ＋📁
 - **多标签**：点击文件打开为标签（独立撤销历史与光标）；未保存显示 ● 圆点，关闭前有确认；图片文件直接预览
+
+「📃 新建文件…」（Ctrl+Alt+N）：不依赖文件夹即可新建 `.tex` / `.md` / 代码文件标签，正常编辑。**保存规则与典型编辑器一致**：已打开文件夹 → Ctrl+S 直接存入文件夹根目录（重名会确认）；未打开文件夹 → 弹出系统「另存为」对话框自选位置（保存后标签转为普通文件标签，后续 Ctrl+S 直接写回）；浏览器不支持时退化为下载。
 - **按类型预览/编辑**：
 
 | 文件类型 | 行为 |

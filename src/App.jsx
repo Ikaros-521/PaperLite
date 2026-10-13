@@ -65,6 +65,7 @@ export default function App() {
   const [sideTab, setSideTab] = useState('outline');
   const [panelOpen, setPanelOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatInject, setChatInject] = useState(null); // {text, n} 预填对话输入框（诊断点一键修复）
   const [selection, setSelection] = useState({ did: 0, sel: null });
   const [flashMsg, setFlashMsg] = useState('');
   const [cmReady, setCmReady] = useState(0);
@@ -206,6 +207,56 @@ export default function App() {
 
   useEffect(() => { try { localStorage.setItem(LS_MODE, viewMode); } catch (e) { /* ignore */ } }, [viewMode]);
 
+  // ---- 新建文件（未保存标签；Ctrl+S 时另存到已开文件夹，或弹出系统另存为）----
+  const newFile = () => {
+    let n = 1;
+    const existNames = new Set(tabsRef.current.map(t => t.name));
+    while (existNames.has('未命名' + (n > 1 ? n : '') + '.tex')) n++;
+    const input = window.prompt('新建文件名（支持 .tex / .md / 代码文件等）', '未命名' + (n > 1 ? n : '') + '.tex');
+    if (!input) return;
+    const name = input.trim();
+    if (!name || /[\\/:*?"<>|]/.test(name)) { alert('文件名不能为空，且不能包含 \\ / : * ? " < > |'); return; }
+    const info = infoFor(name);
+    const t = makeTab({ name, path: '(未保存)', kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
+    setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue('');
+    flash('已新建「' + name + '」，Ctrl+S 保存到本地');
+  };
+
+  // 另存为：无磁盘句柄的标签保存时走这里。
+  // 已开文件夹 → 直接存到根目录（重名确认）；否则系统「另存为」对话框；再否则退化为下载。
+  const saveTabAs = async (t) => {
+    const value = t.doc ? t.doc.getValue() : '';
+    if (rootDir) {
+      try {
+        await rootDir.getFileHandle(t.name);
+        if (!window.confirm('文件夹中已存在「' + t.name + '」，覆盖？')) return false;
+      } catch (e) { /* 不存在，直接创建 */ }
+      try {
+        const h = await fs.createFile(rootDir, t.name);
+        await fs.writeFileText(h, value);
+        setTabs(ts => ts.map(x => x.id === t.id ? { ...x, handle: h, parentDir: rootDir, path: t.name, saved: value, dirty: false } : x));
+        setTreeKey(k => k + 1);
+        flash('已保存到文件夹：' + t.name);
+        return true;
+      } catch (e) { alert('保存失败：' + (e.message || e)); return false; }
+    }
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const h = await window.showSaveFilePicker({ suggestedName: t.name });
+        await fs.writeFileText(h, value);
+        setTabs(ts => ts.map(x => x.id === t.id ? { ...x, name: h.name, handle: h, path: h.name, saved: value, dirty: false } : x));
+        flash('已保存：' + h.name);
+        return true;
+      } catch (e) {
+        if (e && e.name !== 'AbortError') alert('保存失败：' + (e.message || e));
+        return false;
+      }
+    }
+    downloadFile(t.name, value, 'text/plain;charset=utf-8');
+    flash('当前浏览器不支持选择保存位置，已改为下载「' + t.name + '」');
+    return false;
+  };
+
   // ---- 保存 ----
   const saveActive = useCallback(async () => {
     const t = tabsRef.current.filter(x => x.id === activeId)[0];
@@ -216,13 +267,13 @@ export default function App() {
       flash('草稿已保存到浏览器');
       return;
     }
-    if (!t.handle) { flash('此标签不可写'); return; }
+    if (!t.handle) { await saveTabAs(t); return; }
     try {
       await fs.writeFileText(t.handle, t.doc.getValue());
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
       flash('已保存：' + t.name);
     } catch (e) { alert('保存失败：' + (e.message || e)); }
-  }, [activeId, flash]);
+  }, [activeId, rootDir, flash]);
 
   // ---- 关闭标签 ----
   const closeTab = useCallback((id) => {
@@ -396,6 +447,14 @@ export default function App() {
 
   const diagnostics = useMemo(() => (isTexLike ? lintLaTeX(deferred) : []), [deferred, isTexLike]);
 
+  // 编辑器内联诊断：lint 问题 + TeX 编译错误（渲染警告无行号，不进 gutter）
+  const editorIssues = useMemo(() => {
+    const cs = compileResult && compileResult.errors
+      ? compileResult.errors.map(e => ({ line: e.line, msg: e.msg || '编译错误', severity: 'error', src: 'compile' }))
+      : [];
+    return diagnostics.concat(cs);
+  }, [diagnostics, compileResult]);
+
   const outlineItems = isTexLike ? (latexResult ? latexResult.headings : [])
     : isMd ? (mdResult ? mdResult.headings : []) : [];
   const outlineKind = isTexLike ? 'tex' : isMd ? 'md' : activeKind;
@@ -424,6 +483,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveActive(); }
+      if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); wrap('\\textbf{', '}'); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'i' && (isTexLike || isMd)) { e.preventDefault(); wrap('\\emph{', '}'); }
     };
@@ -510,6 +570,24 @@ export default function App() {
     } finally { setAiBusy(false); }
   };
 
+  // ---- AI 修复（单问题：编辑器诊断红橙点点击，预填提示词到对话输入框）----
+  const aiFixIssue = (issue, list) => {
+    const channel = channels.filter(c => c.id === activeChannelId)[0];
+    if (!channel) { setSettingsOpen(true); alert('请先添加并选择 AI 渠道。'); return; }
+    if (!isTexLike) { flash('仅 .tex 文件支持 AI 修复'); return; }
+    const all = (list && list.length ? list : [issue]);
+    const lines = activeValue.split('\n');
+    setChatOpen(true); setPanelOpen(false);
+    const detail = all.map(d => {
+      const t = d.line != null ? (lines[d.line] || '').slice(0, 300) : '';
+      return `- 第 ${d.line != null ? d.line + 1 : '?'} 行：${d.msg}` + (t ? `\n  出错行内容：\`${t.trim()}\`` : '');
+    }).join('\n');
+    const prompt = '请修复以下编辑器检测到的 LaTeX 问题：\n' + detail +
+      '\n\n要求：先一句话说明原因，再给出修复。小问题给最小修改片段（```latex 代码块）；涉及结构调整时给修复后的完整文档（```latex 代码块，可一键替换全文）。' +
+      '\n\n修复方向（可直接发送，或在此补充说明后发送）：';
+    setChatInject({ text: prompt, n: Date.now() });
+  };
+
   // ---- 导出 ----
   const exportPdfPrint = () => {
     const paper = document.getElementById('paper');
@@ -532,7 +610,7 @@ export default function App() {
     <>
       <Toolbar
         actions={{
-          loadTemplate, openFile: openSingleFile, openFolder, save: saveActive,
+          newFile, loadTemplate, openFile: openSingleFile, openFolder, save: saveActive,
           exportTex: () => {
             if (isTexLike) exportTexFile(activeValue, ((activeTab.name || 'paper').replace(/\.(tex|md)$/i, '')) + '.tex');
             else downloadFile(activeTab.name, activeValue, 'text/plain;charset=utf-8');
@@ -587,15 +665,15 @@ export default function App() {
       <main id="layout" data-mode={viewMode} style={{ '--split': splitPct + '%' }}>
         <div id="sidebar">
           <div className="side-tabs">
-            <button className={sideTab === 'files' ? 'on' : ''} title="文件" onClick={() => setSideTab('files')} disabled={!rootDir && !restorePrompt}>📁</button>
-            <button className={sideTab === 'outline' ? 'on' : ''} title="大纲" onClick={() => setSideTab('outline')}>☰</button>
-            <button className={sideTab === 'issues' ? 'on' : ''} title="问题" onClick={() => setSideTab('issues')}>⚠{issueCount ? <em>{issueCount}</em> : null}</button>
+            <button className={sideTab === 'files' ? 'on' : ''} title="文件" onClick={() => setSideTab('files')} disabled={!rootDir && !restorePrompt}>文</button>
+            <button className={sideTab === 'outline' ? 'on' : ''} title="大纲" onClick={() => setSideTab('outline')}>纲</button>
+            <button className={sideTab === 'issues' ? 'on' : ''} title="问题" onClick={() => setSideTab('issues')}>{'⚠\uFE0E'}{issueCount ? <em>{issueCount}</em> : null}</button>
           </div>
           <div className="side-body">
             {sideTab === 'files' && (
               restorePrompt && !rootDir ? (
                 <div className="side-pad">
-                  <button className="btn sm" onClick={restoreFolder}>🔓 恢复上次文件夹（{restorePrompt.name}）</button>
+                  <button className="btn sm" onClick={restoreFolder}>恢复上次文件夹（{restorePrompt.name}）</button>
                 </div>
               ) : rootDir ? <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey} />
                 : <div className="side-pad hint">未打开文件夹<br />菜单「文件 ▸ 打开文件夹」</div>
@@ -622,10 +700,12 @@ export default function App() {
               onInit={(c) => { cmRef.current = c; setCmReady(x => x + 1); }}
               onScrollRatio={handleScrollRatio}
               onSave={saveActive}
+              diagnostics={editorIssues}
+              onFixIssue={aiFixIssue}
             />
           ) : (
             <div className="binary-note">
-              <div>🖼 {activeTab.name}</div>
+              <div>{activeTab.name}</div>
               <div className="hint">图片文件不提供文本编辑，请看右侧预览。</div>
             </div>
           )}
@@ -644,7 +724,7 @@ export default function App() {
           ) : previewMode === 'pdf' && compileResult && compileResult.ok ? (
             <section id="previewPane">
               <div id="previewBar">
-                <span className="pb-title">✅ {compileResult.engine} 编译成功</span>
+                <span className="pb-title">✓ {compileResult.engine} 编译成功</span>
                 <span className="pb-spacer"></span>
                 <button className="btn sm" onClick={() => downloadCompiled(compileResult)}>⬇ 下载 PDF</button>
                 <button className="btn sm" onClick={() => window.open(compileResult.pdfUrl, '_blank')}>新窗口</button>
@@ -655,7 +735,7 @@ export default function App() {
           ) : previewMode === 'log' && compileResult ? (
             <section id="previewPane">
               <div id="previewBar">
-                <span className="pb-title bad">❌ {compileResult.engine} 编译失败</span>
+                <span className="pb-title bad">✕ {compileResult.engine} 编译失败</span>
                 <span className="pb-spacer"></span>
                 <button className="btn sm" onClick={() => setPreviewMode('rich')}>返回预览</button>
               </div>
@@ -711,20 +791,21 @@ export default function App() {
         <span>{isTexLike || isMd ? lastRenderMs.toFixed(0) + ' ms' : '文本模式'}</span>
         <span className="sep">·</span>
         <span className={'st-warn' + (issueCount ? ' has' : '')} onClick={() => setSideTab('issues')}>
-          {issueCount ? '⚠ ' + issueCount : '✓ 无问题'}
+          {issueCount ? '⚠\uFE0E ' + issueCount : '✓ 无问题'}
         </span>
         <span className="grow"></span>
         {flashMsg && <span className="st-flash">{flashMsg}</span>}
-        <span className="hint">Ctrl+S 保存 · 状态栏点「⚠」看问题</span>
+        <span className="hint">Ctrl+S 保存 · 状态栏点「{'⚠\uFE0E'}」看问题</span>
       </footer>
 
       {viewMode !== 'edit' && isTexLike && cmReady >= 0 && (
-        <StylePanel open={panelOpen && !chatOpen} result={latexResult} cm={cmRef.current} selection={selection} setSelection={setSelection} />
+        <StylePanel open={panelOpen && !chatOpen} onClose={() => setPanelOpen(false)} result={latexResult} cm={cmRef.current} selection={selection} setSelection={setSelection} />
       )}
 
       <ChatPanel
         open={chatOpen}
         onClose={() => setChatOpen(false)}
+        inject={chatInject}
         channels={channels}
         activeChannelId={activeChannelId}
         setActiveChannelId={setActiveChannelId}
@@ -746,7 +827,7 @@ export default function App() {
       {helpOpen === 'keys' && (
         <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
           <div className="modal help-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-h">⌨ 快捷键 <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
+            <div className="modal-h">快捷键 <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
             <div className="modal-body">
               <table className="keys-table">
                 <tbody>
@@ -767,9 +848,9 @@ export default function App() {
       {helpOpen === 'about' && (
         <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
           <div className="modal help-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-h">ℹ️ 关于 PaperLite <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
+            <div className="modal-h">关于 PaperLite <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
             <div className="modal-body about-body">
-              <div className="about-logo">📄 PaperLite</div>
+              <div className="about-logo"><span className="brand-seal">论</span>PaperLite</div>
               <div className="about-slogan">本地优先的论文速写编辑器 · LaTeX 实时预览</div>
               <ul className="about-list">
                 <li>纯浏览器渲染：LaTeX → HTML + KaTeX 数学 + TikZ/Mermaid 流程图</li>

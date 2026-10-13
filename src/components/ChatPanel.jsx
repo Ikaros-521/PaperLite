@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
- * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文） */
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages }) {
+ * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复） */
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject }) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [scope, setScope] = useState('selection');
   const [showReasoning, setShowReasoning] = useState({});
   const abortRef = useRef(null);
   const listRef = useRef(null);
+  const taRef = useRef(null);
 
   const channel = useMemo(
     () => channels.filter(c => c.id === activeChannelId)[0] || channels[0] || null,
@@ -18,6 +19,17 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages]);
+
+  // 外部注入提示词（如点击诊断红点）：预填输入框并聚焦，光标到末尾等待补充修复方向
+  useEffect(() => {
+    if (inject && inject.n) {
+      setInput(inject.text);
+      setTimeout(() => {
+        const ta = taRef.current;
+        if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      }, 60);
+    }
+  }, [inject && inject.n]);
 
   if (!open) return null;
 
@@ -106,10 +118,10 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   return (
     <aside id="chatPanel" className="open">
       <div className="sp-title">
-        <span className="sp-icon">💬</span> AI 助手
+        AI 助手
         <span className="cp-head-acts">
           <button title="AI 设置" onClick={onOpenSettings}>⚙</button>
-          <button title="清空对话" onClick={() => setMessages([])}>🧹</button>
+          <button title="清空对话" onClick={() => setMessages([])}>清</button>
           <button title="关闭" onClick={onClose}>✕</button>
         </span>
       </div>
@@ -125,14 +137,28 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           <option value="full">上下文：全文</option>
           <option value="retrieve">上下文：检索增强</option>
         </select>
-        {channel && channel.cot && <span className="cot-badge" title="该渠道已启用思维链">🧠 思维链</span>}
+        {channel && channel.cot && <span className="cot-badge" title="该渠道已启用思维链">◈ 思维链</span>}
       </div>
 
       <div className="chat-list" ref={listRef}>
         {!messages.length && (
-          <div className="chat-empty">
-            试试：<br />·「把引言改写得更学术」<br />·「润色这段并解释修改点」<br />·「帮我把这个公式转成 align 环境」
-          </div>
+          channel ? (
+            <div className="chat-empty">
+              <div className="chat-suggest-h">试试：</div>
+              {['把引言改写得更学术', '润色这段并解释修改点', '帮我把这个公式转成 align 环境'].map(s => (
+                <button key={s} className="chat-suggest"
+                  onClick={() => { setInput('「' + s + '」'); taRef.current && taRef.current.focus(); }}>
+                  「{s}」
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="chat-guide">
+              <div className="chat-guide-t">还没有配置 AI 渠道</div>
+              <p>添加一个 OpenAI 兼容或 Anthropic 协议的渠道后，即可在这里改写引言、润色段落、修复语法。</p>
+              <button className="btn sm primary" onClick={onOpenSettings}>前往 AI 设置</button>
+            </div>
+          )
         )}
         {messages.map((m, i) => (
           <div key={i} className={'chat-msg ' + m.role}>
@@ -152,8 +178,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
 
       <div className="chat-input">
         <textarea
+          ref={taRef}
           value={input}
-          placeholder={channel ? '描述你的需求…（Enter 发送 / Shift+Enter 换行）' : '请先在 ⚙ 中配置 AI 渠道'}
+          placeholder={channel ? '描述你的需求…（Enter 发送 / Shift+Enter 换行）' : '配置渠道后即可在此对话'}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
