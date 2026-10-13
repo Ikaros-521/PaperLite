@@ -266,6 +266,10 @@ body {
   border-radius: 3px; padding: 0 3px; line-height: 1;
 }
 .tab-close:hover { background: #d9e2f2; color: #333; }
+/* editorPane 是 editorCol(flex 列) 与 editorHost(flex:1) 之间的包装层，
+ * 必须自身可收缩（min-height:0）并为 editorHost 提供 flex 上下文，
+ * 否则 CodeMirror 会按内容撑高、把整个文档撑出视口（大纲跳转"飞页"根因）。 */
+#editorPane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #editorHost { flex: 1; min-height: 0; overflow: hidden; }
 #editorHost .CodeMirror { height: 100%; font-size: 14px; font-family: Consolas, "Courier New", monospace; }
 .binary-note {
@@ -292,6 +296,7 @@ body {
 #previewBar {
   display: flex; align-items: center; gap: 10px; padding: 5px 12px;
   background: #fff; border-bottom: 1px solid #e3e6ea; font-size: 12.5px; color: #5a6577;
+  flex-wrap: wrap; /* 窄窗口下换行，避免把文档撑出横向滚动 */
 }
 .pb-title { font-weight: 600; color: #33415c; }
 .pb-toggle { display: flex; gap: 4px; align-items: center; cursor: pointer; }

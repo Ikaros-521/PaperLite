@@ -270,9 +270,13 @@ export default function App() {
   };
 
   // ---- 跳转（大纲/诊断）----
+  // 程序化跳转后短暂抑制"同步滚动"：编辑器 scrollIntoView 触发的 scroll 事件
+  // 会按比例覆盖预览区刚刚设置的标题定位（反之亦然），造成跳转目标互打。
+  const syncSuppRef = useRef(0);
   const jumpToLine = useCallback((line) => {
     const c = cm();
     if (!c || line == null) return;
+    syncSuppRef.current = Date.now() + 900;
     c.setCursor({ line, ch: 0 });
     c.scrollIntoView({ line, ch: 0 }, 120);
     c.focus();
@@ -294,8 +298,12 @@ export default function App() {
     if (el) {
       const sc = document.getElementById('previewScroll');
       if (sc) {
+        // Chromium 的 CSS zoom 语义下 scrollTop 即视觉像素坐标，rect 差值 + scrollTop 直接可用，无需除 zoom
         const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 60;
-        sc.scrollTo({ top, behavior: 'smooth' });
+        // 个别内嵌 WebView 会静默忽略 smooth 程序滚动：120ms 后未生效则直接落位
+        const before = sc.scrollTop;
+        try { sc.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); } catch (e) { sc.scrollTop = Math.max(0, top); }
+        setTimeout(() => { if (sc.scrollTop === before) sc.scrollTop = Math.max(0, top); }, 120);
       }
     }
   }, [jumpToLine]);
@@ -399,6 +407,7 @@ export default function App() {
   const handleScrollRatio = useCallback((ratio, from) => {
     ratioRef.current[from] = ratio;
     if (!syncScroll) return;
+    if (Date.now() < syncSuppRef.current) return; // 程序化跳转后的抑制窗口
     const other = from === 'edit' ? 'preview' : 'edit';
     if (Math.abs(ratioRef.current[other] - ratio) < 0.015) return;
     if (from === 'edit') {
@@ -601,7 +610,7 @@ export default function App() {
               onSave={saveActive}
             />
           ) : (
-            <div id="editorPane" className="binary-note">
+            <div className="binary-note">
               <div>🖼 {activeTab.name}</div>
               <div className="hint">图片文件不提供文本编辑，请看右侧预览。</div>
             </div>
