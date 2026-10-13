@@ -129,6 +129,20 @@ npm run electron:build
 
 无需改动任何前端代码（引擎、存储 localStorage、导出打印在 file:// 下均可用）。
 
+## GitHub Pages 自动部署
+
+项目内置 GitHub Actions 工作流（[`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)），**推送到 `main` 分支即自动构建并发布到 GitHub Pages**（也可在 Actions 页面手动触发 Run workflow）。
+
+流水线步骤：安装依赖 → 冒烟测试（48 项）→ `vite build` → 部署 `dist/` 到 Pages。
+
+首次启用只需在仓库设置一次：
+
+> **Settings → Pages → Build and deployment → Source 选择「GitHub Actions」**
+
+之后每次 push 到 `main`，约 2 分钟后即可在 `https://<用户名>.github.io/<仓库名>/` 访问线上版本。构建产物为相对路径（`base: './'`），子路径部署无需任何改动。
+
+> 注意：GitHub Pages 是纯静态托管，TeX 真实编译与 LLM Mock API（`node server.mjs`）仅在本地可用；线上版本使用浏览器打印导出 PDF、AI 需自配可直连的 API 渠道。
+
 ## 支持的 LaTeX 子集
 
 结构：`\documentclass`(ctexart/article/twocolumn)、`\title \author \date \maketitle`、`abstract`、`section` 系列（自动编号、`*` 不编号）、`tableofcontents`、`\newpage`
@@ -144,3 +158,11 @@ npm run electron:build
 - LaTeX 为论文常用子集，非完整 TeX 引擎；`bibtex`、任意宏包请转真实编译
 - `align` 环境整块编号（不逐行编号）；流程图标签中的数学以 Unicode 近似显示
 - PDF 页码由浏览器打印对话框的页眉页脚设置控制
+
+## 许可证
+
+本项目基于 **[GPL-3.0](LICENSE)**（GNU General Public License v3.0，SPDX: `GPL-3.0-or-later`）开源发布。
+
+- 任何人都可以自由地使用、学习、修改和再分发本项目
+- 基于本项目的衍生作品、二次开发成果在分发时必须同样以 GPL-3.0 开源，并保留原始版权与许可声明
+- 完整许可证文本见 [LICENSE](LICENSE)；依赖的第三方库各自遵循其原有许可证（见 `node_modules` 中各包的 LICENSE 文件）
