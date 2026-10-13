@@ -12,10 +12,11 @@ export default function TabsBar({ tabs, activeId, onActivate, onClose }) {
           key={x.id}
           className={'tab' + (x.id === activeId ? ' on' : '')}
           onClick={() => onActivate(x.id)}
-          title={x.path || x.name}
+          title={x.kind === 'draft' ? t('app.draftPath') : (x.path || x.name)}
         >
           <span className="tab-icon">{infoFor(x.name).icon}</span>
-          <span className="tab-name">{x.name}</span>
+          {/* 草稿标签的显示名随界面语言实时派生（存储名仍作为另存时的默认文件名） */}
+          <span className="tab-name">{x.kind === 'draft' ? t('app.draftName') : x.name}</span>
           {x.dirty && <span className="tab-dot" title={t('tab.unsaved')}></span>}
           <button
             className="tab-close"

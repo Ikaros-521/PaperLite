@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useT } from '../useI18n.js';
+import { useLang, useT } from '../useI18n.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
  * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复） */
 export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject }) {
   const t = useT();
+  const lang = useLang();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [scope, setScope] = useState('selection');
@@ -191,7 +192,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <span className="sp-t">{t('chat.title')}</span>
         <span className="cp-head-acts">
           <button title={t('chat.settings')} onClick={onOpenSettings}>⚙</button>
-          <button title={t('chat.clear')} onClick={() => setMessages([])}>清</button>
+          <button title={t('chat.clear')} onClick={() => setMessages([])}>{lang === 'zh' ? '清' : 'Clr'}</button>
           <button title={t('chat.close')} onClick={onClose}>✕</button>
         </span>
       </div>

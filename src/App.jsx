@@ -19,7 +19,7 @@ import { infoFor } from './fileTypes.js';
 import * as fs from './fs.js';
 import * as llm from './llm.js';
 import { LS_LANG, detectLang, getLang, setLang as setModuleLang, tr } from './i18n.js';
-import { LangContext, useT } from './useI18n.js';
+import { LangContext } from './useI18n.js';
 
 const LS_KEY = 'paperlite.doc.v2';
 const LS_MODE = 'paperlite.viewmode.v2';
@@ -52,7 +52,8 @@ function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, i
 export default function App() {
   const [lang, setLang] = useState(detectLang);
   setModuleLang(lang); // 引擎模块（linter/llm）读模块级语言；渲染期同步保证当帧文案正确
-  const t = useT();
+  // App 自身在 Provider 之上，useContext 读不到自己下发的值——直接由 lang 状态构建 t
+  const t = useMemo(() => (key, params) => tr(lang, key, params), [lang]);
 
   // ---- 多标签 ----
   const [tabs, setTabs] = useState(() => {
@@ -803,7 +804,7 @@ export default function App() {
       </main>
 
       <footer id="statusbar">
-        <span>{activeTab ? (activeTab.path || activeTab.name) : ''}</span>
+        <span>{activeTab ? (activeTab.kind === 'draft' ? t('app.draftPath') : (activeTab.path || activeTab.name)) : ''}</span>
         <span className="sep">·</span>
         <span>{wordText}</span>
         <span className="sep">·</span>

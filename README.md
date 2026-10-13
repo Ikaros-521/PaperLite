@@ -92,6 +92,7 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 | **导出 PDF** | 「🖨 导出 PDF」调起浏览器打印 → 选「另存为 PDF」。矢量输出、文字可选中、A4 版式 |
 | **其他导出** | `.tex`（可传 Overleaf / 本地 TeX 编译）、独立 HTML、单图 SVG（矢量）/ PNG（2x） |
 | **编辑器** | CodeMirror 5（stex 高亮、括号匹配/补全、活动行）、工具栏插入模板、拖拽图片转 base64、Ctrl+B/I/S 快捷键 |
+| **中英双语** | 菜单栏右侧「中 / EN」一键切换全部界面文案（菜单/面板/对话框/诊断提示），随浏览器语言自动选择，localStorage 记忆；文档内容语言不受影响 |
 | **其他** | 三线表（booktabs + multicolumn）、参考文献自动编号、`\newcommand` 宏展开、ctexart 中文排版、双栏预览、同步滚动、字数统计、警告面板 |
 
 ## 架构
