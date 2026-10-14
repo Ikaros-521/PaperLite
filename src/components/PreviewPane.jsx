@@ -148,12 +148,15 @@ export default function PreviewPane({
     const mt = t.match(/translate\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/);
     const ms = t.match(/scale\(\s*([-\d.]+)\s*\)/);
     const shape = g.querySelector('rect');
+    const w = shape ? +shape.getAttribute('width') : 0;
+    const h = shape ? +shape.getAttribute('height') : 0;
     return {
       x: mt ? Math.round(+mt[1] * 10) / 10 : null,
       y: mt ? Math.round(+mt[2] * 10) / 10 : null,
       s: ms ? +ms[1] : 1,
-      w: shape ? Math.round(+shape.getAttribute('width')) : null,
-      h: shape ? Math.round(+shape.getAttribute('height')) : null
+      // 菱形等形状的 label 容器 rect 可能是 0 尺寸，视为无有效宽高
+      w: w > 0 ? Math.round(w) : null,
+      h: h > 0 ? Math.round(h) : null
     };
   }
   function mermaidNodeColors(g) {

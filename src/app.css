@@ -636,12 +636,23 @@ figure.float .diagram { display: block; }
 .sp-ntext { color: var(--ink-faint); font-size: 11px; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
 .sp-newstyle { margin-top: 6px; border: 1px dashed #b8b094; background: var(--paper); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; color: var(--ink-soft); }
 .sp-newstyle:hover { background: #f4f0e4; color: var(--ink); }
-.sp-form { padding: 10px 14px 14px; }
+.sp-form { padding: 10px 14px 6px; }
 .sp-geo-h { font-weight: 600; color: var(--ink); font-size: 12.5px; margin: 8px 0 2px; border-top: 1px dashed var(--line-soft); padding-top: 8px; }
 .sp-unit { color: var(--ink-faint); font-size: 11px; }
 .sp-form-h { font-weight: 700; margin-bottom: 8px; color: var(--accent-deep); }
 .sp-row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
 .sp-lb { width: 56px; color: var(--ink-soft); flex: none; }
+/* 布局区：X/Y 同行两列，压缩竖向空间 */
+.sp-geo-grid { display: flex; gap: 8px; }
+.sp-geo-grid .sp-row { flex: 1; min-width: 0; margin: 6px 0; }
+.sp-geo-grid .sp-row .sp-lb { width: auto; flex: none; }
+.sp-geo-grid input[type=number] { width: 100% !important; min-width: 0; }
+/* 滑动条行：label + range + 数值 + 单位 */
+.sp-slider-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.sp-slider-row .sp-lb { width: 28px; flex: none; }
+.sp-slider-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); height: 14px; margin: 0; }
+.sp-slider-row input[type=number] { width: 52px; flex: none; }
+.sp-slider-row .sp-unit { width: 20px; flex: none; }
 .sp-cw { display: flex; align-items: center; gap: 6px; }
 .sp-cw input[type=color] { width: 34px; height: 24px; border: 1px solid var(--line); border-radius: 4px; padding: 0; background: var(--paper); }
 .sp-cw input[type=checkbox] { margin: 0; }
@@ -650,7 +661,12 @@ figure.float .diagram { display: block; }
   background: var(--accent); color: #f8f6ef; font-weight: 600; cursor: pointer;
 }
 .sp-apply:hover { background: var(--accent-deep); }
-.sp-apply-row { display: flex; gap: 6px; margin-top: 10px; }
+/* 应用/撤销常驻可见：sticky 置底，长表单滚动时也不用找按钮 */
+.sp-apply-row {
+  position: sticky; bottom: 0; z-index: 2;
+  display: flex; gap: 6px; margin: 10px -14px 0; padding: 10px 14px 12px;
+  background: var(--paper); border-top: 1px solid var(--line-soft);
+}
 .sp-undo {
   flex: none; padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--paper); color: var(--ink-soft); font-size: 12.5px; cursor: pointer;

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../useI18n.js';
 import * as TIKZ from '../engines/tikz.js';
 import {
@@ -71,6 +71,12 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
       }
     };
   }, [cm, selection, result]);
+
+  // 选中变化后把属性表单滚入视野：列表占满一屏时表单（含常驻应用按钮）不用手动找
+  useEffect(() => {
+    const el = panelRef.current && panelRef.current.querySelector('.sp-form');
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selection, result]);
 
   const cmText = (start, end) => {
     try { return cm.getRange(cm.posFromIndex(start), cm.posFromIndex(end)); } catch (e) { return ''; }
@@ -209,6 +215,28 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
   );
 }
 
+/* 滑动条行：range 拖动与数值框双向联动；应用时仍读数值框（name=numName） */
+function SliderRow({ label, numName, min, max, step, init, unit }) {
+  const rowRef = useRef(null);
+  const round = v => Math.round(v * 100) / 100;
+  return (
+    <div className="sp-slider-row" ref={rowRef}>
+      <span className="sp-lb">{label}</span>
+      <input type="range" min={min} max={max} step={step} defaultValue={init == null || isNaN(+init) ? min : +init}
+        onInput={e => {
+          const num = rowRef.current && rowRef.current.querySelector('input[type=number]');
+          if (num) num.value = round(+e.target.value);
+        }} />
+      <input type="number" name={numName} min={min} max={max} step={step} defaultValue={init == null || isNaN(+init) ? '' : round(+init)}
+        onInput={e => {
+          const r = rowRef.current && rowRef.current.querySelector('input[type=range]');
+          if (r && e.target.value !== '' && !isNaN(+e.target.value)) r.value = Math.min(max, Math.max(min, +e.target.value));
+        }} />
+      <span className="sp-unit">{unit}</span>
+    </div>
+  );
+}
+
 /* 属性表单（key 变化时重挂载重置；应用时直接读控件当前值，健壮不依赖事件记账） */
 function RecordForm({ record, cm }) {
   const t = useT();
@@ -284,29 +312,23 @@ function RecordForm({ record, cm }) {
       {record.kind === 'node' && (
         <>
           <div className="sp-geo-h">布局</div>
-          <label className="sp-row">
-            <span className="sp-lb">位置 X</span>
-            <input type="number" name="posX" step="0.1" style={{ width: 70 }} defaultValue={p.posX} />
-            <span className="sp-unit">cm</span>
-          </label>
-          <label className="sp-row">
-            <span className="sp-lb">位置 Y</span>
-            <input type="number" name="posY" step="0.1" style={{ width: 70 }} defaultValue={p.posY} />
-            <span className="sp-unit">cm</span>
-          </label>
-          <label className="sp-row">
-            <span className="sp-lb">宽度</span>
-            <input type="number" name="wcm" min="0" step="0.1" style={{ width: 70 }} defaultValue={p.wcm} />
-            <span className="sp-unit">cm</span>
-          </label>
-          <label className="sp-row">
-            <span className="sp-lb">高度</span>
-            <input type="number" name="hcm" min="0" step="0.1" style={{ width: 70 }} defaultValue={p.hcm} />
-            <span className="sp-unit">cm</span>
-          </label>
+          <div className="sp-geo-grid">
+            <label className="sp-row">
+              <span className="sp-lb">位置 X</span>
+              <input type="number" name="posX" step="0.1" defaultValue={p.posX} />
+              <span className="sp-unit">cm</span>
+            </label>
+            <label className="sp-row">
+              <span className="sp-lb">位置 Y</span>
+              <input type="number" name="posY" step="0.1" defaultValue={p.posY} />
+              <span className="sp-unit">cm</span>
+            </label>
+          </div>
+          <SliderRow label="宽度" numName="wcm" min={0} max={8} step={0.1} init={p.wcm} unit="cm" />
+          <SliderRow label="高度" numName="hcm" min={0} max={8} step={0.1} init={p.hcm} unit="cm" />
           <div className="sp-hint">
             {p.placed ? '该节点原本相对定位，应用位置后会改写为绝对坐标。' : ''}
-            宽高为最小尺寸（文字更宽时以文字为准），填 0 恢复自动。
+            宽高为最小尺寸（文字更宽时以文字为准），拉到最左(0)恢复自动。
           </div>
         </>
       )}
@@ -396,32 +418,22 @@ function MermaidForm({ record, cm }) {
           {colorRow('边框色', 'strokeOn', 'stroke', !!p.stroke, p.stroke || '#333333')}
           {colorRow('文字色', 'colorOn', 'color', !!p.color, p.color || '#333333')}
           <div className="sp-geo-h">布局</div>
-          <label className="sp-row">
-            <span className="sp-lb">位置 X</span>
-            <input type="number" name="gx" step="1" style={{ width: 70 }} defaultValue={p.gx != null ? p.gx : ''} placeholder="自动" />
-            <span className="sp-unit">px</span>
-          </label>
-          <label className="sp-row">
-            <span className="sp-lb">位置 Y</span>
-            <input type="number" name="gy" step="1" style={{ width: 70 }} defaultValue={p.gy != null ? p.gy : ''} placeholder="自动" />
-            <span className="sp-unit">px</span>
-          </label>
-          <label className="sp-row">
-            <span className="sp-lb">缩放</span>
-            <input type="number" name="gs" step="0.1" min="0.2" style={{ width: 70 }} defaultValue={p.gs != null ? p.gs : 1} />
-            <span className="sp-unit">×</span>
-          </label>
-          <label className="sp-row">
-            <span className="sp-lb">宽度</span>
-            <input type="number" name="gw" step="4" min="20" style={{ width: 70 }} defaultValue={p.gw != null ? p.gw : ''} placeholder="自动" />
-            <span className="sp-unit">px</span>
-          </label>
-          <label className="sp-row">
-            <span className="sp-lb">高度</span>
-            <input type="number" name="gh" step="4" min="16" style={{ width: 70 }} defaultValue={p.gh != null ? p.gh : ''} placeholder="自动" />
-            <span className="sp-unit">px</span>
-          </label>
-          <div className="sp-hint">取消勾选颜色项即回到主题默认；位置/大小留空恢复自动布局。覆盖值写为源码注释行（%% pl … %%），导出不受影响。</div>
+          <div className="sp-geo-grid">
+            <label className="sp-row">
+              <span className="sp-lb">位置 X</span>
+              <input type="number" name="gx" step="1" defaultValue={p.gx != null ? p.gx : ''} placeholder="自动" />
+              <span className="sp-unit">px</span>
+            </label>
+            <label className="sp-row">
+              <span className="sp-lb">位置 Y</span>
+              <input type="number" name="gy" step="1" defaultValue={p.gy != null ? p.gy : ''} placeholder="自动" />
+              <span className="sp-unit">px</span>
+            </label>
+          </div>
+          <SliderRow label="缩放" numName="gs" min={0.5} max={2} step={0.1} init={p.gs != null ? p.gs : 1} unit="×" />
+          <SliderRow label="宽度" numName="gw" min={20} max={400} step={4} init={p.gw} unit="px" />
+          <SliderRow label="高度" numName="gh" min={16} max={300} step={4} init={p.gh} unit="px" />
+          <div className="sp-hint">取消勾选颜色项即回到主题默认；位置/大小清空恢复自动布局。覆盖值写为源码注释行（%% pl … %%），导出不受影响。</div>
         </>
       ) : (
         <>
