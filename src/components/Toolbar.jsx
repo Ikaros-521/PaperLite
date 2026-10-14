@@ -25,7 +25,7 @@ const MSep = () => <div className="mi-sep" role="separator"></div>;
 /* 悬停展开的二级子菜单（从模板新建 / 视图 / 预览缩放） */
 function MiSub({ icon, label, children }) {
   return (
-    <div className="mi mi-sub" role="menuitem" tabIndex={-1}>
+    <div className="mi mi-sub" role="menuitem" tabIndex={0} aria-haspopup="menu">
       <span className="mi-check"></span>
       {icon ? <span className="mi-ico">{icon}</span> : null}
       <span className="mi-label">{label}</span>
@@ -70,7 +70,7 @@ function LangSwitch({ lang, setLang }) {
 
 export default function Toolbar({
   actions, viewMode, setViewMode, latexOk,
-  engines, engine, setEngine, compiling, onCompile, downloadPdf,
+  engines, engine, setEngine, compiling, onCompile, downloadPdf, builtinStatus,
   channelCount, onOpenChat, onOpenSettings, onAiFix,
   syncScroll, setSyncScroll, zoom, onZoom,
   onHelp, lang, setLang
@@ -89,6 +89,7 @@ export default function Toolbar({
   }, []);
 
   const engineOk = engines && engines.length;
+  const engineLabel = en => en === 'builtin' ? t('app.builtinEngine') + (builtinStatus === 'loading' ? ' · ' + t('app.engineLoading') : builtinStatus === 'error' ? ' · ' + t('app.engineError') : '') : en;
   const tool = id => () => latexOk && actions.tool(id);
   const editOp = op => () => actions.editOp(op);
 
@@ -126,9 +127,16 @@ export default function Toolbar({
         <nav className="menus" role="menubar">
           <Mb title={t('menu.file')} open={open} setOpen={setOpen} width={236}>
             <Mi label={t('m.new')} hint="Ctrl+Alt+N" close={close} onClick={actions.newFile} />
+            <Mi label={t('m.newFolder')} close={close} onClick={actions.newFolder} />
+            <Mi label={t('m.upload')} close={close} onClick={actions.upload} />
+            <Mi label={t('m.copy')} disabled={!actions.canCopy} close={close} onClick={actions.copy} />
+            <MSep />
             <Mi label={t('m.openFolder')} close={close} onClick={actions.openFolder} />
             <Mi label={t('m.openFile')} close={close} onClick={actions.openFile} />
-            <Mi label={t('m.save')} hint="Ctrl+S" close={close} onClick={actions.save} />
+            <Mi label={t('m.save')} hint="Ctrl+S" disabled={!actions.canCopy} close={close} onClick={actions.save} />
+            <MSep />
+            <Mi label={t('m.history')} disabled={!actions.canCopy} close={close} onClick={actions.history} />
+            <Mi label={t('m.wordCount')} disabled={!actions.canCopy} close={close} onClick={actions.wordCount} />
             <MSep />
             <MiSub label={t('m.newFromTpl')}>
               <Mi label={t('m.tplDemo')} close={close} onClick={() => actions.loadTemplate('demo')} />
@@ -136,8 +144,16 @@ export default function Toolbar({
               <Mi label={t('m.tplBlank')} close={close} onClick={() => actions.loadTemplate('blank')} />
             </MiSub>
             <MSep />
-            <Mi label={t('m.dlTex')} hint={t('m.dlTexHint')} close={close} onClick={actions.exportTex} />
-            <Mi label={t('m.exportPdf')} hint={t('m.exportPdfHint')} close={close} onClick={actions.exportPdf} />
+            <Mi label={t('m.submit')} close={close} onClick={actions.submit} />
+            <MSep />
+            <MiSub label={t('m.download')}>
+              <Mi label={t('file.sourceZip')} disabled={actions.packaging} close={close} onClick={actions.sourceZip} />
+              <Mi label={t('file.currentSource')} disabled={!actions.canCopy} close={close} onClick={actions.exportSource} />
+              <Mi label={t('m.exportPdf')} disabled={!actions.pdfAvailable} hint={t('m.exportPdfHint')} close={close} onClick={actions.exportPdf} />
+              <Mi label={t('m.dlCompiled')} disabled={!downloadPdf} close={close} onClick={downloadPdf} />
+            </MiSub>
+            <MSep />
+            <Mi label={t('m.settings')} close={close} onClick={actions.settings} />
           </Mb>
 
           <Mb title={t('menu.edit')} open={open} setOpen={setOpen} width={220}>
@@ -190,7 +206,7 @@ export default function Toolbar({
 
           <Mb title="TeX" open={open} setOpen={setOpen} width={248}>
             {engineOk ? engines.map(en => (
-              <Mi key={en} check={engine === en} label={en} close={close} onClick={() => setEngine(en)} />
+              <Mi key={en} check={engine === en} label={engineLabel(en)} close={close} onClick={() => setEngine(en)} />
             )) : <div className="mi-note">{t('m.noEngine')}</div>}
             <MSep />
             <Mi label={compiling ? t('m.compiling') : t('m.compileDoc')}

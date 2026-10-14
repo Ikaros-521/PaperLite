@@ -1,5 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from 'codemirror';
+import FileDialog from './components/FileDialog.jsx';
+import { validName, wordCount, readHistory, recordVersion, downloadSourceZip } from './fileActions.js';
 import Toolbar from './components/Toolbar.jsx';
 import EditorPane from './components/EditorPane.jsx';
 import PreviewPane from './components/PreviewPane.jsx';
@@ -13,6 +15,7 @@ import SettingsDialog from './components/SettingsDialog.jsx';
 import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
+import { preloadEngine, compileXeLaTeX, onEngineStatus } from './engines/xelatex.js';
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
 import { infoFor } from './fileTypes.js';
@@ -69,7 +72,14 @@ export default function App() {
   const [viewMode, setViewMode] = useState(() => { try { return localStorage.getItem(LS_MODE) || 'split'; } catch (e) { return 'split'; } });
   const [splitPct, setSplitPct] = useState(50);
   const [zoom, setZoom] = useState(1);
-  const [syncScroll, setSyncScroll] = useState(true);
+  const [editorSettings, setEditorSettings] = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem('paperlite.editor-settings') || '{}'); return { fontSize: [12,14,16,18,20].includes(s.fontSize) ? s.fontSize : 14, lineWrapping: s.lineWrapping !== false, syncScroll: s.syncScroll !== false }; }
+    catch { return { fontSize: 14, lineWrapping: true, syncScroll: true }; }
+  });
+  const [syncScroll, setSyncScroll] = useState(editorSettings.syncScroll);
+  const [fileDialog, setFileDialog] = useState(null);
+  const [, setHistoryTick] = useState(0);
+  const [packaging, setPackaging] = useState(false);
   const [sideTab, setSideTab] = useState('outline');
   const [panelOpen, setPanelOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -85,7 +95,8 @@ export default function App() {
 
   // ---- 编译 ----
   const [engines, setEngines] = useState([]);
-  const [engine, setEngine] = useState('xelatex');
+  const [engine, setEngine] = useState('builtin');
+  const [builtinStatus, setBuiltinStatus] = useState('idle');
   const [compiling, setCompiling] = useState(false);
   const [compileResult, setCompileResult] = useState(null);
   const [previewMode, setPreviewMode] = useState('rich');
@@ -137,16 +148,52 @@ export default function App() {
         if (perm === 'granted') setRootDir(h);
         else setRestorePrompt(h);
       }
+      let local = [];
       try {
         const r = await fetch('/api/health');
         if (r.ok) {
           const j = await r.json();
-          setEngines(j.engines || []);
-          if ((j.engines || []).length) setEngine(['xelatex', 'pdflatex', 'lualatex', 'latex'].find(e => j.engines.includes(e)));
+          local = j.engines || [];
         }
-      } catch (e) { /* 静态模式，无编译服务 */ }
+      } catch (e) { /* 静态托管（GitHub Pages），仅有内置引擎 */ }
+      // 内置 wasm 引擎始终可用；本机引擎排在前面供有 MiKTeX/TeX Live 的用户选择
+      setEngines(local.length ? [...local, 'builtin'] : ['builtin']);
+      if (!local.includes('xelatex')) setEngine('builtin');
     })();
   }, []);
+
+  // ---- 内置 XeLaTeX 引擎：状态订阅 + 空闲时后台预热（不阻塞界面） ----
+  useEffect(() => {
+    const off = onEngineStatus(setBuiltinStatus);
+    const kick = () => { preloadEngine().catch(() => { /* 状态已置 error，由 UI 提示 */ }); };
+    let ic = null, tid = null;
+    if ('requestIdleCallback' in window) { ic = requestIdleCallback(kick, { timeout: 20000 }); }
+    else tid = setTimeout(kick, 3000);
+    return () => { off(); if (ic !== null && 'cancelIdleCallback' in window) cancelIdleCallback(ic); if (tid !== null) clearTimeout(tid); };
+  }, []);
+
+  const historyKey = JSON.stringify([rootDir?.name || '', activeTab?.kind === 'draft' ? 'draft' : activeTab?.path]);
+  const snapshot = () => {
+    if (!activeTab?.doc) return;
+    recordVersion(historyKey, activeTab.doc.getValue());
+    setHistoryTick(n => n + 1);
+  };
+  useEffect(() => {
+    if (!activeTab?.doc) return;
+    // Capture the initial content before edits; subsequent changes get a debounced snapshot.
+    recordVersion(historyKey, activeTab.doc.getValue());
+  }, [activeId, historyKey]);
+  useEffect(() => {
+    if (!activeTab?.doc) return;
+    const timer = setTimeout(() => { recordVersion(historyKey, activeValue); setHistoryTick(n => n + 1); }, 3000);
+    return () => clearTimeout(timer);
+  }, [activeValue, activeId, historyKey]);
+  useEffect(() => {
+    const settings = { ...editorSettings, syncScroll };
+    try { localStorage.setItem('paperlite.editor-settings', JSON.stringify(settings)); } catch { /* ignore */ }
+    const c = cmRef.current;
+    if (c) { c.setOption('lineWrapping', settings.lineWrapping); c.getWrapperElement().style.fontSize = settings.fontSize + 'px'; c.refresh(); }
+  }, [editorSettings, syncScroll, cmReady]);
 
   // ---- 文件夹操作 ----
   const openFolder = async () => {
@@ -205,7 +252,7 @@ export default function App() {
     if (activeTab && activeTab.doc) {
       const v = activeTab.doc.getValue();
       setActiveValue(prev => (prev === v ? prev : v));
-    } else if (activeTab && activeTab.kind === 'image') setActiveValue('');
+    } else setActiveValue('');
     setCompileResult(null); setPreviewMode('rich');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
@@ -233,34 +280,131 @@ export default function App() {
     const name = input.trim();
     if (!name || /[\\/:*?"<>|]/.test(name)) { alert(t('app.badFileName')); return; }
     const info = infoFor(name);
-    const t2 = makeTab({ name, path: t('app.unsavedPath'), kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
+    const t2 = makeTab({ name, path: t('app.unsavedPath') + '/' + name, kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
     setTabs(ts => ts.concat([t2])); setActiveId(t2.id); setActiveValue('');
     flash(t('app.created', { name }));
   };
 
+  const newFolder = async () => {
+    try {
+      const dir = rootDir || await fs.pickDirectory();
+      if (!rootDir) { setRootDir(dir); setRestorePrompt(null); await fs.saveRootHandle(dir); }
+      setSideTab('files');
+      const name = window.prompt(t('ft.newDirPrompt'))?.trim();
+      if (!name) return;
+      if (!validName(name)) { alert(t('app.badFileName')); return; }
+      for await (const [existing] of dir.entries()) if (existing === name) { alert(t('file.exists', { name })); return; }
+      await fs.createDirectory(dir, name);
+      setTreeKey(n => n + 1);
+      flash(t('app.created', { name }));
+    } catch (e) { if (e.name !== 'AbortError') alert(t('ft.createFailed', { msg: e.message })); }
+  };
+
+  const uploadFiles = () => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.multiple = true;
+    input.onchange = async () => {
+      for (const file of Array.from(input.files || [])) {
+        try {
+          if (!validName(file.name)) throw new Error(t('app.badFileName'));
+          if (rootDir) {
+            let exists = false;
+            try { await rootDir.getFileHandle(file.name); exists = true; } catch (e) { if (e.name !== 'NotFoundError') throw e; }
+            const opened = tabsRef.current.find(tab => tab.handle && tab.path === file.name);
+            if ((exists || opened) && !window.confirm(t('app.overwriteConfirm', { name: file.name }))) continue;
+            const handle = await fs.createFile(rootDir, file.name);
+            const writable = await handle.createWritable();
+            await writable.write(file); await writable.close();
+            if (opened) {
+              if (opened.doc) { const value = await file.text(); opened.doc.setValue(value); setTabs(ts => ts.map(x => x.id === opened.id ? { ...x, saved: value, dirty: false } : x)); }
+              else { const url = await fs.fileBlobUrl(handle); URL.revokeObjectURL(opened.imageUrl); setTabs(ts => ts.map(x => x.id === opened.id ? { ...x, imageUrl: url } : x)); }
+              setActiveId(opened.id);
+            } else await openFileTab(handle, file.name, rootDir);
+          } else {
+            // Open uploaded files in memory when no local folder is connected.
+            const info = infoFor(file.name);
+            let uploaded;
+            if (info.kind === 'image') uploaded = makeTab({ name: file.name, kind: 'image', imageUrl: URL.createObjectURL(file) });
+            else {
+              const text = file.size <= 2 * 1024 * 1024 ? await file.text() : null;
+              uploaded = text !== null && !text.includes('\u0000')
+                ? makeTab({ name: file.name, kind: info.kind, text, modeSpec: info.mode })
+                : makeTab({ name: file.name, kind: 'asset' });
+            }
+            uploaded.uploadedFile = file;
+            setTabs(ts => ts.concat(uploaded)); setActiveId(uploaded.id); setActiveValue(uploaded.doc?.getValue() || '');
+          }
+        } catch (e) { alert(t('file.uploadFailed', { name: file.name, msg: e.message })); }
+      }
+      setTreeKey(n => n + 1); if (rootDir) setSideTab('files');
+    };
+    input.click();
+  };
+
+  const makeCopy = () => {
+    if (!activeTab?.doc) return;
+    const original = activeTab.name;
+    const dot = original.lastIndexOf('.');
+    const base = dot > 0 ? original.slice(0, dot) : original;
+    const ext = dot > 0 ? original.slice(dot) : '';
+    let name = base + '-copy' + ext, n = 2;
+    while (tabsRef.current.some(tab => tab.name === name)) name = base + '-copy-' + n++ + ext;
+    const value = activeTab.doc.getValue(), info = infoFor(name);
+    const copy = makeTab({ name, path: t('app.unsavedPath') + '/' + name, kind: info.kind, text: value, modeSpec: info.mode, saved: '' });
+    copy.dirty = !!value;
+    setTabs(ts => ts.concat(copy)); setActiveId(copy.id); setActiveValue(value);
+    flash(t('app.created', { name }));
+  };
+
+  const exportProject = async () => {
+    if (packaging) return;
+    setPackaging(true);
+    try {
+      const entries = new Map();
+      const visit = async (dir, prefix = '') => {
+        for (const entry of await fs.listDir(dir)) {
+          const path = prefix + entry.name;
+          if (entry.kind === 'directory') await visit(entry.handle, path + '/');
+          else { const file = await entry.handle.getFile(); entries.set(path, await file.arrayBuffer()); }
+        }
+      };
+      if (rootDir) await visit(rootDir);
+      for (const tab of tabsRef.current) {
+        let path = tab.name;
+        if (rootDir && tab.handle) { const resolved = await rootDir.resolve(tab.handle); path = resolved ? resolved.join('/') : 'external/' + tab.id + '/' + tab.name; }
+        else if (rootDir || entries.has(path)) path = 'unsaved/' + tab.id + '/' + tab.name;
+        if (tab.doc) entries.set(path, tab.doc.getValue());
+        else if (tab.uploadedFile) entries.set(path, await tab.uploadedFile.arrayBuffer());
+        else if (tab.handle) entries.set(path, await (await tab.handle.getFile()).arrayBuffer());
+      }
+      downloadSourceZip(rootDir?.name || 'paperlite-source', [...entries].map(([name, bytes]) => ({ name, bytes })));
+    } catch (e) { alert(t('file.downloadFailed', { msg: e.message })); }
+    finally { setPackaging(false); }
+  };
+
   // 另存为：无磁盘句柄的标签保存时走这里。
   // 已开文件夹 → 直接存到根目录（重名确认）；否则系统「另存为」对话框；再否则退化为下载。
-  const saveTabAs = async (t) => {
-    const value = t.doc ? t.doc.getValue() : '';
+  const saveTabAs = async (tab) => {
+    const value = tab.doc ? tab.doc.getValue() : '';
     if (rootDir) {
       try {
-        await rootDir.getFileHandle(t.name);
-        if (!window.confirm(t('app.overwriteConfirm', { name: t.name }))) return false;
+        await rootDir.getFileHandle(tab.name);
+        if (!window.confirm(t('app.overwriteConfirm', { name: tab.name }))) return false;
       } catch (e) { /* 不存在，直接创建 */ }
       try {
-        const h = await fs.createFile(rootDir, t.name);
+        const h = await fs.createFile(rootDir, tab.name);
         await fs.writeFileText(h, value);
-        setTabs(ts => ts.map(x => x.id === t.id ? { ...x, handle: h, parentDir: rootDir, path: t.name, saved: value, dirty: false } : x));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: false } : x));
         setTreeKey(k => k + 1);
-        flash(t('app.savedToFolder', { name: t.name }));
+        flash(t('app.savedToFolder', { name: tab.name }));
         return true;
       } catch (e) { alert(t('app.saveFailed', { msg: e.message || e })); return false; }
     }
     if (typeof window.showSaveFilePicker === 'function') {
       try {
-        const h = await window.showSaveFilePicker({ suggestedName: t.name });
+        const h = await window.showSaveFilePicker({ suggestedName: tab.name });
         await fs.writeFileText(h, value);
-        setTabs(ts => ts.map(x => x.id === t.id ? { ...x, name: h.name, handle: h, path: h.name, saved: value, dirty: false } : x));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, name: h.name, handle: h, path: h.name, saved: value, dirty: false } : x));
         flash(t('app.saved', { name: h.name }));
         return true;
       } catch (e) {
@@ -268,15 +412,17 @@ export default function App() {
         return false;
       }
     }
-    downloadFile(t.name, value, 'text/plain;charset=utf-8');
-    flash(t('app.downloadFallback', { name: t.name }));
+    downloadFile(tab.name, value, 'text/plain;charset=utf-8');
+    flash(t('app.downloadFallback', { name: tab.name }));
     return false;
   };
 
   // ---- 保存 ----
   const saveActive = useCallback(async () => {
     const t = tabsRef.current.filter(x => x.id === activeId)[0];
-    if (!t) return;
+    if (!t?.doc) return;
+    recordVersion(JSON.stringify([rootDir?.name || '', t.kind === 'draft' ? 'draft' : t.path]), t.doc.getValue());
+    setHistoryTick(n => n + 1);
     if (t.kind === 'draft') {
       try { localStorage.setItem(LS_KEY, t.doc ? t.doc.getValue() : ''); } catch (e) { /* ignore */ }
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
@@ -407,29 +553,39 @@ export default function App() {
   const doCompile = async () => {
     if (compiling) return;
     if (!isTexLike) { flash(t('app.onlyTexCompile')); return; }
-    if (!engines.length) {
+    if (engine !== 'builtin' && !engines.includes(engine)) {
       alert(t('app.noEngine'));
       return;
     }
     setCompiling(true);
     try {
-      const r = await fetch('/api/compile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine, source: activeValue })
-      });
-      const j = await r.json();
       if (pdfUrlRef.current) { URL.revokeObjectURL(pdfUrlRef.current); pdfUrlRef.current = null; }
-      if (j.ok) {
-        const bin = atob(j.pdf);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        pdfUrlRef.current = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-        setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log: j.log || '', errors: j.errors || [], engine });
-        setPreviewMode('pdf');
-        flash(t('app.compileOk', { engine }));
+      let ok, pdfBytes, log, errors, errText;
+      if (engine === 'builtin') {
+        const r = await compileXeLaTeX(activeValue);
+        ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
+        if (!ok) errText = (errors[0] && errors[0].msg) || t('app.compileFailed');
       } else {
-        setCompileResult({ ok: false, log: j.log || '', errors: j.errors || [], error: j.error || t('app.compileFailed'), engine });
+        const r = await fetch('/api/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ engine, source: activeValue })
+        });
+        const j = await r.json();
+        ok = j.ok; log = j.log || ''; errors = j.errors || [];
+        if (ok) {
+          const bin = atob(j.pdf);
+          pdfBytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) pdfBytes[i] = bin.charCodeAt(i);
+        } else errText = j.error || t('app.compileFailed');
+      }
+      if (ok) {
+        pdfUrlRef.current = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
+        setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log, errors, engine });
+        setPreviewMode('pdf');
+        flash(t('app.compileOk', { engine: engine === 'builtin' ? t('app.builtinEngine') : engine }));
+      } else {
+        setCompileResult({ ok: false, log, errors, error: errText, engine });
         setPreviewMode('log');
       }
     } catch (e) {
@@ -609,9 +765,9 @@ export default function App() {
   // ---- 导出 ----
   const exportPdfPrint = () => {
     const paper = document.getElementById('paper');
-    if (!paper) return;
     const tmp = document.createElement('div');
-    tmp.innerHTML = paper.innerHTML;
+    tmp.innerHTML = paper?.innerHTML || previewResult?.html || '';
+    if (!tmp.innerHTML) return;
     tmp.querySelectorAll('.dgrid-tools').forEach(el => el.remove());
     tmp.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
     exportPDF(tmp.innerHTML, (isTexLike && latexResult) ? latexResult.meta : {});
@@ -622,13 +778,18 @@ export default function App() {
   const wordText = (stats.cjk ? t('st.chars', { n: stats.cjk }) : '') + (stats.cjk && stats.words - stats.cjk > 0 ? ' + ' : '') + (stats.words - stats.cjk > 0 ? t('st.words', { n: stats.words - stats.cjk }) : '');
   const renderWarnCount = previewResult && previewResult.warnings ? previewResult.warnings.length : 0;
   const issueCount = diagnostics.length + renderWarnCount + (compileResult && compileResult.errors ? compileResult.errors.length : 0);
-  const hasEditor = activeTab && activeTab.kind !== 'image';
+  const hasEditor = !!activeTab?.doc;
   const channelCount = channels.length;
 
   return (
     <LangContext.Provider value={lang}>
       <Toolbar
         actions={{
+          newFolder, upload: uploadFiles, copy: makeCopy, canCopy: !!activeTab?.doc,
+          history: () => setFileDialog('history'), wordCount: () => setFileDialog('wordCount'),
+          submit: () => setFileDialog('submit'), settings: () => setFileDialog('settings'),
+          sourceZip: exportProject, packaging, pdfAvailable: isTexLike || isMd,
+          exportSource: () => downloadFile(activeTab.name, activeTab.doc.getValue(), 'text/plain;charset=utf-8'),
           newFile, loadTemplate, openFile: openSingleFile, openFolder, save: saveActive,
           exportTex: () => {
             if (isTexLike) exportTexFile(activeValue, ((activeTab.name || 'paper').replace(/\.(tex|md)$/i, '')) + '.tex');
@@ -672,7 +833,7 @@ export default function App() {
           }
         }}
         viewMode={viewMode} setViewMode={setViewMode} latexOk={isTexLike || isMd}
-        engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile}
+        engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} builtinStatus={builtinStatus}
         downloadPdf={compileResult && compileResult.pdfUrl ? () => downloadCompiled(compileResult) : null}
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
         onAiFix={aiFix}
@@ -726,7 +887,7 @@ export default function App() {
           ) : (
             <div className="binary-note">
               <div>{activeTab.name}</div>
-              <div className="hint">{t('prev.imageNote')}</div>
+              <div className="hint">{t(activeTab.kind === 'image' ? 'prev.imageNote' : 'file.assetNote')}</div>
             </div>
           )}
         </section>
@@ -782,7 +943,7 @@ export default function App() {
               zoom={zoom} onZoom={setZoomClamped}
               panelOpen={panelOpen} onTogglePanel={() => { setPanelOpen(o => !o); setChatOpen(false); }}
               syncScroll={syncScroll} onSyncToggle={setSyncScroll}
-              engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile}
+              engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} builtinStatus={builtinStatus}
               hasCompile={!!compileResult}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }}
@@ -844,6 +1005,17 @@ export default function App() {
         activeChannelId={activeChannelId}
         setActiveChannelId={setActiveChannelId}
       />
+
+      {fileDialog && <FileDialog key={fileDialog + activeId} mode={fileDialog} onClose={() => setFileDialog(null)}
+        name={activeTab.name} counts={wordCount(previewText(previewResult?.html, activeTab.doc?.getValue() || ''))}
+        selectionCounts={cmRef.current?.getSelection() ? wordCount(cmRef.current.getSelection()) : null}
+        versions={readHistory(historyKey)} onSnapshot={snapshot}
+        onRestore={version => { snapshot(); activeTab.doc.setValue(version.text); setCompileResult(null); setPreviewMode('rich'); setFileDialog(null); flash(t('file.restored')); }}
+        settings={{ ...editorSettings, syncScroll }} onSettings={settings => { setEditorSettings(settings); setSyncScroll(settings.syncScroll); }}
+        engines={engines} engine={engine} setEngine={setEngine}
+        onSource={exportProject} busy={packaging} pdfAvailable={isTexLike || isMd}
+        onPdf={compileResult?.ok ? () => downloadCompiled(compileResult) : exportPdfPrint}
+      />}
 
       {helpOpen === 'keys' && (
         <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
@@ -913,4 +1085,13 @@ async function downloadCompiled(compileResult) {
     const blob = await r.blob();
     downloadFile('paper-' + compileResult.engine + '.pdf', blob, 'application/pdf');
   } catch (e) { /* ignore */ }
+}
+
+function previewText(html, fallback) {
+  if (!html) return fallback;
+  const node = document.createElement('div');
+  node.innerHTML = html;
+  node.querySelectorAll('.katex, .mermaid-block, .dgrid, svg, style, script, .eq-no').forEach(el => el.remove());
+  node.querySelectorAll('p, div, h1, h2, h3, li, td, br').forEach(el => el.append(' '));
+  return node.textContent || '';
 }

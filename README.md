@@ -16,14 +16,27 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 
 > 真正的 TeX 编译与 LLM Mock 需通过 `node server.mjs` 访问（dev server 只有富文本预览）。
 
+## 文件菜单
+
+- 新建文件夹：在已打开文件夹的根目录创建；未打开时先选择本地目录。
+- 上传文件：支持多选；已打开目录时写入根目录，重名会确认覆盖；未打开目录时保留在内存，可通过源码 ZIP 下载。
+- 创建副本：复制当前文本文件到独立的未保存标签，再通过 Ctrl+S 保存。
+- 版本历史：保存在当前浏览器，编辑停顿 3 秒或保存时记录，每个文件最多 20 版，总历史大小受浏览器存储预算限制。恢复前保留当前版本，恢复后需保存到磁盘。
+- 字数统计：估算当前文档预览正文的中文字数、其他语言词数及字符数；所选源码单独统计。
+- 下载：提供源码 ZIP、当前文件源码、打印导出 PDF 与已编译 PDF。ZIP 按文件树可见目录收集资源，已打开的文件使用最新编辑内容；未保存标签放入 `unsaved/` 避免覆盖同名文件。
+- 提交：导出投稿所需的源码包与 PDF，再自行提交至期刊或会议系统。
+- 设置：编辑器字号、自动换行、同步滚动和可用 TeX 编译器，编辑器设置随浏览器保存。
+
+文件操作补充测试：`node test/fileActions.mjs`（ZIP 解压校验使用 Python 标准库）。
+
 ## TeX 引擎编译（pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX）
 
-1. 本机安装 [MiKTeX](https://miktex.org) 或 TeX Live 并加入 PATH
-2. `npm run build && node server.mjs`，顶栏引擎下拉自动列出可用引擎
-3. 「⚙ TeX 编译」→ 编译两遍（解析目录/引用）→ 预览区直接看 PDF（可下载/新窗口）；`latex` 引擎自动经 `dvipdfmx` 转 PDF
+1. **内置 XeLaTeX（浏览器）——默认可用，无需安装**：XeTeX/dvipdfmx 的 WebAssembly 构建 + 随站点分发的 TeX 宏包/字体镜像（`public/xelatex/`，来源与许可见 [public/xelatex/NOTICE.md](public/xelatex/NOTICE.md)），GitHub Pages 纯静态托管即可把 LaTeX（含 `ctexart` 中文）编译成 PDF。应用空闲时后台预热引擎，不阻塞编辑；首次编译按需拉取镜像文件（格式文件约 31MB，浏览器会缓存）
+2. 本机引擎（可选）：安装 [MiKTeX](https://miktex.org) 或 TeX Live 并加入 PATH，`npm run build && node server.mjs` 后引擎下拉会多出本机引擎
+3. 「编译」→ 编译两遍（解析目录/引用）→ 预览区直接看 PDF（可下载/新窗口）；`latex` 引擎自动经 `dvipdfmx` 转 PDF
 4. **编译失败**：自动切换日志视图，`!` 错误与 `l.NN` 行号被解析成可点击条目，一键跳到源码行（进入「⚠ 问题」面板同样可跳转）
 
-未安装 TeX / 静态打开时按钮自动禁用并给出指引，浏览器打印导出 PDF 依然可用。
+未安装 TeX / 静态打开时仍可使用内置引擎与浏览器打印导出 PDF。
 
 ## 大纲窗口
 

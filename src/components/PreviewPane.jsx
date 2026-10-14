@@ -10,7 +10,7 @@ let mermaidSeq = 0;
 export default function PreviewPane({
   result, selection, onSelectNode, onSelMermaid, onScrollRatio, zoom, onZoom,
   panelOpen, onTogglePanel, syncScroll, onSyncToggle,
-  engines, engine, setEngine, compiling, onCompile, hasCompile,
+  engines, engine, setEngine, compiling, onCompile, hasCompile, builtinStatus,
   onOpenSettings, onOpenChat
 }) {
   const t = useT();
@@ -227,7 +227,7 @@ export default function PreviewPane({
         {(engines && engines.length) ? (
           <span className="pb-compile" title={t('prev.compileTip')}>
             <select value={engine} onChange={e => setEngine(e.target.value)}>
-              {engines.map(en => <option key={en} value={en}>{en}</option>)}
+              {engines.map(en => <option key={en} value={en}>{en === 'builtin' ? t('app.builtinEngine') + (builtinStatus === 'loading' ? ' · ' + t('app.engineLoading') : builtinStatus === 'error' ? ' · ' + t('app.engineError') : '') : en}</option>)}
             </select>
             <button className={'btn sm' + (compiling ? ' busy' : '')} disabled={compiling} onClick={onCompile}>
               {compiling ? t('prev.compiling') : t('prev.compile')}
