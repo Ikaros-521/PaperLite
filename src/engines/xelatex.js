@@ -12,7 +12,9 @@
 const BASE = ((import.meta.env && import.meta.env.BASE_URL) || '/') + 'xelatex/';
 // Worker 里同步 XHR 的相对 URL 以 Worker 脚本位置为基准，必须在主线程解析成绝对地址
 const REPO_URL = new URL(BASE + 'repo/', document.baseURI).href;
-const COMPILE_TIMEOUT = 240000;
+const FMT_URL = REPO_URL + 'xetex/10/swiftlatexxetex.fmt';
+// 慢链路首编译要拉 ~31MB 格式文件 + 宏包字体，给足时间
+const COMPILE_TIMEOUT = 900000;
 
 let status = 'idle'; // idle | loading | ready | busy | error
 let loadPromise = null;
@@ -65,6 +67,9 @@ export function preloadEngine() {
       texWorker.postMessage({ cmd: 'settexliveurl', url: REPO_URL });
       pdfWorker.postMessage({ cmd: 'settexliveurl', url: REPO_URL });
       setStatus('ready');
+      // 空闲预热顺带预取 LaTeX 格式文件（31MB，最大头）：进 HTTP 缓存后，
+      // 引擎首次编译时的同步 XHR 直接命中缓存，慢链路也能显著提速
+      fetch(FMT_URL, { cache: 'force-cache' }).catch(() => { /* 预热失败不影响编译 */ });
     } catch (e) {
       setStatus('error');
       loadPromise = null;
