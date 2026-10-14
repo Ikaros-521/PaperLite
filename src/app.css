@@ -672,6 +672,14 @@ figure.float .diagram { display: block; }
   background: var(--paper); color: var(--ink-soft); font-size: 12.5px; cursor: pointer;
 }
 .sp-undo:hover { border-color: #b8b094; color: var(--ink); background: #f4f0e4; }
+/* Mermaid 分区：全局样式入口按钮（占满一行，选中高亮同 sp-item） */
+.sp-global-btn {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 8px); margin: 6px 4px 0;
+  border: 1px dashed #b8b094; border-radius: 6px; padding: 5px 8px;
+  background: var(--paper); color: var(--ink-soft); font-size: 12px; cursor: pointer;
+}
+.sp-global-btn:hover { background: #f4f0e4; color: var(--ink); }
+.sp-global-btn.on { border-color: var(--accent); color: var(--accent-deep); background: rgba(31, 58, 95, .08); }
 .sp-row select, .sp-row input[type=number] {
   border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; background: var(--paper); font-size: 12.5px; color: var(--ink);
 }

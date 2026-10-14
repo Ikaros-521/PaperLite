@@ -8,7 +8,7 @@ import {
 import {
   findMermaidBlocks, readMermaidInit, readMermaidNodeStyle,
   readMermaidDirection, applyMermaidNodeStyle, applyMermaidTheme, applyMermaidDirection,
-  readMermaidGeoms, applyMermaidNodeGeom
+  readMermaidGeoms, applyMermaidNodeGeom, parseMermaidNodes
 } from '../mermaidMutations.js';
 
 /* 图样式编辑面板：TikZ 样式(tikzset)批量改 + 单节点内联覆盖 + 布局；
@@ -71,6 +71,25 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
       }
     };
   }, [cm, selection, result]);
+
+  // Mermaid 选中时的分区数据：当前块的节点清单（与 TikZ 列表互斥展示）
+  const isMmSel = !!(selection.sel && selection.sel.type === 'mermaid');
+  const mmBlocks = useMemo(() => {
+    if (!cm || !isMmSel) return [];
+    try { return findMermaidBlocks(cm.getValue()); } catch (e) { return []; }
+  }, [cm, isMmSel, selection, result]);
+  const mmBlockIdx = Math.min(selection.sel ? selection.sel.block || 0 : 0, Math.max(0, mmBlocks.length - 1));
+  const mmNodes = useMemo(() => {
+    const r = mmBlocks[mmBlockIdx];
+    if (!r || !cm) return [];
+    try {
+      const code = cm.getValue().slice(r.start, r.end);
+      return parseMermaidNodes(code).map(nd => {
+        const st = readMermaidNodeStyle(code, nd.id) || {};
+        return { ...nd, fill: st.fill || '#ECECFF', stroke: st.stroke || '#9370DB' };
+      });
+    } catch (e) { return []; }
+  }, [mmBlocks, mmBlockIdx, cm, selection, result]);
 
   // 选中变化后把属性表单滚入视野：列表占满一屏时表单（含常驻应用按钮）不用手动找
   useEffect(() => {
@@ -138,7 +157,7 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
         </div>
       ) : (
         <>
-          {result.diagrams.length > 1 && (
+          {result.diagrams.length > 1 && !isMmSel && (
             <div className="sp-tabs">
               {result.diagrams.map((d, i) => (
                 <button
@@ -150,50 +169,90 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
             </div>
           )}
 
-          <div className="sp-sec">
-            <div className="sp-sec-h">{t('style.styles')}</div>
-            {!(diagram && diagram.tikzsetRanges && diagram.tikzsetRanges.length) && (
-              <div className="sp-hint">{t('style.noStyles')}</div>
-            )}
-            {(diagram && diagram.tikzsetRanges || []).map((sr, i) => {
-              const itp = TIKZ.interpret(TIKZ.parseOpts(cmText(sr.start, sr.end) || ''));
-              return (
-                <div
-                  key={i}
-                  className={'sp-item' + (selection.sel && selection.sel.type === 'style' && selection.sel.key === sr.name ? ' on' : '')}
-                  onClick={() => setSelection({ did: selection.did, sel: { type: 'style', key: sr.name } })}
-                >
-                  <span className="sw" style={swatch(
-                    itp.fill && itp.fill !== 'none' ? itp.fill : null,
-                    itp.draw && itp.draw !== 'none' ? itp.draw : '#ccc',
-                    !(itp.draw === undefined || itp.draw === null || itp.draw === 'none')
-                  )} />
-                  <code>{sr.name}</code>
+          {/* Mermaid 选中：只显示 Mermaid 自己的分区（节点清单 / 全局样式），与 TikZ 列表互斥 */}
+          {isMmSel && (
+            <>
+              {mmBlocks.length > 1 && (
+                <div className="sp-tabs">
+                  {mmBlocks.map((_, bi) => (
+                    <button
+                      key={bi}
+                      className={'sp-tab' + (bi === mmBlockIdx ? ' on' : '')}
+                      onClick={() => setSelection({ did: 0, sel: { type: 'mermaid', block: bi, id: null, cur: {} } })}
+                    >{t('style.fig', { n: bi + 1 })}</button>
+                  ))}
                 </div>
-              );
-            })}
-            <button className="sp-newstyle" onClick={() => {
-              if (!cm) return;
-              const name = addNewStyle(cm);
-              setSelection(s => ({ did: s.did, sel: { type: 'style', key: name } }));
-            }}>{t('style.new')}</button>
-          </div>
-
-          <div className="sp-sec">
-            <div className="sp-sec-h">{t('style.nodes')}</div>
-            {!(diagram && diagram.nodes && diagram.nodes.length) && <div className="sp-hint">{t('style.noNodes')}</div>}
-            {(diagram && diagram.nodes || []).map((nd, i) => (
-              <div
-                key={i}
-                className={'sp-item' + (selection.sel && selection.sel.type === 'node' && selection.sel.sidx === nd.sidx ? ' on' : '')}
-                onClick={() => setSelection({ did: selection.did, sel: { type: 'node', sidx: nd.sidx } })}
-              >
-                <span className="sw sw-sm" style={swatch(nd.fill, nd.draw, nd.drawOn)} />
-                <code>{nd.name || '·'}</code>
-                <span className="sp-ntext" title={nd.text || ''}>{nd.text || ''}</span>
+              )}
+              <div className="sp-sec">
+                <div className="sp-sec-h">{t('style.nodes')}</div>
+                {!mmNodes.length && <div className="sp-hint">{t('style.noNodes')}</div>}
+                {mmNodes.map(nd => (
+                  <div
+                    key={nd.id}
+                    className={'sp-item' + (selection.sel && selection.sel.type === 'mermaid' && selection.sel.id === nd.id ? ' on' : '')}
+                    onClick={() => setSelection(s => ({ did: 0, sel: { type: 'mermaid', block: mmBlockIdx, id: nd.id, cur: s.sel && s.sel.cur || {} } }))}
+                  >
+                    <span className="sw sw-sm" style={{ background: nd.fill, border: '1.5px solid ' + nd.stroke }} />
+                    <code>{nd.id}</code>
+                    <span className="sp-ntext" title={nd.label || ''}>{nd.label || ''}</span>
+                  </div>
+                ))}
+                <button
+                  className={'sp-item sp-global-btn' + (selection.sel && !selection.sel.id ? ' on' : '')}
+                  onClick={() => setSelection({ did: 0, sel: { type: 'mermaid', block: mmBlockIdx, id: null, cur: {} } })}
+                >{t('style.mmGlobal')}</button>
               </div>
-            ))}
-          </div>
+            </>
+          )}
+
+          {!isMmSel && (
+            <>
+              <div className="sp-sec">
+                <div className="sp-sec-h">{t('style.styles')}</div>
+                {!(diagram && diagram.tikzsetRanges && diagram.tikzsetRanges.length) && (
+                  <div className="sp-hint">{t('style.noStyles')}</div>
+                )}
+                {(diagram && diagram.tikzsetRanges || []).map((sr, i) => {
+                  const itp = TIKZ.interpret(TIKZ.parseOpts(cmText(sr.start, sr.end) || ''));
+                  return (
+                    <div
+                      key={i}
+                      className={'sp-item' + (selection.sel && selection.sel.type === 'style' && selection.sel.key === sr.name ? ' on' : '')}
+                      onClick={() => setSelection({ did: selection.did, sel: { type: 'style', key: sr.name } })}
+                    >
+                      <span className="sw" style={swatch(
+                        itp.fill && itp.fill !== 'none' ? itp.fill : null,
+                        itp.draw && itp.draw !== 'none' ? itp.draw : '#ccc',
+                        !(itp.draw === undefined || itp.draw === null || itp.draw === 'none')
+                      )} />
+                      <code>{sr.name}</code>
+                    </div>
+                  );
+                })}
+                <button className="sp-newstyle" onClick={() => {
+                  if (!cm) return;
+                  const name = addNewStyle(cm);
+                  setSelection(s => ({ did: s.did, sel: { type: 'style', key: name } }));
+                }}>{t('style.new')}</button>
+              </div>
+
+              <div className="sp-sec">
+                <div className="sp-sec-h">{t('style.nodes')}</div>
+                {!(diagram && diagram.nodes && diagram.nodes.length) && <div className="sp-hint">{t('style.noNodes')}</div>}
+                {(diagram && diagram.nodes || []).map((nd, i) => (
+                  <div
+                    key={i}
+                    className={'sp-item' + (selection.sel && selection.sel.type === 'node' && selection.sel.sidx === nd.sidx ? ' on' : '')}
+                    onClick={() => setSelection({ did: selection.did, sel: { type: 'node', sidx: nd.sidx } })}
+                  >
+                    <span className="sw sw-sm" style={swatch(nd.fill, nd.draw, nd.drawOn)} />
+                    <code>{nd.name || '·'}</code>
+                    <span className="sp-ntext" title={nd.text || ''}>{nd.text || ''}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           {record && (
             <RecordForm

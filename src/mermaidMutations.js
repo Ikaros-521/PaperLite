@@ -64,6 +64,35 @@ export function applyMermaidDirection(code, dir) {
   return code.replace(/\b(flowchart|graph)\s+(TB|TD|BD|LR|RL)\b/, (all, kw) => kw + ' ' + dir);
 }
 
+// ---- 节点清单（面板列表用）：形状定义优先，边中引用的裸 ID 兜底 ----
+export function parseMermaidNodes(code) {
+  const defs = {};
+  const order = [];
+  function push(id, label, shape) {
+    if (!defs[id]) { defs[id] = { id, label: label || id, shape: shape || 'plain' }; order.push(id); }
+    else if (label && (defs[id].shape === 'plain' || defs[id].label === defs[id].id)) {
+      defs[id].label = label;
+      defs[id].shape = shape || defs[id].shape;
+    }
+  }
+  String(code || '').split('\n').forEach(rawLine => {
+    const line = rawLine.replace(/%%.*$/, '');
+    if (/^\s*(flowchart|graph|classDef|class|style|subgraph|end|direction)\b/.test(line)) return;
+    // 形状定义：ID + 开括号…闭括号，整段替换为空格后剩下的就是裸引用
+    const rest = line.replace(/([A-Za-z][A-Za-z0-9_]*)\s*(\(\[|\(\(|[\[{])([\s\S]*?)(\]\)|\)\)|]|}|\))/g, (_, id, op, label) => {
+      const shape = op === '{' ? 'diamond' : op === '([' ? 'stadium' : op === '((' ? 'circle' : 'rect';
+      push(id, String(label).replace(/^["']|["']$/g, '').trim(), shape);
+      return ' ';
+    });
+    rest.split(/-{2,3}>?|-\.+->?|={2,}>?|&|\|[^|]*\||;/g).forEach(part => {
+      (part.match(/[A-Za-z][A-Za-z0-9_]*/g) || []).forEach(id => {
+        if (!/^(o|x|oo|ox|xo)$/.test(id)) push(id, null, 'plain');
+      });
+    });
+  });
+  return order.map(id => defs[id]);
+}
+
 // ---- 节点 style 行 ----
 function parseStyleLine(line, id) {
   const opts = {};
