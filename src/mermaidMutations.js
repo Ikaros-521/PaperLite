@@ -110,3 +110,52 @@ export function applyMermaidNodeStyle(code, id, colors) {
   // 追加到末行后补一个换行，避免与后续的 \end{mermaid} / ``` 粘在同一行
   return appended.endsWith('\n') ? appended : appended + '\n';
 }
+
+// ---- 自定义布局（%% pl <id> x=.. y=.. s=.. w=.. h=.. %%）----
+// mermaid 为 dagre 自动布局，无逐节点坐标语法；这里用注释行承载 PaperLite 的
+// 布局覆盖（真实 mermaid 编译时注释被忽略，不影响导出）。渲染后由 PreviewPane
+// 解析并应用到 SVG：x/y/s 写 g.node 的 transform，w/h 改 rect 尺寸（中心定位）。
+export function readMermaidGeoms(code) {
+  const out = {};
+  const re = /^%%\s*pl\s+([A-Za-z][A-Za-z0-9_]*)\s+([^%\n]*?)\s*%%\s*$/gm;
+  let m;
+  while ((m = re.exec(String(code || '')))) {
+    const g = {};
+    m[2].split(/\s+/).forEach(kv => {
+      const e = kv.indexOf('=');
+      if (e > 0) { const v = parseFloat(kv.slice(e + 1)); if (!isNaN(v)) g[kv.slice(0, e)] = v; }
+    });
+    out[m[1]] = g;
+  }
+  return out;
+}
+
+// patch: {x,y,s,w,h}；值为 null 删除该键（回到自动布局），全部删空则移除整行
+export function applyMermaidNodeGeom(code, id, patch) {
+  const lines = String(code || '').split('\n');
+  const re = new RegExp('^%%\\s*pl\\s+' + id + '\\s+([^%\\n]*?)\\s*%%\\s*$');
+  for (let i = 0; i < lines.length; i++) {
+    if (!re.test(lines[i])) continue;
+    const opts = {};
+    (lines[i].match(re)[1] || '').split(/\s+/).forEach(kv => {
+      const e = kv.indexOf('=');
+      if (e > 0) opts[kv.slice(0, e)] = kv.slice(e + 1);
+    });
+    Object.keys(patch).forEach(k => {
+      if (patch[k] === null || patch[k] === undefined || patch[k] === '') delete opts[k];
+      else opts[k] = String(patch[k]);
+    });
+    const body = Object.keys(opts).map(k => k + '=' + opts[k]).join(' ');
+    if (!body) lines.splice(i, 1);
+    else lines[i] = '%% pl ' + id + ' ' + body + ' %%';
+    return lines.join('\n');
+  }
+  const body = Object.keys(patch)
+    .filter(k => patch[k] !== null && patch[k] !== undefined && patch[k] !== '')
+    .map(k => k + '=' + patch[k]).join(' ');
+  if (!body) return code;
+  lines.push('%% pl ' + id + ' ' + body + ' %%');
+  // 追加到末行后补一个换行，避免与后续的 \end{mermaid} / ``` 粘在同一行
+  const appended = lines.join('\n');
+  return appended.endsWith('\n') ? appended : appended + '\n';
+}

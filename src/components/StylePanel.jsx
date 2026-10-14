@@ -7,7 +7,8 @@ import {
 } from '../styleMutations.js';
 import {
   findMermaidBlocks, readMermaidInit, readMermaidNodeStyle,
-  readMermaidDirection, applyMermaidNodeStyle, applyMermaidTheme, applyMermaidDirection
+  readMermaidDirection, applyMermaidNodeStyle, applyMermaidTheme, applyMermaidDirection,
+  readMermaidGeoms, applyMermaidNodeGeom
 } from '../mermaidMutations.js';
 
 /* 图样式编辑面板：TikZ 样式(tikzset)批量改 + 单节点内联覆盖 + 布局；
@@ -38,12 +39,19 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
     const cur = selection.sel.cur || {};
     if (selection.sel.id) {
       const st = readMermaidNodeStyle(code, selection.sel.id) || {};
+      const gSrc = readMermaidGeoms(code)[selection.sel.id] || {};
       return {
         kind: 'mermaidNode', block: selection.sel.block, id: selection.sel.id, range, code,
         props: {
           fill: st.fill || cur.fill || null,
           stroke: st.stroke || cur.stroke || null,
-          color: st.color || cur.color || null
+          color: st.color || cur.color || null,
+          // 布局：源码注释行的已存值优先，否则用点击时从 SVG 读到的 dagre 值
+          gx: gSrc.x != null ? gSrc.x : (cur.x != null ? cur.x : null),
+          gy: gSrc.y != null ? gSrc.y : (cur.y != null ? cur.y : null),
+          gs: gSrc.s != null ? gSrc.s : (cur.s != null ? cur.s : 1),
+          gw: gSrc.w != null ? gSrc.w : (cur.w != null ? cur.w : null),
+          gh: gSrc.h != null ? gSrc.h : (cur.h != null ? cur.h : null)
         }
       };
     }
@@ -302,7 +310,10 @@ function RecordForm({ record, cm }) {
           </div>
         </>
       )}
-      <button className="sp-apply" onClick={apply}>{t('style.apply')}</button>
+      <div className="sp-apply-row">
+        <button className="sp-apply" onClick={apply}>{t('style.apply')}</button>
+        <button className="sp-undo" title={t('style.undoTip')} onClick={() => { cm.undo(); cm.focus(); }}>↶ {t('style.undo')}</button>
+      </div>
       {record.kind === 'node' && (
         <div className="sp-hint">{t('style.nodeTip')}</div>
       )}
@@ -313,6 +324,7 @@ function RecordForm({ record, cm }) {
 /* Mermaid 表单：节点颜色（写回 style 行）与全局主题/方向/间距（写回 %%{init:…}%% 头）。
  * Mermaid 为 dagre 自动布局，节点坐标不可自由指定，布局维度为方向与间距。 */
 function MermaidForm({ record, cm }) {
+  const t = useT();
   const p = record.props;
   const formElRef = useRef(null);
 
@@ -333,6 +345,16 @@ function MermaidForm({ record, cm }) {
       [diff('fillOn', 'fill', 'fill'), diff('strokeOn', 'stroke', 'stroke'), diff('colorOn', 'color', 'color')]
         .forEach(([k, v]) => { colors[k] = v; });
       code = applyMermaidNodeStyle(code, record.id, colors);
+      // 布局：输入有变才写；清空 = 删除该键回到 dagre 自动布局
+      const numOrEmpty = n => { const v = String(g(n).value).trim(); return v === '' ? '' : parseFloat(v); };
+      const geom = {};
+      [['x', 'gx'], ['y', 'gy'], ['s', 'gs'], ['w', 'gw'], ['h', 'gh']].forEach(([k, name]) => {
+        const v = numOrEmpty(name);
+        const init = p[name];
+        if (v === '') { if (init != null) geom[k] = null; }
+        else if (!isNaN(v) && (init == null || Math.abs(v - init) > 0.011)) geom[k] = v;
+      });
+      if (Object.keys(geom).length) code = applyMermaidNodeGeom(code, record.id, geom);
     } else {
       code = applyMermaidDirection(code, g('dir').value);
       const vars = {};
@@ -347,7 +369,10 @@ function MermaidForm({ record, cm }) {
       flow.rankSpacing = num('rankSpacing', p.rankSpacing);
       code = applyMermaidTheme(code, { themeVariables: vars, flowchart: flow });
     }
-    cm.replaceRange(code, cm.posFromIndex(record.range.start), cm.posFromIndex(record.range.end));
+    // operation 包裹：整次应用合为单个撤销步骤，↶ 撤销一次即可完整恢复
+    cm.operation(function () {
+      cm.replaceRange(code, cm.posFromIndex(record.range.start), cm.posFromIndex(record.range.end));
+    });
   };
 
   const colorRow = (label, onName, hexName, onInit, hexInit) => (
@@ -370,7 +395,33 @@ function MermaidForm({ record, cm }) {
           {colorRow('填充色', 'fillOn', 'fill', !!p.fill, p.fill || '#ffffff')}
           {colorRow('边框色', 'strokeOn', 'stroke', !!p.stroke, p.stroke || '#333333')}
           {colorRow('文字色', 'colorOn', 'color', !!p.color, p.color || '#333333')}
-          <div className="sp-hint">取消勾选该项即回到主题默认；写回为源码中的 style 行。</div>
+          <div className="sp-geo-h">布局</div>
+          <label className="sp-row">
+            <span className="sp-lb">位置 X</span>
+            <input type="number" name="gx" step="1" style={{ width: 70 }} defaultValue={p.gx != null ? p.gx : ''} placeholder="自动" />
+            <span className="sp-unit">px</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">位置 Y</span>
+            <input type="number" name="gy" step="1" style={{ width: 70 }} defaultValue={p.gy != null ? p.gy : ''} placeholder="自动" />
+            <span className="sp-unit">px</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">缩放</span>
+            <input type="number" name="gs" step="0.1" min="0.2" style={{ width: 70 }} defaultValue={p.gs != null ? p.gs : 1} />
+            <span className="sp-unit">×</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">宽度</span>
+            <input type="number" name="gw" step="4" min="20" style={{ width: 70 }} defaultValue={p.gw != null ? p.gw : ''} placeholder="自动" />
+            <span className="sp-unit">px</span>
+          </label>
+          <label className="sp-row">
+            <span className="sp-lb">高度</span>
+            <input type="number" name="gh" step="4" min="16" style={{ width: 70 }} defaultValue={p.gh != null ? p.gh : ''} placeholder="自动" />
+            <span className="sp-unit">px</span>
+          </label>
+          <div className="sp-hint">取消勾选颜色项即回到主题默认；位置/大小留空恢复自动布局。覆盖值写为源码注释行（%% pl … %%），导出不受影响。</div>
         </>
       ) : (
         <>
@@ -401,7 +452,10 @@ function MermaidForm({ record, cm }) {
           <div className="sp-hint">写回为代码块头部的 {'%%{init: …}%%'} 配置；点击图中空白处进入这里。</div>
         </>
       )}
-      <button className="sp-apply" onClick={apply}>✓ 应用到源码</button>
+      <div className="sp-apply-row">
+        <button className="sp-apply" onClick={apply}>✓ {t('style.apply')}</button>
+        <button className="sp-undo" title={t('style.undoTip')} onClick={() => { cm.undo(); cm.focus(); }}>↶ {t('style.undo')}</button>
+      </div>
     </div>
   );
 }

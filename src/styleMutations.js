@@ -117,7 +117,10 @@ export function applyChanges(cm, rec, v) {
 
   mutateOpts(list, ch);
   const textOut = TIKZ.buildOpts(list);
-  cm.replaceRange(wrap ? '[' + textOut + ']' : textOut, from, to);
+  // operation 包裹：整次应用合为单个撤销步骤（面板「↶ 撤销」一次即可完整恢复）
+  cm.operation(function () {
+    cm.replaceRange(wrap ? '[' + textOut + ']' : textOut, from, to);
+  });
 }
 
 function mutateOpts(list, ch) {

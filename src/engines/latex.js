@@ -18,12 +18,21 @@ function esc(s) {
 }
 
 // ---------------- 偏移工具（等长原则） ----------------
-// 把行内注释(%..行尾)替换为等长空格，保留换行
+// 把行内注释(%..行尾)替换为等长空格，保留换行。
+// mermaid 环境内除外：%% 是 mermaid 自己的注释语法（也是布局指令载体），
+// LaTeX 注释规则不适用；区间原样保留，等长原则不受影响。
 function blankComments(src) {
   var out = src.split(''), n = src.length, i = 0;
   while (i < n) {
     var c = src.charAt(i);
-    if (c === '\\') { i += 2; continue; }
+    if (c === '\\') {
+      if (src.substr(i, 15) === '\\begin{mermaid}') {
+        var eM = src.indexOf('\\end{mermaid}', i);
+        i = eM < 0 ? i + 15 : eM + 13;
+        continue;
+      }
+      i += 2; continue;
+    }
     if (c === '%') {
       while (i < n && src.charAt(i) !== '\n') { out[i] = ' '; i++; }
       continue;

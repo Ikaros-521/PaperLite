@@ -646,10 +646,16 @@ figure.float .diagram { display: block; }
 .sp-cw input[type=color] { width: 34px; height: 24px; border: 1px solid var(--line); border-radius: 4px; padding: 0; background: var(--paper); }
 .sp-cw input[type=checkbox] { margin: 0; }
 .sp-apply {
-  width: 100%; margin-top: 10px; padding: 7px; border: 0; border-radius: 6px;
+  flex: 1; padding: 7px; border: 0; border-radius: 6px;
   background: var(--accent); color: #f8f6ef; font-weight: 600; cursor: pointer;
 }
 .sp-apply:hover { background: var(--accent-deep); }
+.sp-apply-row { display: flex; gap: 6px; margin-top: 10px; }
+.sp-undo {
+  flex: none; padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--paper); color: var(--ink-soft); font-size: 12.5px; cursor: pointer;
+}
+.sp-undo:hover { border-color: #b8b094; color: var(--ink); background: #f4f0e4; }
 .sp-row select, .sp-row input[type=number] {
   border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; background: var(--paper); font-size: 12.5px; color: var(--ink);
 }

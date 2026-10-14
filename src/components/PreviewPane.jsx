@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { exportSvg, exportPng } from '../exporter.js';
 import { useT } from '../useI18n.js';
+import { readMermaidGeoms } from '../mermaidMutations.js';
 
 let mermaidInited = false;
 let mermaidSeq = 0;
@@ -93,11 +94,67 @@ export default function PreviewPane({
     if (gn) gn.classList.add('selected');
   }, [selection, result, mmdTick]);
 
+  // Mermaid 自定义布局重放：源码 %% pl <id> … %% 注释 → SVG transform / rect 尺寸。
+  // 每次重新渲染（dagre 重算布局）后都要执行一遍。
+  useEffect(() => {
+    const paper = paperRef.current;
+    if (!paper) return;
+    paper.querySelectorAll('.mermaid-block[data-code]').forEach(b => {
+      let code = '';
+      try { code = decodeURIComponent(b.getAttribute('data-code') || ''); } catch (e) { return; }
+      applyMermaidGeomToSvg(b, code);
+    });
+  }, [result, mmdTick]);
+
   function rgbToHex(v) {
     const m = String(v).match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
     if (!m) return null;
     const q = x => { const s = (+x).toString(16); return s.length < 2 ? '0' + s : s; };
     return '#' + q(m[1]) + q(m[2]) + q(m[3]);
+  }
+  function applyMermaidGeomToSvg(block, code) {
+    let geoms;
+    try { geoms = readMermaidGeoms(code); } catch (e) { return; }
+    const ids = Object.keys(geoms);
+    if (!ids.length) return;
+    const svg = block.querySelector('svg');
+    if (!svg) return;
+    ids.forEach(id => {
+      const gEl = svg.querySelector('g.node[data-id="' + id + '"]');
+      if (!gEl) return;
+      const gg = geoms[id];
+      if (gg.x != null || gg.y != null || gg.s != null) {
+        const curT = gEl.getAttribute('transform') || '';
+        const mt = curT.match(/translate\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/);
+        const ms = curT.match(/scale\(\s*([-\d.]+)\s*\)/);
+        const x = gg.x != null ? gg.x : (mt ? +mt[1] : 0);
+        const y = gg.y != null ? gg.y : (mt ? +mt[2] : 0);
+        const s = gg.s != null ? gg.s : (ms ? +ms[1] : 1);
+        gEl.setAttribute('transform', 'translate(' + x + ',' + y + ')' + (s !== 1 ? ' scale(' + s + ')' : ''));
+      }
+      if (gg.w != null || gg.h != null) {
+        const shape = gEl.querySelector('rect');
+        if (shape) {
+          const w = gg.w != null ? gg.w : +shape.getAttribute('width');
+          const h = gg.h != null ? gg.h : +shape.getAttribute('height');
+          shape.setAttribute('width', w); shape.setAttribute('height', h);
+          shape.setAttribute('x', -w / 2); shape.setAttribute('y', -h / 2);
+        }
+      }
+    });
+  }
+  function mermaidNodeGeom(g) {
+    const t = g.getAttribute('transform') || '';
+    const mt = t.match(/translate\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/);
+    const ms = t.match(/scale\(\s*([-\d.]+)\s*\)/);
+    const shape = g.querySelector('rect');
+    return {
+      x: mt ? Math.round(+mt[1] * 10) / 10 : null,
+      y: mt ? Math.round(+mt[2] * 10) / 10 : null,
+      s: ms ? +ms[1] : 1,
+      w: shape ? Math.round(+shape.getAttribute('width')) : null,
+      h: shape ? Math.round(+shape.getAttribute('height')) : null
+    };
   }
   function mermaidNodeColors(g) {
     const shape = g.querySelector('rect, polygon, circle, ellipse');
@@ -130,7 +187,8 @@ export default function PreviewPane({
     const mmNode = e.target && e.target.closest ? e.target.closest('.mermaid-block svg g.node') : null;
     if (mmNode) {
       const block = mmNode.closest('.mermaid-block');
-      if (onSelMermaid) onSelMermaid(mermaidBlockIndex(block), mmNode.getAttribute('data-id'), mermaidNodeColors(mmNode));
+      if (onSelMermaid) onSelMermaid(mermaidBlockIndex(block), mmNode.getAttribute('data-id'),
+        { ...mermaidNodeColors(mmNode), ...mermaidNodeGeom(mmNode) });
       return;
     }
     const mmBlock = e.target && e.target.closest ? e.target.closest('.mermaid-block') : null;
