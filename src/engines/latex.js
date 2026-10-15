@@ -551,7 +551,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'href': {
       g1 = G(afterName); g2 = G(g1 ? g1.end + 1 : afterName);
       if (!g1 || !g2) return null;
-      return { next: g2.end + 1, html: '<a href="' + esc(g1.text) + '" target="_blank">' + renderFlow(g2.text, ctx, base + g2.start, false, true) + '</a>' };
+      return { next: g2.end + 1, html: '<a href="' + esc(g1.text.replace(/\\([{}%#&_$])/g, '$1')) + '" target="_blank">' + renderFlow(g2.text, ctx, base + g2.start, false, true) + '</a>' };
     }
 
     // ---- 版面（忽略类） ----

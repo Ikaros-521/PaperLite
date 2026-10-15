@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useT } from '../useI18n.js';
 import { THEME_IDS } from '../theme.js';
+import QuickTools from './QuickTools.jsx';
 
 /* 顶栏重构为经典菜单栏（文件/编辑/插入/查看/TeX/AI/帮助）+ 第二行上下文工具条。
  * 菜单行为遵循桌面惯例：点击展开、再点收起、展开时悬停切换、Esc / 点击外部关闭、
@@ -70,7 +71,7 @@ function LangSwitch({ lang, setLang }) {
 }
 
 export default function Toolbar({
-  actions, viewMode, setViewMode, latexOk,
+  actions, viewMode, setViewMode, latexOk, markdown, documentKey, labels,
   engines, engine, setEngine, compiling, onCompile, downloadPdf, builtinStatus,
   channelCount, onOpenChat, onOpenSettings, onAiFix,
   syncScroll, setSyncScroll, zoom, onZoom,
@@ -95,32 +96,6 @@ export default function Toolbar({
   const engineLabel = en => en === 'builtin' ? t('app.builtinEngine') + (statusKey ? ' · ' + t(statusKey) : '') : en;
   const tool = id => () => latexOk && actions.tool(id);
   const editOp = op => () => actions.editOp(op);
-
-  // 第二行：高频格式/插入工具（非 .tex/.md 标签时整行隐藏，把纵向空间还给编辑器）
-  // tFlow 按钮文字含中文「流程图」，英文下改用符号组合
-  const flowLabel = lang === 'zh' ? '→ 流程图' : '⇥ Flow';
-  const T = [
-    ['tSec', 'H1', t('t.sec')],
-    ['tSub', 'H2', t('t.sub')],
-    null,
-    ['tB', 'B', t('t.bold')],
-    ['tI', 'I', t('t.italic')],
-    ['tU', 'U', t('t.underline')],
-    ['tTt', 'T', t('t.mono')],
-    null,
-    ['tMath', '$x$', t('t.inlineMath')],
-    ['tEq', '∑', t('t.displayMath')],
-    null,
-    ['tList', '•≡', t('t.itemize')],
-    ['tEnum', '1≡', t('t.enumerate')],
-    ['tTable', '▦', t('t.table')],
-    ['tImg', '▣', t('t.image')],
-    ['tFlow', flowLabel, t('t.flow')],
-    ['tMermaid', '≈', t('t.mermaid')],
-    null,
-    ['tBib', '[引]', t('t.cite')],
-    ['tFn', '†', t('t.footnote')]
-  ];
 
   return (
     <header id="topbar" ref={rootRef}>
@@ -250,20 +225,7 @@ export default function Toolbar({
         </div>
       </div>
 
-      <div id="toolbelt" className="tb-group edit-tools" style={{ display: latexOk ? '' : 'none' }}>
-        {T.map((x, i) => x === null
-          ? <span key={i} className="tsep"></span>
-          : <button
-              key={x[0]}
-              id={x[0]}
-              className={'btn sm' + (x[0] === 'tFlow' ? ' accent' : '')}
-              title={x[2]}
-              onClick={tool(x[0])}
-            >
-              {x[1] === 'B' ? <b>B</b> : x[1] === 'I' ? <i>I</i> : x[1] === 'U' ? <u>U</u> : x[1]}
-            </button>
-        )}
-      </div>
+      {latexOk && <QuickTools actions={actions} onOpenChat={onOpenChat} markdown={markdown} documentKey={documentKey} labels={labels} />}
     </header>
   );
 }

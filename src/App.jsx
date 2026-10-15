@@ -3,6 +3,7 @@ import CodeMirror from 'codemirror';
 import FileDialog from './components/FileDialog.jsx';
 import { validName, wordCount, readHistory, recordVersion, downloadSourceZip } from './fileActions.js';
 import Toolbar from './components/Toolbar.jsx';
+import { quickInsert, replaceTemplate } from './editorTools.js';
 import EditorPane from './components/EditorPane.jsx';
 import PreviewPane from './components/PreviewPane.jsx';
 import StylePanel from './components/StylePanel.jsx';
@@ -481,10 +482,7 @@ export default function App() {
   const cm = () => cmRef.current;
   const wrap = (pre, post) => {
     const c = cm(); if (!c) return;
-    c.replaceSelection(pre + (c.getSelection() || '') + post, 'around');
-    const cur = c.getCursor();
-    c.setSelection({ line: cur.line, ch: cur.ch - post.length }, cur);
-    c.focus();
+    replaceTemplate(c, pre, c.getSelection() || '', post);
   };
   const insert = (text) => { const c = cm(); if (!c) return; c.replaceSelection(text, 'around'); c.focus(); };
   const insertLine = (pre, post) => {
@@ -688,8 +686,9 @@ export default function App() {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveActive(); }
       if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); wrap('\\textbf{', '}'); }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'i' && (isTexLike || isMd)) { e.preventDefault(); wrap('\\emph{', '}'); }
+      const editorFocused = e.target.closest?.('.CodeMirror');
+      if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tB', null, { markdown: isMd }); }
+      if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'i' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tI', null, { markdown: isMd }); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -844,8 +843,9 @@ export default function App() {
             else if (op === 'selectAll') c.execCommand('selectAll');
             c.focus();
           },
-          tool: (id) => {
+          tool: (id, value) => {
             if (!isTexLike && !isMd) return;
+            if (quickInsert(cm(), id, value, { markdown: isMd, text: t('q.placeholder') })) return;
             switch (id) {
               case 'tSec': return insertLine('\\section{', '}');
               case 'tSub': return insertLine('\\subsection{', '}');
@@ -873,6 +873,8 @@ export default function App() {
           }
         }}
         viewMode={viewMode} setViewMode={setViewMode} latexOk={isTexLike || isMd}
+        markdown={isMd} documentKey={activeId}
+        labels={[...new Set([...activeValue.replace(/(?<!\\)%[^\n]*/g, '').matchAll(/\\label\{([^}]+)\}/g)].map(match => match[1]))]}
         engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} builtinStatus={builtinStatus}
         downloadPdf={compileResult && compileResult.pdfUrl ? () => downloadCompiled(compileResult) : null}
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
