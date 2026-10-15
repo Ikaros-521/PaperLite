@@ -7,6 +7,8 @@
  *
  * 懒加载策略：App 挂载后空闲时调用 preloadEngine() 后台预热（Worker 创建 +
  * wasm 实例化都在 Worker 线程，不阻塞 UI）；编译前若未就绪则等待预热完成。
+ * 引擎就绪后按 repo/warm.json（= 冷编译的请求顺序）在后台预取镜像文件填充
+ * HTTP 缓存，首次编译的同步 XHR 因此几乎不产生网络往返。
  */
 
 import { prepareXeLaTeXSource } from './xelatexCompatibility.js';
@@ -14,14 +16,20 @@ import { prepareXeLaTeXSource } from './xelatexCompatibility.js';
 const BASE = ((import.meta.env && import.meta.env.BASE_URL) || '/') + 'xelatex/';
 // Worker 里同步 XHR 的相对 URL 以 Worker 脚本位置为基准，必须在主线程解析成绝对地址
 const REPO_URL = new URL(BASE + 'repo/', document.baseURI).href;
-const FMT_URL = REPO_URL + 'xetex/10/swiftlatexxetex.fmt';
+const FMT_KEY = '10/swiftlatexxetex.fmt';
+const WARM_URL = REPO_URL + 'warm.json';
+// 清单里的键沿用 manifest 的「格式号/文件名」，Worker 实际请求时才加 xetex/ 一层
+const repoUrl = key => REPO_URL + 'xetex/' + key;
 // 慢链路首编译要拉 ~31MB 格式文件 + 宏包字体，给足时间
 const COMPILE_TIMEOUT = 900000;
+// 后台预取并发：够填满带宽，又不至于饿死编译自身的请求
+const PREFETCH_CONCURRENCY = 6;
 
-let status = 'idle'; // idle | loading | ready | busy | error
+let status = 'idle'; // idle | loading | ready | warming | busy | error
 let loadPromise = null;
 let texWorker = null;
 let pdfWorker = null;
+let warming = false;
 const listeners = new Set();
 
 function setStatus(s) {
@@ -35,6 +43,56 @@ export function onEngineStatus(fn) {
   listeners.add(fn);
   if (status !== 'idle') fn(status);
   return () => listeners.delete(fn);
+}
+
+// 拉完整个响应体才会真正落进 HTTP 缓存；用 reader 逐块丢弃，避免 31MB 常驻内存。
+// 返回响应能否缓存，供调用方判断预取是否有意义。
+async function prefetch(url) {
+  const response = await fetch(url, { cache: 'force-cache' });
+  // 托管服务常把未知路径兜底成 200 的 index.html，预取会把 HTML 当 TeX 资源缓存住
+  if (!response.ok || /text\/html/i.test(response.headers.get('content-type') || '')) {
+    throw new Error('HTTP ' + response.status);
+  }
+  const cacheable = !/no-store/i.test(response.headers.get('cache-control') || '');
+  if (!response.body) { await response.arrayBuffer(); return cacheable; }
+  const reader = response.body.getReader();
+  while (!(await reader.read()).done) { /* 丢弃 */ }
+  return cacheable;
+}
+
+async function warmFileList() {
+  try {
+    const response = await fetch(WARM_URL, { cache: 'no-cache' });
+    const data = response.ok ? await response.json() : null;
+    if (data && data.version === 1 && Array.isArray(data.files)) {
+      return data.files.filter(key => key !== FMT_KEY);
+    }
+  } catch (e) { /* 没有预热清单时只预取格式文件 */ }
+  return [];
+}
+
+// 后台预取首次编译要用的镜像文件。清单顺序即冷编译的请求顺序，默认文档所需的
+// 格式文件与中文字体最先完成；单个资源失败只是回到按需拉取，不影响编译。
+async function prefetchResources() {
+  warming = true;
+  setStatus('warming');
+  try {
+    const files = await warmFileList();
+    let cacheable = true;
+    try { cacheable = await prefetch(repoUrl(FMT_KEY)); } catch (e) { /* 交给编译时按需请求 */ }
+    // vite dev 给所有响应加 no-store，此时预取只是白下载几十 MB，直接放弃
+    if (!cacheable) return;
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(PREFETCH_CONCURRENCY, files.length) }, async () => {
+      while (next < files.length) {
+        const key = files[next++];
+        try { await prefetch(repoUrl(key)); } catch (e) { /* 继续下一个 */ }
+      }
+    }));
+  } finally {
+    warming = false;
+    if (status === 'warming') setStatus('ready');
+  }
 }
 
 // Worker 装载完成时胶水会 postMessage({result:'ok'})
@@ -81,9 +139,8 @@ export function preloadEngine() {
       texWorker.postMessage({ cmd: 'settexlivemanifest', files: manifest.files });
       pdfWorker.postMessage({ cmd: 'settexlivemanifest', files: manifest.files });
       setStatus('ready');
-      // 空闲预热顺带预取 LaTeX 格式文件（31MB，最大头）：进 HTTP 缓存后，
-      // 引擎首次编译时的同步 XHR 直接命中缓存，慢链路也能显著提速
-      fetch(FMT_URL, { cache: 'force-cache' }).catch(() => { /* 预热失败不影响编译 */ });
+      // 引擎可用后继续在后台预取，loadPromise 不等它——用户点编译不必等满 98MB
+      prefetchResources();
     } catch (e) {
       setStatus('error');
       loadPromise = null;
@@ -169,6 +226,6 @@ export async function compileXeLaTeX(source) {
     }
     return { ok: true, pdfBytes: new Uint8Array(r3.pdf), log: r2.log || '', errors: [], engine: 'builtin' };
   } finally {
-    setStatus(loadPromise ? 'ready' : 'idle');
+    setStatus(loadPromise ? (warming ? 'warming' : 'ready') : 'idle');
   }
 }

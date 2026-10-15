@@ -15,8 +15,11 @@
 ## 工作方式
 
 - 编辑器打开后**空闲时后台预热**引擎（`requestIdleCallback`），不阻塞任何交互；
-- 首次编译时按需以同步 XHR 从 `repo/xetex/<格式号>/<文件名>` 拉取缺失的
-  宏包/字体文件（同源静态文件，浏览器 HTTP 缓存自动生效）；
+- 引擎就绪后主线程按 `repo/warm.json` 并行预取镜像文件（`cache: 'force-cache'`），
+  把首次编译要用的格式文件、宏包与中文字体提前放进浏览器 HTTP 缓存；预取期间引擎
+  已经可用，界面显示「资源预热中」，点编译不必等预取结束；
+- 预取未完成或某个资源预取失败时，编译仍按需以同步 XHR 从
+  `repo/xetex/<格式号>/<文件名>` 拉取（同源静态文件，浏览器 HTTP 缓存自动生效）；
 - 编译管线：XeTeX(wasm) → XDV → dvipdfmx(wasm) → PDF，与官方 demo 一致。
 
 ## 重新生成
@@ -44,6 +47,7 @@ PGFPlots、hyperref、geometry、caption、listings、siunitx、unicode-math 等
 python scripts/sync-texlive.py
 npm run tex:manifest
 npm run test:xelatex
+npm run tex:warm      # 模板资源变化后重新生成预热清单
 ```
 
 同步脚本递归解析 TeX Live 的包依赖，保留已自举的内核/格式文件，导入运行时宏包、
@@ -55,6 +59,10 @@ npm run test:xelatex
 不存在的可选文件直接返回未找到，不发送必然失败的 HTTP 请求；省略 `.tex` 的
 输入按清单解析到实际文件。真正缺少必需宏包时仍报告 LaTeX 错误。
 构建和 CI 检查清单是否与镜像一致，防止新增文件漏登记。
+
+`repo/warm.json` 是后台预取清单，由回归测试按引擎实际请求顺序记录全部内置模板的
+冷编译资源并集生成（`npm run tex:warm`），`npm run test:xelatex` 会校验它与实际请求
+一致，新增模板或宏包后需重新生成，避免预取落后于镜像。
 
 回归测试运行发行版 WASM 的 XeTeX → XDV → dvipdfmx → PDF 完整管线，
 通过同步 XHR 路径从静态镜像读取资源，覆盖全部内置模板及数学、表格、超链接、

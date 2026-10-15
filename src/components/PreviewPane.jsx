@@ -215,6 +215,9 @@ export default function PreviewPane({
 
   if (!result) return <section id="previewPane"><div id="previewScroll" /></section>;
 
+  const statusKey = { loading: 'app.engineLoading', warming: 'app.engineWarming', error: 'app.engineError' }[builtinStatus];
+  const builtinLabel = t('app.builtinEngine') + (statusKey ? ' · ' + t(statusKey) : '');
+
   return (
     <section id="previewPane">
       <div id="previewBar">
@@ -227,7 +230,7 @@ export default function PreviewPane({
         {(engines && engines.length) ? (
           <span className="pb-compile" title={t('prev.compileTip')}>
             <select value={engine} onChange={e => setEngine(e.target.value)}>
-              {engines.map(en => <option key={en} value={en}>{en === 'builtin' ? t('app.builtinEngine') + (builtinStatus === 'loading' ? ' · ' + t('app.engineLoading') : builtinStatus === 'error' ? ' · ' + t('app.engineError') : '') : en}</option>)}
+              {engines.map(en => <option key={en} value={en}>{en === 'builtin' ? builtinLabel : en}</option>)}
             </select>
             <button className={'btn sm' + (compiling ? ' busy' : '')} disabled={compiling} onClick={onCompile}>
               {compiling ? t('prev.compiling') : t('prev.compile')}

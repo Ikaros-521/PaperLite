@@ -89,7 +89,8 @@ export default function Toolbar({
   }, []);
 
   const engineOk = engines && engines.length;
-  const engineLabel = en => en === 'builtin' ? t('app.builtinEngine') + (builtinStatus === 'loading' ? ' · ' + t('app.engineLoading') : builtinStatus === 'error' ? ' · ' + t('app.engineError') : '') : en;
+  const statusKey = { loading: 'app.engineLoading', warming: 'app.engineWarming', error: 'app.engineError' }[builtinStatus];
+  const engineLabel = en => en === 'builtin' ? t('app.builtinEngine') + (statusKey ? ' · ' + t(statusKey) : '') : en;
   const tool = id => () => latexOk && actions.tool(id);
   const editOp = op => () => actions.editOp(op);
 

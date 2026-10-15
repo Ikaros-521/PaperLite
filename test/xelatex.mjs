@@ -167,7 +167,10 @@ print(42)
 \begin{algorithmic}\STATE $x\gets 1$\end{algorithmic}\end{algorithm}
 \end{document}`,
 };
-if (process.argv[2]) fixtures.userDocument = fs.readFileSync(process.argv[2], 'utf8');
+const flags = process.argv.slice(2).filter(arg => arg.startsWith('--'));
+// Compiled fixtures may be passed positionally: node test/xelatex.mjs in.tex out.pdf
+const fixturePaths = process.argv.slice(2).filter(arg => !arg.startsWith('--'));
+if (fixturePaths[0]) fixtures.userDocument = fs.readFileSync(fixturePaths[0], 'utf8');
 for (const [name, source] of Object.entries(fixtures)) {
   tex('flushcache');
   const prepared = prepareXeLaTeXSource(source);
@@ -184,8 +187,8 @@ for (const [name, source] of Object.entries(fixtures)) {
   result = pdf('compilepdf');
   assert.equal(result?.result, 'ok', `${name} PDF:\n${result?.log}`);
   assert.equal(Buffer.from(result.pdf).subarray(0, 5).toString(), '%PDF-');
-  if (name === 'userDocument' && process.argv[3]) {
-    fs.writeFileSync(process.argv[3], Buffer.from(result.pdf));
+  if (name === 'userDocument' && fixturePaths[1]) {
+    fs.writeFileSync(fixturePaths[1], Buffer.from(result.pdf));
   }
   console.log(`Template ${name}: XeTeX → PDF passed`);
 }
@@ -197,3 +200,17 @@ assert.equal(result.result, 'failed', 'A genuinely missing package must still fa
 assert.match(result.log, /paperlite-deliberately-missing\.sty/);
 assert.deepEqual(missingRequests, [], 'No HTTP requests for absent resources, including optional probes');
 console.log(`${requests.size} distinct HTTP resources loaded; zero missing-resource requests`);
+
+// The cold-compile request sequence is exactly what the browser must prefetch in the
+// background, so the shipped warm-up list is derived from it instead of hand-maintained.
+const warmPath = path.join(engineDir, 'repo/warm.json');
+const warmFiles = [...requests];
+if (flags.includes('--write-warm')) {
+  fs.writeFileSync(warmPath, JSON.stringify({ version: 1, files: warmFiles }, null, 2) + '\n');
+  console.log(`Warm-up list written: repo/warm.json with ${warmFiles.length} resources`);
+} else {
+  const stored = JSON.parse(fs.readFileSync(warmPath, 'utf8'));
+  assert.equal(stored.version, 1, 'Warm-up list version');
+  assert.deepEqual(new Set(stored.files), new Set(warmFiles),
+    'Warm-up list no longer matches the resources a cold compile loads. Run npm run tex:warm.');
+}

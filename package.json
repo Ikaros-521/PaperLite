@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "node test/smoke.mjs",
     "test:xelatex": "node scripts/texlive-manifest.mjs --check && node test/xelatex.mjs",
-    "tex:manifest": "node scripts/texlive-manifest.mjs"
+    "tex:manifest": "node scripts/texlive-manifest.mjs",
+    "tex:warm": "node scripts/texlive-manifest.mjs --check && node test/xelatex.mjs --write-warm"
   },
   "dependencies": {
     "codemirror": "^5.65.16",
