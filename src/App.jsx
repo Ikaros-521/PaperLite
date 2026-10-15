@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from 'codemirror';
 import FileDialog from './components/FileDialog.jsx';
-import { validName, wordCount, readHistory, recordVersion, renameVersion, copyHistory, downloadSourceZip } from './fileActions.js';
+import { validName, wordCount, readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage, downloadSourceZip } from './fileActions.js';
 import HistoryDialog from './components/HistoryDialog.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import { quickInsert, replaceTemplate } from './editorTools.js';
@@ -87,6 +87,7 @@ export default function App() {
   const [fileDialog, setFileDialog] = useState(null);
   const [, setHistoryTick] = useState(0);
   const [historyError, setHistoryError] = useState('');
+  const historyClearedRef = useRef(new WeakMap());
   const [packaging, setPackaging] = useState(false);
   const [sideTab, setSideTab] = useState('outline');
   const [panelOpen, setPanelOpen] = useState(false);
@@ -204,15 +205,19 @@ export default function App() {
     if (!doc) return;
     let timer;
     const capture = () => {
+      if (historyClearedRef.current.get(doc) === doc.getValue()) return;
       const result = recordVersion(historyKey, doc.getValue());
       setHistoryError(result.ok ? '' : tr(getLang(), 'hist.storageError'));
       setHistoryTick(n => n + 1);
     };
     capture();
-    const changed = () => { clearTimeout(timer); timer = setTimeout(capture, 3000); };
+    const changed = () => {
+      if (historyClearedRef.current.get(doc) !== doc.getValue()) historyClearedRef.current.delete(doc);
+      clearTimeout(timer); timer = setTimeout(capture, 3000);
+    };
     doc.on('change', changed);
     // Flush the actual document on tab changes; never record stale activeValue.
-    const flush = () => { recordVersion(historyKey, doc.getValue()); };
+    const flush = () => { if (historyClearedRef.current.get(doc) !== doc.getValue()) recordVersion(historyKey, doc.getValue()); };
     window.addEventListener('pagehide', flush);
     return () => { clearTimeout(timer); doc.off('change', changed); window.removeEventListener('pagehide', flush); flush(); };
   }, [activeTab?.doc, historyKey]);
@@ -1074,6 +1079,18 @@ export default function App() {
       />
 
       {fileDialog === 'history' && activeTab.doc && <HistoryDialog key={activeId} name={activeTab.name} current={activeTab.doc.getValue()} versions={readHistory(historyKey)}
+        usage={historyUsage(historyKey)}
+        onDelete={id => {
+          const version = readHistory(historyKey).find(v => v.id === id);
+          const ok = deleteHistory(historyKey, id);
+          if (ok && version?.text === activeTab.doc.getValue()) historyClearedRef.current.set(activeTab.doc, activeTab.doc.getValue());
+          setHistoryError(ok ? '' : t('hist.storageError')); setHistoryTick(n => n + 1); return ok;
+        }}
+        onClear={all => {
+          const ok = clearHistory(all ? undefined : historyKey);
+          if (ok) for (const tab of tabsRef.current) if (tab.doc && (all || tab.historyKey === historyKey)) historyClearedRef.current.set(tab.doc, tab.doc.getValue());
+          setHistoryError(ok ? '' : t('hist.storageError')); setHistoryTick(n => n + 1); return ok;
+        }}
         error={historyError} onClose={() => setFileDialog(null)} onSnapshot={snapshot}
         onRename={(id, label) => { const ok = renameVersion(historyKey, id, label); setHistoryError(ok ? '' : t('hist.storageError')); setHistoryTick(n => n + 1); return ok; }}
         onRestore={version => {

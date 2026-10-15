@@ -2,6 +2,11 @@ import { diffLines, diffWordsWithSpace } from 'diff';
 
 // Bound expensive comparisons; even the fallback preserves every source line.
 export function compareVersions(before, after) {
+  let lineCount = 0;
+  if (before.length + after.length > 500000) return { rows: [], changes: [], added: 0, removed: 0, tooLarge: true };
+  for (const source of [before, after]) for (let i = 0; i < source.length; i++) {
+    if (source[i] === '\n' && ++lineCount > 10000) return { rows: [], changes: [], added: 0, removed: 0, tooLarge: true };
+  }
   const parts = diffLines(before, after, { timeout: 150, maxEditLength: 3000 }) || [
     { value: before, removed: true }, { value: after, added: true }
   ];
