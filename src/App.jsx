@@ -181,8 +181,8 @@ export default function App() {
     const off = onEngineStatus(setBuiltinStatus);
     const kick = () => { warmEngine(compileContextRef.current?.doc?.getValue() || '').catch(() => { /* 状态已置 error，由 UI 提示 */ }); };
     let ic = null, tid = null;
-    if ('requestIdleCallback' in window) { ic = requestIdleCallback(kick, { timeout: 20000 }); }
-    else tid = setTimeout(kick, 3000);
+    if ('requestIdleCallback' in window) { ic = requestIdleCallback(kick, { timeout: 1000 }); }
+    else tid = setTimeout(kick, 1000);
     return () => { off(); if (ic !== null && 'cancelIdleCallback' in window) cancelIdleCallback(ic); if (tid !== null) clearTimeout(tid); };
   }, []);
 

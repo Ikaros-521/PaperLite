@@ -12,6 +12,7 @@ const engineDir = fileURLToPath(new URL('../public/xelatex/', import.meta.url));
 const manifest = JSON.parse(fs.readFileSync(path.join(engineDir, 'repo/manifest.json'), 'utf8'));
 const requests = new Set();
 const missingRequests = [];
+let requestCount = 0;
 
 async function loadEngine(name) {
   let reply;
@@ -29,6 +30,7 @@ async function loadEngine(name) {
     XMLHttpRequest: class {
       open(method, url) { this.url = url; }
       send() {
+        requestCount++;
         const key = new URL(this.url).pathname.split('/repo/xetex/')[1];
         if (!key || !manifest.files.includes(key)) missingRequests.push(this.url);
         assert.ok(key && manifest.files.includes(key), `Unexpected HTTP request: ${this.url}`);
@@ -221,4 +223,57 @@ if (flags.includes('--write-warm')) {
   assert.equal(stored.version, 1, 'Warm-up list version');
   assert.deepEqual(new Set(stored.files), new Set(warmFiles),
     'Warm-up list no longer matches the resources a cold compile loads. Run npm run tex:warm.');
+}
+
+// Exercise the application's warm-up orchestration with real WASM Workers and
+// uncached resource reads. A Set alone cannot detect repeat downloads.
+const savedGlobals = { Worker: globalThis.Worker, document: globalThis.document, fetch: globalThis.fetch };
+const commands = [];
+class TestWorker {
+  listeners = new Map();
+  constructor(url) {
+    this.engine = loadEngine(path.basename(url, '.js'));
+    this.engine.then(() => this.emit('message', { data: { result: 'ok' } }));
+  }
+  addEventListener(type, fn) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type).add(fn);
+  }
+  removeEventListener(type, fn) { this.listeners.get(type)?.delete(fn); }
+  emit(type, event) { for (const fn of [...(this.listeners.get(type) || [])]) fn(event); }
+  postMessage(data) {
+    commands.push(data.cmd);
+    this.engine.then(send => {
+      const reply = send(data.cmd, data);
+      if (reply) this.emit('message', { data: reply });
+    });
+  }
+  terminate() {}
+}
+try {
+  globalThis.Worker = TestWorker;
+  globalThis.document = { baseURI: 'https://paperlite.test/' };
+  globalThis.fetch = async url => {
+    const filename = String(url).endsWith('manifest.json') ? 'manifest.json'
+      : String(url).endsWith('warm.json') ? 'warm.json' : 'xetex/10/swiftlatexxetex.fmt';
+    return new Response(fs.readFileSync(path.join(engineDir, 'repo', filename)), {
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  };
+  const appSource = fs.readFileSync(new URL('../src/engines/xelatex.js', import.meta.url), 'utf8')
+    .replace("'./xelatexCompatibility.js'", JSON.stringify(new URL('../src/engines/xelatexCompatibility.js', import.meta.url).href));
+  const app = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
+  const warm = app.warmEngine(fixtures.elegantpaper);
+  assert.equal(app.warmEngine(fixtures.elegantpaper), warm, 'Concurrent warm-up calls share the same job');
+  await warm;
+  assert.ok(commands.includes('compilepdf'), 'Warm-up reaches the PDF Worker');
+  const warmedRequests = requestCount;
+  const compiled = await app.compileXeLaTeX(fixtures.elegantpaper);
+  assert.equal(compiled.ok, true, JSON.stringify(compiled.errors));
+  assert.equal(Buffer.from(compiled.pdfBytes).subarray(0, 5).toString(), '%PDF-');
+  assert.equal(requestCount, warmedRequests, 'First explicit compile after warm-up downloads zero resources, even without HTTP caching');
+  assert.equal(app.engineStatus(), 'ready');
+  console.log('Application warm-up: full PDF pipeline, zero first-compile downloads with no-store');
+} finally {
+  Object.assign(globalThis, savedGlobals);
 }

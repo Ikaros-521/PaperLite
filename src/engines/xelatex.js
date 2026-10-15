@@ -6,7 +6,7 @@
  * 编译时由引擎内的 kpathsea 钩子按需同步拉取 repo/xetex/<格式号>/<文件名>。
  *
  * 懒加载策略：App 挂载后空闲时调用 warmEngine(source) 后台预热（Worker 创建 +
- * wasm 实例化都在 Worker 线程，不阻塞 UI）。预热分两步：先用当前文档跑一遍 XeTeX
+ * wasm 实例化都在 Worker 线程，不阻塞 UI）。预热分两步：先用当前文档跑完整编译管线
  * 把它真正要用的文件拉进 Worker 内存缓存，再按 repo/warm.json（= 内置模板冷编译的
  * 请求顺序）并行预取其余文件填充 HTTP 缓存，供切换模板时直接使用。
  */
@@ -31,6 +31,7 @@ let texWorker = null;
 let pdfWorker = null;
 let warming = false;
 let warmCompile = null; // 定向预热占用 Worker 期间的 promise，正式编译需等它
+let warmPromise = null;
 const listeners = new Set();
 
 function setStatus(s) {
@@ -91,13 +92,15 @@ async function prefetchResources() {
 
 /**
  * 页面空闲时启动的后台预热，分两步：
- *   1) 用当前打开的文档跑一遍 XeTeX（结果丢弃），把这篇真正要用的宏包/字体拉进
+ *   1) 用当前打开的文档跑完 XeTeX → dvipdfmx（结果丢弃），把真正要用的宏包/字体拉进
  *      Worker 内存缓存——包括 warm.json 未覆盖的文件（如 biblatex 的 .cbx）；
  *   2) 再按清单预取其余镜像文件进 HTTP 缓存，供切换模板时使用。
  * 预热期间引擎已经可以编译；正式编译只需等第 1 步（它占着 Worker）。
  */
 export function warmEngine(source) {
-  return preloadEngine().then(async () => {
+  if (warmPromise) return warmPromise;
+  warmPromise = preloadEngine().then(async () => {
+    if (status === 'busy') return;
     warming = true;
     setStatus('warming');
     try {
@@ -108,15 +111,21 @@ export function warmEngine(source) {
       warming = false;
       if (status === 'warming') setStatus('ready');
     }
-  });
+  }).finally(() => { warmPromise = null; });
+  return warmPromise;
 }
 
-// 定向预热：跑一遍当前文档，让引擎按 kpathsea 自己去拉它需要的文件
+// 两个 Worker 各自持有资源缓存。必须走到 PDF 阶段，才能预热映射表和嵌入字体；
+// 仅预取 HTTP 缓存无法覆盖 no-store 或开发者工具禁用缓存的情况。
 async function warmUpDocument(source) {
   warmCompile = (async () => {
     texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
     texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
-    await call(texWorker, 'XeTeX warm-up', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+    const result = await call(texWorker, 'XeTeX warm-up', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+    if (result.result !== 'ok' || result.status !== 0 || !result.pdf) return;
+    pdfWorker.postMessage({ cmd: 'writefile', url: 'main.xdv', src: new Uint8Array(result.pdf) });
+    pdfWorker.postMessage({ cmd: 'setmainfile', url: 'main.xdv' });
+    await call(pdfWorker, 'dvipdfmx warm-up', () => pdfWorker.postMessage({ cmd: 'compilepdf' }), d => d.cmd === 'compile');
   })();
   try { await warmCompile; } catch (e) { /* 预热编译报错不影响，文件已经拉到了 */ }
   warmCompile = null;
