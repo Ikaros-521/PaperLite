@@ -8,7 +8,7 @@
  * 懒加载策略：App 挂载后空闲时调用 warmEngine(source) 后台预热（Worker 创建 +
  * wasm 实例化都在 Worker 线程，不阻塞 UI）。预热分两步：先用当前文档跑完整编译管线
  * 把它真正要用的文件拉进 Worker 内存缓存，再按 repo/warm.json（= 内置模板冷编译的
- * 请求顺序）并行预取其余文件填充 HTTP 缓存，供切换模板时直接使用。
+ * 请求顺序）并行预取其余文件，直接写入对应 Worker 缓存，供切换模板时使用。
  */
 
 import { prepareXeLaTeXSource } from './xelatexCompatibility.js';
@@ -32,6 +32,8 @@ let pdfWorker = null;
 let warming = false;
 let warmCompile = null; // 定向预热占用 Worker 期间的 promise，正式编译需等它
 let warmPromise = null;
+let pendingWarmSource = null;
+let resourcesWarmed = false;
 const listeners = new Set();
 
 function setStatus(s) {
@@ -47,19 +49,13 @@ export function onEngineStatus(fn) {
   return () => listeners.delete(fn);
 }
 
-// 拉完整个响应体才会真正落进 HTTP 缓存；用 reader 逐块丢弃，避免 31MB 常驻内存。
-// 返回响应能否缓存，供调用方判断预取是否有意义。
-async function prefetch(url) {
+async function fetchResource(url) {
   const response = await fetch(url, { cache: 'force-cache' });
   // 托管服务常把未知路径兜底成 200 的 index.html，预取会把 HTML 当 TeX 资源缓存住
   if (!response.ok || /text\/html/i.test(response.headers.get('content-type') || '')) {
     throw new Error('HTTP ' + response.status);
   }
-  const cacheable = !/no-store/i.test(response.headers.get('cache-control') || '');
-  if (!response.body) { await response.arrayBuffer(); return cacheable; }
-  const reader = response.body.getReader();
-  while (!(await reader.read()).done) { /* 丢弃 */ }
-  return cacheable;
+  return response.arrayBuffer();
 }
 
 async function warmFileList() {
@@ -67,46 +63,68 @@ async function warmFileList() {
     const response = await fetch(WARM_URL, { cache: 'no-cache' });
     const data = response.ok ? await response.json() : null;
     if (data && data.version === 1 && Array.isArray(data.files)) {
-      return data.files.filter(key => key !== FMT_KEY);
+      return data;
     }
   } catch (e) { /* 没有预热清单时只预取格式文件 */ }
-  return [];
+  return { files: [FMT_KEY], incomplete: true };
 }
 
-// 后台预取镜像文件填充 HTTP 缓存。清单顺序即冷编译的请求顺序；单个资源失败只是
-// 回到按需拉取，不影响编译。
+// HTTP 缓存在 no-store/禁用缓存时不可用，资源必须写进引擎真正读取的缓存。
+// 只给实际使用该文件的 Worker 一份，避免把大格式文件和字体无差别复制两遍。
 async function prefetchResources() {
-  const files = await warmFileList();
-  let cacheable = true;
-  try { cacheable = await prefetch(repoUrl(FMT_KEY)); } catch (e) { /* 交给编译时按需请求 */ }
-  // vite dev 给所有响应加 no-store，此时预取只是白下载几十 MB，直接放弃
-  if (!cacheable) return;
+  if (resourcesWarmed) return;
+  const list = await warmFileList();
+  const workers = [texWorker, pdfWorker];
+  const cached = await Promise.all(workers.map(w => call(w, 'TeX cache inventory',
+    () => w.postMessage({ cmd: 'gettexlivecache' }), d => d.cmd === 'gettexlivecache')));
+  const cacheKeys = cached.map(d => new Set(d.files));
+  const usage = list.engines ? [new Set(list.engines.tex), new Set(list.engines.pdf)] : null;
+  const files = list.files;
   let next = 0;
+  let failed = false;
   await Promise.all(Array.from({ length: Math.min(PREFETCH_CONCURRENCY, files.length) }, async () => {
     while (next < files.length) {
       const key = files[next++];
-      try { await prefetch(repoUrl(key)); } catch (e) { /* 继续下一个 */ }
+      const targets = workers.filter((w, i) => !cacheKeys[i].has(key)
+        && (usage ? usage[i].has(key) : (i === 0 || key !== FMT_KEY)));
+      if (!targets.length) continue;
+      try {
+        const bytes = await fetchResource(repoUrl(key));
+        await Promise.all(targets.map(w => call(w, 'TeX cache upload',
+          () => w.postMessage({ cmd: 'cachetexlivefile', key, src: bytes }),
+          d => d.cmd === 'cachetexlivefile' && d.key === key).then(result => {
+          if (result.result !== 'ok') throw new Error(result.error || 'TeX cache upload failed');
+        })));
+      } catch (e) { failed = true; /* 单个文件失败时保留按需下载兜底，后续允许重试 */ }
     }
   }));
+  resourcesWarmed = !failed && !list.incomplete;
 }
 
 /**
  * 页面空闲时启动的后台预热，分两步：
  *   1) 用当前打开的文档跑完 XeTeX → dvipdfmx（结果丢弃），把真正要用的宏包/字体拉进
  *      Worker 内存缓存——包括 warm.json 未覆盖的文件（如 biblatex 的 .cbx）；
- *   2) 再按清单预取其余镜像文件进 HTTP 缓存，供切换模板时使用。
+ *   2) 再按清单预取其余镜像文件进各自 Worker 缓存，供切换模板时使用。
  * 预热期间引擎已经可以编译；正式编译只需等第 1 步（它占着 Worker）。
  */
 export function warmEngine(source) {
+  pendingWarmSource = String(source || '');
   if (warmPromise) return warmPromise;
   warmPromise = preloadEngine().then(async () => {
-    if (status === 'busy') return;
     warming = true;
-    setStatus('warming');
     try {
-      const text = String(source || '');
-      if (/\\documentclass/.test(text)) await warmUpDocument(text);
-      await prefetchResources();
+      do {
+        // 切换文档时若正式编译尚未完成，保留预热请求，等 Worker 空闲再执行。
+        if (status === 'busy') await new Promise(resolve => {
+          const off = onEngineStatus(s => { if (s !== 'busy') { off(); resolve(); } });
+        });
+        setStatus('warming');
+        const text = pendingWarmSource;
+        pendingWarmSource = null;
+        if (/\\documentclass/.test(text)) await warmUpDocument(text);
+        await prefetchResources();
+      } while (pendingWarmSource !== null);
     } finally {
       warming = false;
       if (status === 'warming') setStatus('ready');
@@ -119,6 +137,9 @@ export function warmEngine(source) {
 // 仅预取 HTTP 缓存无法覆盖 no-store 或开发者工具禁用缓存的情况。
 async function warmUpDocument(source) {
   warmCompile = (async () => {
+    // /work 的辅助文件属于上一篇文档；/tex 的资源缓存由两个引擎继续复用。
+    texWorker.postMessage({ cmd: 'flushcache' });
+    pdfWorker.postMessage({ cmd: 'flushcache' });
     texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
     texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
     const result = await call(texWorker, 'XeTeX warm-up', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
@@ -154,8 +175,8 @@ export function preloadEngine() {
   setStatus('loading');
   loadPromise = (async () => {
     try {
-      texWorker = new Worker(BASE + 'swiftlatexxetex.js');
-      pdfWorker = new Worker(BASE + 'swiftlatexdvipdfm.js');
+      texWorker = new Worker(BASE + 'tex-worker.js');
+      pdfWorker = new Worker(BASE + 'pdf-worker.js');
       const watch = w => { w.onerror = () => setStatus('error'); };
       watch(texWorker); watch(pdfWorker);
       const [, , manifest] = await Promise.all([
@@ -181,6 +202,7 @@ export function preloadEngine() {
       try { texWorker && texWorker.terminate(); } catch (e2) { /* noop */ }
       try { pdfWorker && pdfWorker.terminate(); } catch (e2) { /* noop */ }
       texWorker = pdfWorker = null;
+      resourcesWarmed = false;
       throw e;
     }
   })();
@@ -231,6 +253,8 @@ export async function compileXeLaTeX(source) {
   setStatus('busy');
   try {
     // 两遍编译：目录/交叉引用（与 server.mjs 行为一致）
+    texWorker.postMessage({ cmd: 'flushcache' });
+    pdfWorker.postMessage({ cmd: 'flushcache' });
     texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
     texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
     let r1;

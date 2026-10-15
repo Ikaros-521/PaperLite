@@ -1,7 +1,8 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from 'codemirror';
 import FileDialog from './components/FileDialog.jsx';
-import { validName, wordCount, readHistory, recordVersion, downloadSourceZip } from './fileActions.js';
+import { validName, wordCount, readHistory, recordVersion, renameVersion, copyHistory, downloadSourceZip } from './fileActions.js';
+import HistoryDialog from './components/HistoryDialog.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import { quickInsert, replaceTemplate } from './editorTools.js';
 import EditorPane from './components/EditorPane.jsx';
@@ -44,10 +45,11 @@ const makeSnippets = (t) => ({
   tBib: '\\cite{key}'
 });
 
-function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl }) {
+function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '' }) {
   const id = ++tabSeq;
   const t = {
     id, name, path: path || name, kind, handle: handle || null, parentDir: parentDir || null,
+    historyKey: JSON.stringify([kind === 'draft' ? '' : historyScope, kind === 'draft' ? 'draft' : path || name]),
     saved: saved !== undefined ? saved : (text || ''),
     imageUrl: imageUrl || null,
     dirty: false, doc: null
@@ -84,6 +86,7 @@ export default function App() {
   const [syncScroll, setSyncScroll] = useState(editorSettings.syncScroll);
   const [fileDialog, setFileDialog] = useState(null);
   const [, setHistoryTick] = useState(0);
+  const [historyError, setHistoryError] = useState('');
   const [packaging, setPackaging] = useState(false);
   const [sideTab, setSideTab] = useState('outline');
   const [panelOpen, setPanelOpen] = useState(false);
@@ -176,32 +179,43 @@ export default function App() {
     })();
   }, []);
 
-  // ---- 内置 XeLaTeX 引擎：状态订阅 + 空闲时后台预热（不阻塞界面） ----
+  // ---- 内置 XeLaTeX 引擎：状态订阅 + 文档/导言区变化时后台预热 ----
+  useEffect(() => onEngineStatus(setBuiltinStatus), []);
+  const warmPreamble = activeValue.split(/\\begin\s*\{document\}/)[0];
   useEffect(() => {
-    const off = onEngineStatus(setBuiltinStatus);
+    if (!isTexLike) return;
     const kick = () => { warmEngine(compileContextRef.current?.doc?.getValue() || '').catch(() => { /* 状态已置 error，由 UI 提示 */ }); };
     let ic = null, tid = null;
     if ('requestIdleCallback' in window) { ic = requestIdleCallback(kick, { timeout: 1000 }); }
     else tid = setTimeout(kick, 1000);
-    return () => { off(); if (ic !== null && 'cancelIdleCallback' in window) cancelIdleCallback(ic); if (tid !== null) clearTimeout(tid); };
-  }, []);
+    return () => { if (ic !== null && 'cancelIdleCallback' in window) cancelIdleCallback(ic); if (tid !== null) clearTimeout(tid); };
+  }, [activeTab?.doc, warmPreamble, isTexLike]);
 
-  const historyKey = JSON.stringify([rootDir?.name || '', activeTab?.kind === 'draft' ? 'draft' : activeTab?.path]);
-  const snapshot = () => {
-    if (!activeTab?.doc) return;
-    recordVersion(historyKey, activeTab.doc.getValue());
+  const historyKey = activeTab?.historyKey || JSON.stringify([rootDir?.name || '', activeTab?.kind === 'draft' ? 'draft' : activeTab?.path]);
+  const snapshot = (label = '', reason = 'manual', force = true) => {
+    if (!activeTab?.doc) return false;
+    const result = recordVersion(historyKey, activeTab.doc.getValue(), { label, reason, force });
+    setHistoryError(result.ok ? '' : t('hist.storageError'));
     setHistoryTick(n => n + 1);
+    return result.ok;
   };
   useEffect(() => {
-    if (!activeTab?.doc) return;
-    // Capture the initial content before edits; subsequent changes get a debounced snapshot.
-    recordVersion(historyKey, activeTab.doc.getValue());
-  }, [activeId, historyKey]);
-  useEffect(() => {
-    if (!activeTab?.doc) return;
-    const timer = setTimeout(() => { recordVersion(historyKey, activeValue); setHistoryTick(n => n + 1); }, 3000);
-    return () => clearTimeout(timer);
-  }, [activeValue, activeId, historyKey]);
+    const doc = activeTab?.doc;
+    if (!doc) return;
+    let timer;
+    const capture = () => {
+      const result = recordVersion(historyKey, doc.getValue());
+      setHistoryError(result.ok ? '' : tr(getLang(), 'hist.storageError'));
+      setHistoryTick(n => n + 1);
+    };
+    capture();
+    const changed = () => { clearTimeout(timer); timer = setTimeout(capture, 3000); };
+    doc.on('change', changed);
+    // Flush the actual document on tab changes; never record stale activeValue.
+    const flush = () => { recordVersion(historyKey, doc.getValue()); };
+    window.addEventListener('pagehide', flush);
+    return () => { clearTimeout(timer); doc.off('change', changed); window.removeEventListener('pagehide', flush); flush(); };
+  }, [activeTab?.doc, historyKey]);
   useEffect(() => {
     const settings = { ...editorSettings, syncScroll };
     try { localStorage.setItem('paperlite.editor-settings', JSON.stringify(settings)); } catch { /* ignore */ }
@@ -240,11 +254,11 @@ export default function App() {
         return t;
       }
       const text = await fs.readFileText(fileHandle);
-      const t = makeTab({ name, path, kind: info.kind, handle: fileHandle, parentDir, text, modeSpec: info.mode, saved: text });
+      const t = makeTab({ name, path, kind: info.kind, handle: fileHandle, parentDir, text, modeSpec: info.mode, saved: text, historyScope: parentDir ? rootDir?.name || '' : '' });
       setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue(text);
       return t;
     } catch (e) { alert(tr(getLang(), 'app.cannotOpen', { name, msg: e.message || e })); return null; }
-  }, []);
+  }, [rootDir?.name]);
 
   useEffect(() => {
     window.__plInject = (name, content) => {
@@ -413,7 +427,10 @@ export default function App() {
       try {
         const h = await fs.createFile(rootDir, tab.name);
         await fs.writeFileText(h, value);
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: false } : x));
+        const nextKey = JSON.stringify([rootDir.name, tab.name]);
+        const copied = copyHistory(tab.historyKey, nextKey);
+        if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: false } : x));
         setTreeKey(k => k + 1);
         flash(t('app.savedToFolder', { name: tab.name }));
         return true;
@@ -423,7 +440,10 @@ export default function App() {
       try {
         const h = await window.showSaveFilePicker({ suggestedName: tab.name });
         await fs.writeFileText(h, value);
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, name: h.name, handle: h, path: h.name, saved: value, dirty: false } : x));
+        const nextKey = JSON.stringify(['', h.name]);
+        const copied = copyHistory(tab.historyKey, nextKey);
+        if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, name: h.name, handle: h, path: h.name, saved: value, dirty: false } : x));
         flash(t('app.saved', { name: h.name }));
         return true;
       } catch (e) {
@@ -440,7 +460,8 @@ export default function App() {
   const saveActive = useCallback(async () => {
     const t = tabsRef.current.filter(x => x.id === activeId)[0];
     if (!t?.doc) return;
-    recordVersion(JSON.stringify([rootDir?.name || '', t.kind === 'draft' ? 'draft' : t.path]), t.doc.getValue());
+    const recorded = recordVersion(t.historyKey, t.doc.getValue(), { reason: 'save' });
+    setHistoryError(recorded.ok ? '' : tr(getLang(), 'hist.storageError'));
     setHistoryTick(n => n + 1);
     if (t.kind === 'draft') {
       try { localStorage.setItem(LS_KEY, t.doc ? t.doc.getValue() : ''); } catch (e) { /* ignore */ }
@@ -892,6 +913,7 @@ export default function App() {
             <button className={sideTab === 'files' ? 'on' : ''} title={t('side.files')} onClick={() => setSideTab('files')} disabled={!rootDir && !restorePrompt}>{lang === 'zh' ? '文' : '▤'}</button>
             <button className={sideTab === 'outline' ? 'on' : ''} title={t('side.outline')} onClick={() => setSideTab('outline')}>{lang === 'zh' ? '纲' : '≣'}</button>
             <button className={sideTab === 'issues' ? 'on' : ''} title={t('side.issues')} onClick={() => setSideTab('issues')}>{'⚠\uFE0E'}{issueCount ? <em>{issueCount}</em> : null}</button>
+            <button title={t('m.history')} aria-label={t('m.history')} disabled={!activeTab?.doc} onClick={() => setFileDialog('history')}>↶</button>
           </div>
           <div className="side-body">
             {sideTab === 'files' && (
@@ -1051,11 +1073,22 @@ export default function App() {
         setActiveChannelId={setActiveChannelId}
       />
 
-      {fileDialog && <FileDialog key={fileDialog + activeId} mode={fileDialog} onClose={() => setFileDialog(null)}
+      {fileDialog === 'history' && activeTab.doc && <HistoryDialog key={activeId} name={activeTab.name} current={activeTab.doc.getValue()} versions={readHistory(historyKey)}
+        error={historyError} onClose={() => setFileDialog(null)} onSnapshot={snapshot}
+        onRename={(id, label) => { const ok = renameVersion(historyKey, id, label); setHistoryError(ok ? '' : t('hist.storageError')); setHistoryTick(n => n + 1); return ok; }}
+        onRestore={version => {
+          if (!snapshot('', 'beforeRestore')) return false;
+          const backupId = readHistory(historyKey)[0]?.id;
+          activeTab.doc.replaceRange(version.text, { line: 0, ch: 0 }, activeTab.doc.posFromIndex(activeTab.doc.getValue().length), 'historyRestore');
+          const result = recordVersion(historyKey, version.text, { reason: 'restore', label: version.label, force: true, protectIds: [backupId] });
+          setHistoryError(result.ok ? '' : t('hist.storageError'));
+          setHistoryTick(n => n + 1); setCompileResult(null); setPreviewMode('rich'); flash(t('file.restored'));
+          return true;
+        }}
+      />}
+      {fileDialog && fileDialog !== 'history' && <FileDialog key={fileDialog + activeId} mode={fileDialog} onClose={() => setFileDialog(null)}
         name={activeTab.name} counts={wordCount(previewText(previewResult?.html, activeTab.doc?.getValue() || ''))}
         selectionCounts={cmRef.current?.getSelection() ? wordCount(cmRef.current.getSelection()) : null}
-        versions={readHistory(historyKey)} onSnapshot={snapshot}
-        onRestore={version => { snapshot(); activeTab.doc.setValue(version.text); setCompileResult(null); setPreviewMode('rich'); setFileDialog(null); flash(t('file.restored')); }}
         settings={{ ...editorSettings, syncScroll }} onSettings={settings => { setEditorSettings(settings); setSyncScroll(settings.syncScroll); }}
         theme={theme} setTheme={setTheme}
         engines={engines} engine={engine} setEngine={setEngine}

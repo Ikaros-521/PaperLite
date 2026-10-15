@@ -19,21 +19,48 @@ function historyStore() {
   } catch { return {}; }
 }
 export function readHistory(key) { return historyStore()[key] || []; }
-export function recordVersion(key, text) {
+export function recordVersion(key, text, { label = '', reason = 'auto', force = false, protectIds = [] } = {}) {
   try {
     const all = historyStore();
     const entries = all[key] || [];
-    if (entries[0]?.text === text) return;
-    all[key] = [{ id: Date.now() + '-' + Math.random().toString(36).slice(2), date: Date.now(), text }, ...entries].slice(0, 20);
+    if (!force && !label.trim() && entries[0]?.text === text) return { ok: true, version: entries[0] };
+    const version = { id: Date.now() + '-' + Math.random().toString(36).slice(2), date: Date.now(), text, label: label.trim().slice(0, 100), reason };
+    all[key] = [version, ...entries].slice(0, 20);
     // Bound browser storage across documents, retaining the newest versions first.
     while (JSON.stringify(all).length > 1000000) {
-      const oldest = Object.keys(all).filter(k => all[k].length).sort((a, b) => all[a].at(-1).date - all[b].at(-1).date)[0];
-      if (!oldest) break;
-      all[oldest].pop();
-      if (!all[oldest].length) delete all[oldest];
+      const candidates = Object.entries(all).flatMap(([k, list]) => list.filter(v => v.id !== version.id && !protectIds.includes(v.id)).map(v => ({ key: k, version: v })));
+      candidates.sort((a, b) => a.version.date - b.version.date);
+      const oldest = candidates[0];
+      if (!oldest) return { ok: false };
+      all[oldest.key] = all[oldest.key].filter(v => v.id !== oldest.version.id);
+      if (!all[oldest.key].length) delete all[oldest.key];
     }
+    if (!all[key]?.some(v => v.id === version.id)) return { ok: false };
     localStorage.setItem(HISTORY_KEY, JSON.stringify(all));
-  } catch { /* Editing and saving remain available when browser storage is full. */ }
+    return { ok: true, version };
+  } catch { return { ok: false }; }
+}
+
+export function renameVersion(key, id, label) {
+  try {
+    const all = historyStore();
+    const version = all[key]?.find(v => v.id === id);
+    if (!version) return false;
+    version.label = label.trim().slice(0, 100);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(all));
+    return true;
+  } catch { return false; }
+}
+
+export function copyHistory(from, to) {
+  if (from === to) return true;
+  try {
+    const all = historyStore();
+    const combined = [...(all[from] || []), ...(all[to] || [])];
+    all[to] = [...new Map(combined.map(v => [v.id, v])).values()].sort((a, b) => b.date - a.date).slice(0, 20);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(all));
+    return true;
+  } catch { return false; }
 }
 
 // ZIP with stored entries: no compression dependency; preserves binary assets and UTF-8 paths.

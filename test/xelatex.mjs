@@ -13,6 +13,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(engineDir, 'repo/manifest.
 const requests = new Set();
 const missingRequests = [];
 let requestCount = 0;
+const engineRequests = { tex: new Set(), pdf: new Set() };
 
 async function loadEngine(name) {
   let reply;
@@ -35,6 +36,7 @@ async function loadEngine(name) {
         if (!key || !manifest.files.includes(key)) missingRequests.push(this.url);
         assert.ok(key && manifest.files.includes(key), `Unexpected HTTP request: ${this.url}`);
         requests.add(key);
+        engineRequests[name === 'swiftlatexxetex' ? 'tex' : 'pdf'].add(key);
         const bytes = fs.readFileSync(path.join(engineDir, 'repo/xetex', key));
         this.status = 200;
         this.response = Uint8Array.from(bytes).buffer;
@@ -48,6 +50,7 @@ async function loadEngine(name) {
   });
   context.self = context;
   vm.runInContext(fs.readFileSync(path.join(engineDir, name + '.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(engineDir, 'resource-cache.js'), 'utf8'), context);
   await initialized;
   // Keep Emscripten's Node bootstrap, then exercise its browser resource path.
   context.process = new Proxy(process, {
@@ -215,24 +218,30 @@ console.log(`${requests.size} distinct HTTP resources loaded; zero missing-resou
 // background, so the shipped warm-up list is derived from it instead of hand-maintained.
 const warmPath = path.join(engineDir, 'repo/warm.json');
 const warmFiles = [...requests];
+const warmEngines = Object.fromEntries(Object.entries(engineRequests).map(([name, files]) => [name, [...files]]));
 if (flags.includes('--write-warm')) {
-  fs.writeFileSync(warmPath, JSON.stringify({ version: 1, files: warmFiles }, null, 2) + '\n');
+  fs.writeFileSync(warmPath, JSON.stringify({ version: 1, files: warmFiles, engines: warmEngines }, null, 2) + '\n');
   console.log(`Warm-up list written: repo/warm.json with ${warmFiles.length} resources`);
 } else {
   const stored = JSON.parse(fs.readFileSync(warmPath, 'utf8'));
   assert.equal(stored.version, 1, 'Warm-up list version');
   assert.deepEqual(new Set(stored.files), new Set(warmFiles),
     'Warm-up list no longer matches the resources a cold compile loads. Run npm run tex:warm.');
+  for (const name of ['tex', 'pdf']) {
+    assert.deepEqual(new Set(stored.engines?.[name]), new Set(warmEngines[name]),
+      `Warm-up Worker allocation changed (${name}). Run npm run tex:warm.`);
+  }
 }
 
 // Exercise the application's warm-up orchestration with real WASM Workers and
 // uncached resource reads. A Set alone cannot detect repeat downloads.
 const savedGlobals = { Worker: globalThis.Worker, document: globalThis.document, fetch: globalThis.fetch };
 const commands = [];
+const prefetched = new Set();
 class TestWorker {
   listeners = new Map();
   constructor(url) {
-    this.engine = loadEngine(path.basename(url, '.js'));
+    this.engine = loadEngine(url.endsWith('tex-worker.js') ? 'swiftlatexxetex' : 'swiftlatexdvipdfm');
     this.engine.then(() => this.emit('message', { data: { result: 'ok' } }));
   }
   addEventListener(type, fn) {
@@ -254,8 +263,9 @@ try {
   globalThis.Worker = TestWorker;
   globalThis.document = { baseURI: 'https://paperlite.test/' };
   globalThis.fetch = async url => {
-    const filename = String(url).endsWith('manifest.json') ? 'manifest.json'
-      : String(url).endsWith('warm.json') ? 'warm.json' : 'xetex/10/swiftlatexxetex.fmt';
+    const filename = new URL(url).pathname.split('/repo/')[1];
+    assert.ok(filename && !filename.includes('..'), 'Fetch stays inside the mirror');
+    prefetched.add(filename);
     return new Response(fs.readFileSync(path.join(engineDir, 'repo', filename)), {
       headers: { 'Cache-Control': 'no-store' },
     });
@@ -263,17 +273,29 @@ try {
   const appSource = fs.readFileSync(new URL('../src/engines/xelatex.js', import.meta.url), 'utf8')
     .replace("'./xelatexCompatibility.js'", JSON.stringify(new URL('../src/engines/xelatexCompatibility.js', import.meta.url).href));
   const app = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
-  const warm = app.warmEngine(fixtures.elegantpaper);
-  assert.equal(app.warmEngine(fixtures.elegantpaper), warm, 'Concurrent warm-up calls share the same job');
+  const warm = app.warmEngine(samples.demo);
+  assert.equal(app.warmEngine(samples.demo), warm, 'Concurrent warm-up calls share the same job');
   await warm;
   assert.ok(commands.includes('compilepdf'), 'Warm-up reaches the PDF Worker');
+  assert.ok(prefetched.has('xetex/26/elegantpaper.cls'), 'ElegantPaper is prefetched before opening it, even with no-store');
   const warmedRequests = requestCount;
-  const compiled = await app.compileXeLaTeX(fixtures.elegantpaper);
-  assert.equal(compiled.ok, true, JSON.stringify(compiled.errors));
-  assert.equal(Buffer.from(compiled.pdfBytes).subarray(0, 5).toString(), '%PDF-');
-  assert.equal(requestCount, warmedRequests, 'First explicit compile after warm-up downloads zero resources, even without HTTP caching');
+  for (const name of ['elegantpaper', 'mathematics', 'unicodeMath']) {
+    const compiled = await app.compileXeLaTeX(fixtures[name]);
+    assert.equal(compiled.ok, true, `${name}: ${JSON.stringify(compiled.errors)}`);
+    assert.equal(Buffer.from(compiled.pdfBytes).subarray(0, 5).toString(), '%PDF-');
+    assert.equal(requestCount, warmedRequests, `${name}: switching documents after warm-up downloads zero resources, even without HTTP caching`);
+  }
+  const busy = new Promise(resolve => {
+    const off = app.onEngineStatus(s => { if (s === 'busy') { off(); resolve(); } });
+  });
+  const foreground = app.compileXeLaTeX(samples.demo);
+  await busy;
+  const queuedWarm = app.warmEngine(fixtures.elegantpaper);
+  assert.equal((await foreground).ok, true, 'Foreground compile survives a document warm-up request');
+  await queuedWarm;
+  assert.equal(requestCount, warmedRequests, 'Queued document warm-up reuses the preloaded resources');
   assert.equal(app.engineStatus(), 'ready');
-  console.log('Application warm-up: full PDF pipeline, zero first-compile downloads with no-store');
+  console.log('Application warm-up: default document → ElegantPaper/math/Unicode, zero compile downloads with no-store');
 } finally {
   Object.assign(globalThis, savedGlobals);
 }
