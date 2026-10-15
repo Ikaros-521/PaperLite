@@ -1051,6 +1051,9 @@ export default function App() {
                 <li>{t('help.a3')}</li>
                 <li>{t('help.a4')}</li>
               </ul>
+              <div className="about-repo">
+                <a href="https://github.com/Ikaros-521/PaperLite" target="_blank" rel="noopener noreferrer">{t('help.repo')}</a>
+              </div>
               <div className="about-stack">React 18 · CodeMirror 5 · KaTeX · Mermaid · Vite</div>
             </div>
           </div>

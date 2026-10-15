@@ -111,6 +111,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .about-logo { font-family: var(--serif); font-size: 20px; font-weight: 700; color: var(--ink); display: flex; align-items: center; justify-content: center; gap: 9px; }
 .about-slogan { color: var(--ink-soft); margin: 6px 0 14px; font-size: 13px; }
 .about-list { text-align: left; margin: 0 auto 14px; max-width: 350px; color: var(--ink); font-size: 13px; line-height: 1.8; padding-left: 18px; }
+.about-repo { margin: 0 0 12px; font-size: 13px; }
+.about-repo a { color: var(--accent); text-decoration: none; }
+.about-repo a:hover { text-decoration: underline; }
 .about-stack { color: var(--ink-faint); font-size: 12px; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
 .tb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }

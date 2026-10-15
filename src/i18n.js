@@ -227,6 +227,7 @@ export const DICT = {
     'help.a2': '本地文件夹工作区：文件树 · 多标签 · Markdown/代码编辑',
     'help.a3': 'TeX 真实编译（pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX，需本机引擎 + server.mjs）',
     'help.a4': '多渠道 LLM：语法修复 · 对话改写 · 文档检索（OpenAI 兼容协议）',
+    'help.repo': 'GitHub 仓库：github.com/Ikaros-521/PaperLite',
     // ---- AI 提示词（发给模型，随语言切换）----
     'ai.system': '你是论文写作与 LaTeX/Markdown 排版助手。请用中文回答，简洁、结构化，使用 Markdown。' +
       '当用户要求改写/修复时，把完整结果放在 ```latex 或 ```markdown 代码块中，便于一键应用。',
@@ -458,6 +459,7 @@ export const DICT = {
     'help.a2': 'Local folder workspace: file tree · tabs · Markdown/code editing',
     'help.a3': 'Real TeX compile (pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX — local engine + server.mjs)',
     'help.a4': 'Multi-channel LLM: syntax fix · rewrite · doc retrieval (OpenAI-compatible)',
+    'help.repo': 'GitHub repository: github.com/Ikaros-521/PaperLite',
     'ai.system': 'You are a paper-writing and LaTeX/Markdown typesetting assistant. Answer in English, concisely and structurally, using Markdown.' +
       'When asked to rewrite/fix, put the complete result in a ```latex or ```markdown code block for one-click apply.',
     'ai.ctxHeader': 'Current document context (for reference, do not repeat verbatim):',
