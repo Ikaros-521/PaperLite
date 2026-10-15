@@ -9,6 +9,8 @@
  * wasm 实例化都在 Worker 线程，不阻塞 UI）；编译前若未就绪则等待预热完成。
  */
 
+import { prepareXeLaTeXSource } from './xelatexCompatibility.js';
+
 const BASE = ((import.meta.env && import.meta.env.BASE_URL) || '/') + 'xelatex/';
 // Worker 里同步 XHR 的相对 URL 以 Worker 脚本位置为基准，必须在主线程解析成绝对地址
 const REPO_URL = new URL(BASE + 'repo/', document.baseURI).href;
@@ -136,7 +138,7 @@ export async function compileXeLaTeX(source) {
   setStatus('busy');
   try {
     // 两遍编译：目录/交叉引用（与 server.mjs 行为一致）
-    texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: String(source) });
+    texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
     texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
     let r1;
     try {

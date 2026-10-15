@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { samples } from '../src/engines/samples.js';
+import { prepareXeLaTeXSource } from '../src/engines/xelatexCompatibility.js';
 
 const engineDir = fileURLToPath(new URL('../public/xelatex/', import.meta.url));
 const manifest = JSON.parse(fs.readFileSync(path.join(engineDir, 'repo/manifest.json'), 'utf8'));
@@ -101,6 +102,12 @@ console.log('XeLaTeX regression passed: Chinese fonts + booktabs → XDV → PDF
 
 const fixtures = {
   ...samples,
+  // Reproduce documents already saved before the template dependencies were
+  // fixed; replacing samples alone does not update these browser documents.
+  legacyDemo: samples.demo
+    .replace('booktabs,amsmath,amssymb,graphicx', 'booktabs,amsmath,graphicx')
+    .replace(/^.*(?:fancyvrb|Mermaid 在网页|DefineVerbatimEnvironment|usetikzlibrary).*\n/gm, ''),
+  legacyFlow: samples.flow.replace(/^.*usetikzlibrary.*\n/gm, ''),
   mathematics: String.raw`\documentclass{article}
 \usepackage{amsmath,amssymb,amsthm,mathtools,bm,mathrsfs,cancel,siunitx}
 \newtheorem{theorem}{Theorem}
@@ -161,7 +168,11 @@ print(42)
 };
 for (const [name, source] of Object.entries(fixtures)) {
   tex('flushcache');
-  tex('writefile', { url: 'main.tex', src: source });
+  const prepared = prepareXeLaTeXSource(source);
+  assert.equal(prepared.split('\n').length, source.split('\n').length, `${name}: error line numbers preserved`);
+  assert.equal(prepareXeLaTeXSource(prepared), prepared, `${name}: preparation is idempotent`);
+  if (!name.startsWith('legacy')) assert.equal(prepared, source, `${name}: no compatibility changes needed`);
+  tex('writefile', { url: 'main.tex', src: prepared });
   for (let pass = 1; pass <= 2; pass++) {
     result = tex('compilelatex');
     assert.equal(result?.result, 'ok', `${name} pass ${pass}:\n${result?.log}`);
