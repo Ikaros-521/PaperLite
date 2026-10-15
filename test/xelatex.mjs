@@ -140,6 +140,14 @@ print(42)
 \end{lstlisting}
 \rotatebox{15}{\fbox{Graphic transform}}
 \end{document}`,
+  // biblatex loads its citation style (.cbx) from the chosen style; the ElegantPaper
+  // class only exercises numeric-comp, so cover the plain numeric style here too.
+  biblatexNumeric: String.raw`\documentclass{article}
+\usepackage[style=numeric]{biblatex}
+\addbibresource{refs.bib}
+\begin{document}
+Test \cite{knuth1984}
+\end{document}`,
   plots: String.raw`\documentclass{article}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}

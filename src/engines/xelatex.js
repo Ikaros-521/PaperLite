@@ -5,10 +5,10 @@
  * 引擎文件与 TeX 宏包镜像位于 public/xelatex/（见 NOTICE.md），
  * 编译时由引擎内的 kpathsea 钩子按需同步拉取 repo/xetex/<格式号>/<文件名>。
  *
- * 懒加载策略：App 挂载后空闲时调用 preloadEngine() 后台预热（Worker 创建 +
- * wasm 实例化都在 Worker 线程，不阻塞 UI）；编译前若未就绪则等待预热完成。
- * 引擎就绪后按 repo/warm.json（= 冷编译的请求顺序）在后台预取镜像文件填充
- * HTTP 缓存，首次编译的同步 XHR 因此几乎不产生网络往返。
+ * 懒加载策略：App 挂载后空闲时调用 warmEngine(source) 后台预热（Worker 创建 +
+ * wasm 实例化都在 Worker 线程，不阻塞 UI）。预热分两步：先用当前文档跑一遍 XeTeX
+ * 把它真正要用的文件拉进 Worker 内存缓存，再按 repo/warm.json（= 内置模板冷编译的
+ * 请求顺序）并行预取其余文件填充 HTTP 缓存，供切换模板时直接使用。
  */
 
 import { prepareXeLaTeXSource } from './xelatexCompatibility.js';
@@ -30,6 +30,7 @@ let loadPromise = null;
 let texWorker = null;
 let pdfWorker = null;
 let warming = false;
+let warmCompile = null; // 定向预热占用 Worker 期间的 promise，正式编译需等它
 const listeners = new Set();
 
 function setStatus(s) {
@@ -71,28 +72,54 @@ async function warmFileList() {
   return [];
 }
 
-// 后台预取首次编译要用的镜像文件。清单顺序即冷编译的请求顺序，默认文档所需的
-// 格式文件与中文字体最先完成；单个资源失败只是回到按需拉取，不影响编译。
+// 后台预取镜像文件填充 HTTP 缓存。清单顺序即冷编译的请求顺序；单个资源失败只是
+// 回到按需拉取，不影响编译。
 async function prefetchResources() {
-  warming = true;
-  setStatus('warming');
-  try {
-    const files = await warmFileList();
-    let cacheable = true;
-    try { cacheable = await prefetch(repoUrl(FMT_KEY)); } catch (e) { /* 交给编译时按需请求 */ }
-    // vite dev 给所有响应加 no-store，此时预取只是白下载几十 MB，直接放弃
-    if (!cacheable) return;
-    let next = 0;
-    await Promise.all(Array.from({ length: Math.min(PREFETCH_CONCURRENCY, files.length) }, async () => {
-      while (next < files.length) {
-        const key = files[next++];
-        try { await prefetch(repoUrl(key)); } catch (e) { /* 继续下一个 */ }
-      }
-    }));
-  } finally {
-    warming = false;
-    if (status === 'warming') setStatus('ready');
-  }
+  const files = await warmFileList();
+  let cacheable = true;
+  try { cacheable = await prefetch(repoUrl(FMT_KEY)); } catch (e) { /* 交给编译时按需请求 */ }
+  // vite dev 给所有响应加 no-store，此时预取只是白下载几十 MB，直接放弃
+  if (!cacheable) return;
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(PREFETCH_CONCURRENCY, files.length) }, async () => {
+    while (next < files.length) {
+      const key = files[next++];
+      try { await prefetch(repoUrl(key)); } catch (e) { /* 继续下一个 */ }
+    }
+  }));
+}
+
+/**
+ * 页面空闲时启动的后台预热，分两步：
+ *   1) 用当前打开的文档跑一遍 XeTeX（结果丢弃），把这篇真正要用的宏包/字体拉进
+ *      Worker 内存缓存——包括 warm.json 未覆盖的文件（如 biblatex 的 .cbx）；
+ *   2) 再按清单预取其余镜像文件进 HTTP 缓存，供切换模板时使用。
+ * 预热期间引擎已经可以编译；正式编译只需等第 1 步（它占着 Worker）。
+ */
+export function warmEngine(source) {
+  return preloadEngine().then(async () => {
+    warming = true;
+    setStatus('warming');
+    try {
+      const text = String(source || '');
+      if (/\\documentclass/.test(text)) await warmUpDocument(text);
+      await prefetchResources();
+    } finally {
+      warming = false;
+      if (status === 'warming') setStatus('ready');
+    }
+  });
+}
+
+// 定向预热：跑一遍当前文档，让引擎按 kpathsea 自己去拉它需要的文件
+async function warmUpDocument(source) {
+  warmCompile = (async () => {
+    texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
+    texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
+    await call(texWorker, 'XeTeX warm-up', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+  })();
+  try { await warmCompile; } catch (e) { /* 预热编译报错不影响，文件已经拉到了 */ }
+  warmCompile = null;
 }
 
 // Worker 装载完成时胶水会 postMessage({result:'ok'})
@@ -139,8 +166,6 @@ export function preloadEngine() {
       texWorker.postMessage({ cmd: 'settexlivemanifest', files: manifest.files });
       pdfWorker.postMessage({ cmd: 'settexlivemanifest', files: manifest.files });
       setStatus('ready');
-      // 引擎可用后继续在后台预取，loadPromise 不等它——用户点编译不必等满 98MB
-      prefetchResources();
     } catch (e) {
       setStatus('error');
       loadPromise = null;
@@ -192,6 +217,8 @@ function parseLog(log) {
 /** 编译 LaTeX 源码。返回 { ok, pdfBytes?, log, errors, engine:'builtin' } */
 export async function compileXeLaTeX(source) {
   await preloadEngine();
+  // 定向预热正在用 Worker：等它跑完再发自己的命令，否则会错拿它的回执
+  if (warmCompile) { try { await warmCompile; } catch (e) { /* 交给下面的正式编译 */ } }
   setStatus('busy');
   try {
     // 两遍编译：目录/交叉引用（与 server.mjs 行为一致）
