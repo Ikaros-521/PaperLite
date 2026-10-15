@@ -196,6 +196,10 @@ body.dragging::before { content: ''; position: fixed; inset: 0; z-index: 9999; }
 .side-body > #workspace { border-right: 0; background: none; }
 .side-pad { padding: 12px; color: var(--ink-soft); }
 .side-pad .hint { color: var(--ink-faint); }
+/* 未打开文件夹时侧栏的引导面板：主按钮给出唯一入口 */
+.side-empty { display: flex; flex-direction: column; gap: 8px; }
+.side-empty .btn { text-align: left; white-space: normal; }
+.side-empty .hint { line-height: 1.6; margin: 2px 0 0; }
 
 /* 大纲 */
 .outline { flex: 1; overflow: auto; padding: 6px 4px 24px; }
@@ -468,6 +472,11 @@ body.cp-dragging::before {
 }
 .tb-compile { display: flex; gap: 4px; align-items: center; }
 .pb-chip { font-size: 11px; background: var(--chip-bg); color: var(--chip-ink); border-radius: 4px; padding: 1px 7px; }
+/* 「近似排版」提示：默认只是一枚虚线徽标，点开才占版面 */
+.pb-note { font-size: 11px; color: var(--ink-faint); border-style: dashed; }
+.pb-note.on { color: var(--chip-ink); background: var(--chip-bg); }
+.preview-note { display: flex; align-items: flex-start; gap: 8px; padding: 7px 12px; font-size: 12px; line-height: 1.6; color: var(--ink-soft); background: var(--chip-bg); border-bottom: 1px solid var(--line); }
+.preview-note .btn { flex: none; }
 .pb-title.bad { color: var(--seal-deep); }
 .pdf-host { flex: 1; min-height: 0; }
 .pdf-host iframe { width: 100%; height: 100%; border: 0; background: var(--pdf-bg); }
@@ -790,6 +799,9 @@ figure.float .diagram { display: block; }
 #statusbar .grow { flex: 1; }
 #statusbar .hint { color: var(--ink-faint); }
 .st-warn.has { color: var(--seal-deep); cursor: pointer; font-weight: 600; }
+#statusbar .st-chip { font-size: 11px; background: var(--chip-bg); color: var(--chip-ink); border-radius: 4px; padding: 1px 6px; margin-left: 6px; cursor: help; }
+#statusbar .st-engine { color: var(--ink-faint); cursor: help; white-space: nowrap; }
+#statusbar .st-engine.bad { color: var(--seal-deep); font-weight: 600; }
 .st-save-flash { color: var(--ok); opacity: 0; transition: opacity .3s; }
 .st-save-flash.on { opacity: 1; }
 

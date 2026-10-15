@@ -5,9 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='5' fill='%23b3432e'/%3E%3Ctext x='16' y='22' font-family='Georgia,serif' font-size='17' font-weight='700' fill='%23fdf8ef' text-anchor='middle'%3E%E8%AE%BA%3C/text%3E%3C/svg%3E" />
     <title>PaperLite · 论文速写编辑器</title>
+    <style>
+      /* React 挂载前的骨架：慢网下不该是一段纯白屏（挂载后由 createRoot 清掉） */
+      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px; background: #f7f2e8; }
+      #boot .boot-bar { height: 34px; border-radius: 6px; background: rgba(0, 0, 0, .07); }
+      #boot .boot-cols { flex: 1; display: grid; grid-template-columns: 180px 1fr 1fr; gap: 10px; }
+      #boot .boot-cols i { border-radius: 6px; background: rgba(0, 0, 0, .05); }
+      #boot .boot-note { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font: 600 13px/1 Georgia, "Times New Roman", serif; letter-spacing: .18em; color: rgba(0, 0, 0, .28); }
+      @media (prefers-color-scheme: dark) {
+        #boot { background: #141a24; }
+        #boot .boot-bar { background: rgba(255, 255, 255, .07); }
+        #boot .boot-cols i { background: rgba(255, 255, 255, .05); }
+        #boot .boot-note { color: rgba(255, 255, 255, .25); }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot" aria-hidden="true">
+        <div class="boot-bar"></div>
+        <div class="boot-cols"><i></i><i></i><i></i></div>
+        <div class="boot-note">PaperLite</div>
+      </div>
+    </div>
+    <noscript><p style="padding:24px;font:14px/1.6 system-ui,sans-serif">PaperLite 全部功能都在浏览器里运行，请启用 JavaScript 后刷新本页。</p></noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

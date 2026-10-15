@@ -20,7 +20,7 @@ import { TOUR_STEPS, shouldWelcome, dismissWelcome, markTourDone } from './tour.
 import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
-import { collectIssues, currentCompileErrors } from './diagnostics.js';
+import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
 import { warmEngine, compileXeLaTeX, onEngineStatus } from './engines/xelatex.js';
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
@@ -33,6 +33,8 @@ import { detectTheme, applyTheme } from './theme.js';
 import { LangContext } from './useI18n.js';
 
 const LS_KEY = 'paperlite.doc.v2';
+// 每个草稿标签各存一份：旧版只存活动那一篇，多草稿会互相覆盖（关页即丢）
+const LS_DRAFTS = 'paperlite.drafts.v1';
 const LS_MODE = 'paperlite.viewmode.v2';
 const LS_LAYOUT = 'paperlite.layout.v1';
 // 把手宽度与 app.css 的 .divider 保持一致，拖拽换算按它补偿半格偏移
@@ -77,13 +79,16 @@ export default function App() {
 
   // ---- 多标签 ----
   const [tabs, setTabs] = useState(() => {
-    let saved = '';
-    try { saved = localStorage.getItem(LS_KEY) || ''; } catch (e) { /* ignore */ }
-    const text = saved.trim() ? saved : samples.demo;
-    return [makeTab({ name: tr(detectLang(), 'app.draftName'), path: tr(detectLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text })];
+    const drafts = readDrafts();
+    const L = detectLang();
+    return drafts.map(d => makeTab({ name: d.name || tr(L, 'app.draftName'), path: tr(L, 'app.draftPath'), kind: 'draft', text: d.text, modeSpec: 'stex', saved: d.text }));
   });
-  const [activeId, setActiveId] = useState(() => 1);
-  const [activeValue, setActiveValue] = useState(() => tabsInitValue());
+  // 焦点落在最后恢复的那篇（最近编辑的）；不依赖模块级计数器，StrictMode 下会被调用两次
+  const [activeId, setActiveId] = useState(() => (tabs.length ? tabs[tabs.length - 1].id : 1));
+  const [activeValue, setActiveValue] = useState(() => {
+    const c = tabs.length ? tabs[tabs.length - 1] : null;
+    return c && c.doc ? c.doc.getValue() : '';
+  });
 
   // ---- 视图 ----
   const [viewMode, setViewMode] = useState(() => { try { return localStorage.getItem(LS_MODE) || 'split'; } catch (e) { return 'split'; } });
@@ -219,11 +224,16 @@ export default function App() {
   }, [activeTab?.doc, warmPreamble, isTexLike]);
 
   const historyKey = activeTab?.historyKey || JSON.stringify([rootDir?.name || '', activeTab?.kind === 'draft' ? 'draft' : activeTab?.path]);
+  // 超上限淘汰旧版本是静默的（README 记为有意取舍），但用户必须看得见被清了几条
+  const noteHistory = (result) => {
+    setHistoryError(result.ok ? '' : tr(getLang(), 'hist.storageError'));
+    if (result.ok && result.dropped) flash(tr(getLang(), 'hist.dropped', { n: result.dropped }));
+    setHistoryTick(n => n + 1);
+  };
   const snapshot = (label = '', reason = 'manual', force = true) => {
     if (!activeTab?.doc) return false;
     const result = recordVersion(historyKey, activeTab.doc.getValue(), { label, reason, force });
-    setHistoryError(result.ok ? '' : t('hist.storageError'));
-    setHistoryTick(n => n + 1);
+    noteHistory(result);
     return result.ok;
   };
   useEffect(() => {
@@ -232,9 +242,7 @@ export default function App() {
     let timer;
     const capture = () => {
       if (historyClearedRef.current.get(doc) === doc.getValue()) return;
-      const result = recordVersion(historyKey, doc.getValue());
-      setHistoryError(result.ok ? '' : tr(getLang(), 'hist.storageError'));
-      setHistoryTick(n => n + 1);
+      noteHistory(recordVersion(historyKey, doc.getValue()));
     };
     capture();
     const changed = () => {
@@ -304,7 +312,6 @@ export default function App() {
   // ---- 编辑器联动 ----
   const onDocChange = useCallback((doc, value) => {
     compileContextRef.current = { doc };
-    setDismissedIssues(null);
     // Compile diagnostics describe the old source. Keep PDF/log artifacts, but retire markers.
     setCompileResult(r => r ? { ...r, errors: [] } : r);
     setPreviewMode(mode => mode === 'log' ? 'rich' : mode);
@@ -321,15 +328,40 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
-  // 草稿自动保存
+  // 草稿自动保存：整组草稿标签各存一份。写失败必须让人看见——静默 catch 等于静默丢稿
+  const draftsWarnedRef = useRef(false);
   useEffect(() => {
-    if (!activeTab || activeTab.kind !== 'draft') return;
     const t = setTimeout(() => {
-      try { localStorage.setItem(LS_KEY, activeValue); } catch (e) { /* ignore */ }
-      setTabs(ts => ts.map(x => x.id === activeTab.id ? { ...x, saved: activeValue } : x));
+      const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ name: x.name, text: x.doc.getValue() }));
+      try {
+        localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
+        draftsWarnedRef.current = false;
+        setTabs(ts => {
+          let changed = false;
+          const next = ts.map(x => {
+            if (x.kind !== 'draft' || !x.doc) return x;
+            const v = x.doc.getValue();
+            if (x.saved === v) return x;
+            // 只推进 saved，不动 dirty：● 仍表示「没落到磁盘文件」，关标签照旧要确认
+            changed = true;
+            return { ...x, saved: v };
+          });
+          return changed ? next : ts;
+        });
+      } catch (e) {
+        if (!draftsWarnedRef.current) { draftsWarnedRef.current = true; flash(tr(getLang(), 'app.draftSaveFailed')); }
+      }
     }, 800);
     return () => clearTimeout(t);
-  }, [activeValue, activeTab]);
+  }, [activeValue, tabs.length, flash]);
+
+  // 磁盘文件标签有未保存改动时拦住刷新/关页：草稿在浏览器里，文件内容不在
+  useEffect(() => {
+    if (!tabs.some(x => x.dirty && x.kind !== 'draft')) return;
+    const onUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, [tabs]);
 
   useEffect(() => { try { localStorage.setItem(LS_MODE, viewMode); } catch (e) { /* ignore */ } }, [viewMode]);
 
@@ -514,7 +546,10 @@ export default function App() {
     setHistoryError(recorded.ok ? '' : tr(getLang(), 'hist.storageError'));
     setHistoryTick(n => n + 1);
     if (t.kind === 'draft') {
-      try { localStorage.setItem(LS_KEY, t.doc ? t.doc.getValue() : ''); } catch (e) { /* ignore */ }
+      try {
+        const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ name: x.name, text: x.doc.getValue() }));
+        localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
+      } catch (e) { flash(tr(getLang(), 'app.draftSaveFailed')); }
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
       flash(tr(getLang(), 'app.draftSaved'));
       return;
@@ -524,7 +559,11 @@ export default function App() {
       await fs.writeFileText(t.handle, t.doc.getValue());
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
       flash(tr(getLang(), 'app.saved', { name: t.name }));
-    } catch (e) { alert(tr(getLang(), 'app.saveFailed', { msg: e.message || e })); }
+    } catch (e) {
+      // 权限失效是最高频的一种（句柄跨会话/文件夹被移动）：给出口，别抛浏览器英文原文
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) alert(tr(getLang(), 'app.savePermission', { name: t.name }));
+      else alert(tr(getLang(), 'app.saveFailed', { msg: e.message || e }));
+    }
   }, [activeId, rootDir, flash]);
 
   // ---- 关闭标签 ----
@@ -648,7 +687,6 @@ export default function App() {
     const context = compileContextRef.current;
     const source = activeTab.doc.getValue();
     const tabId = activeTab.id;
-    setDismissedIssues(null);
     setCompileResult(r => r ? { ...r, errors: [] } : r);
     try {
       let ok, pdfBytes, log, errors, errText;
@@ -712,21 +750,37 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deferred, isMd]);
 
-  const diagnostics = useMemo(() => (isTexLike ? lintLaTeX(activeValue) : []), [activeValue, isTexLike, lang]);
+  // 静态检查吃滞后值 + 防抖：每键全量 lint 会把长文输入堵成卡顿
+  const [lintValue, setLintValue] = useState(deferred);
+  useEffect(() => {
+    const timer = setTimeout(() => setLintValue(deferred), 250);
+    return () => clearTimeout(timer);
+  }, [deferred]);
+  const diagnostics = useMemo(() => (isTexLike ? lintLaTeX(lintValue) : []), [lintValue, isTexLike, lang]);
   const allIssues = collectIssues(
     diagnostics,
     deferred === activeValue ? (latexResult?.warnings || []) : [],
     currentCompileErrors(compileResult, activeTab?.id, activeValue)
   );
-  const dismissed = dismissedIssues?.tabId === activeTab?.id
-    && dismissedIssues.source === activeValue && dismissedIssues.result === compileResult
-    ? dismissedIssues.ids : [];
-  const visibleIssues = allIssues.filter(d => !dismissed.includes(d.id));
+  // 忽略按「问题说了什么 + 那一行的内容」记忆：改别处不该让刚清空的噪音整批复活
+  const fpOf = useCallback(d => issueFingerprint(d, line => {
+    try { return activeTab?.doc?.getLine(line) || ''; } catch (e) { return ''; }
+  }), [activeTab?.doc]);
+  const dismissed = dismissedIssues?.tabId === activeTab?.id ? dismissedIssues.fps : [];
+  const visibleIssues = allIssues.filter(d => !dismissed.includes(fpOf(d)));
   const editorIssues = visibleIssues.filter(d => d.src !== 'render');
   const dismissIssues = ids => setDismissedIssues({
-    tabId: activeTab?.id, source: activeValue, result: compileResult,
-    ids: [...dismissed, ...ids]
+    tabId: activeTab?.id,
+    fps: [...new Set([...dismissed, ...visibleIssues.filter(d => ids.includes(d.id)).map(fpOf)])]
   });
+  const hiddenCount = allIssues.length - visibleIssues.length;
+  // 未改动过的示例论文：状态栏给一枚标记，免得用户以为这是自己的稿子
+  const isPristineDemo = activeTab?.kind === 'draft' && !activeTab.dirty && activeValue === samples.demo;
+  const engineStatusText = useMemo(() => {
+    if (engine !== 'builtin') return engine;
+    const key = { idle: 'app.engineIdle', loading: 'app.engineLoading', warming: 'app.engineWarming', busy: 'app.engineBusy', error: 'app.engineError', ready: 'app.engineReady' }[builtinStatus];
+    return t('app.builtinEngine') + (key ? ' · ' + t(key) : '');
+  }, [engine, builtinStatus, t]);
 
   const outlineItems = isTexLike ? (latexResult ? latexResult.headings : [])
     : isMd ? (mdResult ? mdResult.headings : []) : [];
@@ -755,8 +809,20 @@ export default function App() {
   // ---- 快捷键 ----
   useEffect(() => {
     const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveActive(); }
-      if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === 's') { e.preventDefault(); saveActive(); }
+      if (mod && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
+      // 编译与导出走键盘：写作时不该为了出稿去菜单里找
+      if (mod && e.key === 'Enter') { e.preventDefault(); doCompile(); }
+      if (mod && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault(); // 不接管就会把整个应用外壳打印出去，而矢量 PDF 唯一路径正是打印
+        if (compileResult?.ok && compileResult.tabId === activeTab?.id) window.open(compileResult.pdfUrl, '_blank');
+        else exportPdfPrint();
+      }
+      if (mod && (e.key === '1' || e.key === '2' || e.key === '3')) {
+        e.preventDefault();
+        setViewMode(e.key === '1' ? 'edit' : e.key === '2' ? 'split' : 'preview');
+      }
       const editorFocused = e.target.closest?.('.CodeMirror');
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tB', null, { markdown: isMd }); }
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'i' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tI', null, { markdown: isMd }); }
@@ -986,20 +1052,23 @@ export default function App() {
       <main id="layout" data-mode={viewMode} style={{ '--sidebar-w': layoutSize.sidebar + 'px', '--g-edit': String(layoutSize.split), '--g-prev': String(100 - layoutSize.split) }}>
         <div id="sidebar">
           <div className="side-tabs">
-            <button className={sideTab === 'files' ? 'on' : ''} title={t('side.files')} onClick={() => setSideTab('files')} disabled={!rootDir && !restorePrompt}>{lang === 'zh' ? '文' : '▤'}</button>
+            <button className={sideTab === 'files' ? 'on' : ''} title={t('side.files')} onClick={() => setSideTab('files')}>{lang === 'zh' ? '文' : '▤'}</button>
             <button className={sideTab === 'outline' ? 'on' : ''} title={t('side.outline')} onClick={() => setSideTab('outline')}>{lang === 'zh' ? '纲' : '≣'}</button>
             <button className={sideTab === 'issues' ? 'on' : ''} title={t('side.issues')} onClick={() => setSideTab('issues')}>{'⚠\uFE0E'}{issueCount ? <em>{issueCount}</em> : null}</button>
             <button title={t('m.history')} aria-label={t('m.history')} disabled={!activeTab?.doc} onClick={() => setFileDialog('history')}>↶</button>
           </div>
           <div className="side-body">
-            {sideTab === 'files' && (
-              restorePrompt && !rootDir ? (
-                <div className="side-pad">
-                  <button className="btn sm" onClick={restoreFolder}>{t('side.restore', { name: restorePrompt.name })}</button>
-                </div>
-              ) : rootDir ? <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey} />
-                : <div className="side-pad hint">{t('side.noFolder1')}<br />{t('side.noFolder2')}</div>
-            )}
+            {sideTab === 'files' && (rootDir ? (
+              <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey} />
+            ) : (
+              <div className="side-pad side-empty">
+                {restorePrompt && <button className="btn sm" onClick={restoreFolder}>{t('side.restore', { name: restorePrompt.name })}</button>}
+                <button className="btn primary sm" onClick={openFolder}>{t('side.openFolder')}</button>
+                <button className="btn sm" onClick={newFile}>{t('side.newDraft')}</button>
+                <p className="hint">{t('side.noFolder1')}</p>
+                <p className="hint">{t('side.noFolder2')}</p>
+              </div>
+            ))}
             {sideTab === 'outline' && <OutlinePanel kind={outlineKind} headings={outlineItems} onJump={jumpToHeading} />}
             {sideTab === 'issues' && (
               <DiagnosticsPanel
@@ -1122,15 +1191,20 @@ export default function App() {
 
       <footer id="statusbar">
         <span>{activeTab ? (activeTab.kind === 'draft' ? t('app.draftPath') : (activeTab.path || activeTab.name)) : ''}</span>
+        {isPristineDemo && <span className="st-chip" title={t('st.sampleTip')}>{t('st.sample')}</span>}
         <span className="sep">·</span>
         <span>{wordText}</span>
         <span className="sep">·</span>
         <span>{isTexLike || isMd ? lastRenderMs.toFixed(0) + ' ms' : t('st.textMode')}</span>
         <span className="sep">·</span>
         <span className={'st-warn' + (issueCount ? ' has' : '')} onClick={() => setSideTab('issues')}>
-          {issueCount ? t('st.issues', { n: issueCount }) : dismissed.length ? t('diag.hidden', { n: allIssues.length }) : t('st.noIssues')}
+          {issueCount ? t('st.issues', { n: issueCount }) : hiddenCount ? t('diag.hidden', { n: hiddenCount }) : t('st.noIssues')}
         </span>
         <span className="grow"></span>
+        {/* 引擎与预热状态原来只藏在下拉框的 option 文本里，这里常驻一份 */}
+        <span className={'st-engine' + (engine === 'builtin' && builtinStatus === 'error' ? ' bad' : '')} title={t('st.engineTip')}>
+          {t('st.engine')} {engineStatusText}
+        </span>
         {flashMsg && <span className="st-flash">{flashMsg}</span>}
         <span className="hint">{t('st.hint')}</span>
       </footer>
@@ -1148,6 +1222,7 @@ export default function App() {
         setActiveChannelId={setActiveChannelId}
         onOpenSettings={() => setSettingsOpen(true)}
         buildContext={buildContext}
+        onBeforeApply={() => snapshot(tr(getLang(), 'hist.beforeAi'), 'manual', true)}
         messages={chatMessages}
         setMessages={setChatMessages}
       />
@@ -1204,6 +1279,10 @@ export default function App() {
               <table className="keys-table">
                 <tbody>
                   {[['Ctrl+S', t('help.k1')],
+                    ['Ctrl+Alt+N', t('help.k6')],
+                    ['Ctrl+Enter', t('help.k7')],
+                    ['Ctrl+P', t('help.k8')],
+                    ['Ctrl+1 / 2 / 3', t('help.k9')],
                     ['Ctrl+B / Ctrl+I', t('help.k2')],
                     ['Ctrl+Z / Ctrl+Shift+Z', t('help.k3')],
                     ['Ctrl+A', t('help.k4')],
@@ -1254,9 +1333,19 @@ export default function App() {
   );
 }
 
-function tabsInitValue() {
-  try { const s = localStorage.getItem(LS_KEY); if (s && s.trim()) return s; } catch (e) { /* ignore */ }
-  return samples.demo;
+/* 恢复草稿：优先读新的多草稿键，退回旧版单篇键，都没有则给示例论文。
+ * 上限 12 篇、单篇按 localStorage 现实尺寸约束，避免整组写入必然失败。 */
+function readDrafts() {
+  const nameOf = n => String(n || '').slice(0, 80);
+  try {
+    const arr = JSON.parse(localStorage.getItem(LS_DRAFTS) || 'null');
+    if (Array.isArray(arr)) {
+      const list = arr.filter(d => d && typeof d.text === 'string').slice(0, 12).map(d => ({ name: nameOf(d.name), text: d.text }));
+      if (list.length) return list;
+    }
+  } catch (e) { /* 落盘格式坏了，退回旧键 */ }
+  try { const s = localStorage.getItem(LS_KEY); if (s && s.trim()) return [{ name: '', text: s }]; } catch (e) { /* ignore */ }
+  return [{ name: '', text: samples.demo }];
 }
 function rangeText(cm, a, b) {
   const lines = [];

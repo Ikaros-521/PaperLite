@@ -217,6 +217,8 @@ export default function PreviewPane({
 
   const statusKey = { loading: 'app.engineLoading', warming: 'app.engineWarming', error: 'app.engineError' }[builtinStatus];
   const builtinLabel = t('app.builtinEngine') + (statusKey ? ' · ' + t(statusKey) : '');
+  // 网页预览是子集近似：不点明，用户会拿它当最终排版（差异只写在 README 里没人看）
+  const [noteOpen, setNoteOpen] = useState(false);
 
   return (
     <section id="previewPane">
@@ -238,6 +240,9 @@ export default function PreviewPane({
           </span>
         ) : null}
 
+        <button className={'btn sm pb-note' + (noteOpen ? ' on' : '')} title={t('prev.approxTip')}
+          aria-expanded={noteOpen} onClick={() => setNoteOpen(o => !o)}>{t('prev.approx')}</button>
+
         <span className="pb-spacer"></span>
         <button className="btn sm" title={t('prev.settingsTip')} onClick={onOpenSettings}>{'⚙︎'}</button>
         <button className={'btn sm' + (onTogglePanel ? '' : '')} title={t('prev.styleTip')} onClick={onTogglePanel}>{t('prev.style')}</button>
@@ -248,6 +253,10 @@ export default function PreviewPane({
           <button className="btn sm" onClick={() => onZoom(0.1)}>＋</button>
         </span>
       </div>
+      {noteOpen && <div className="preview-note" role="note">
+        <span>{t('prev.approxNote')}</span>
+        <button className="btn sm" aria-label={t('prev.approxClose')} onClick={() => setNoteOpen(false)}>✕</button>
+      </div>}
       <div id="previewScroll" ref={scrollRef} onScroll={handleScroll}>
         <div id="preview" onClick={handleClick}>
           <div

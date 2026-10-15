@@ -21,13 +21,21 @@ export function lintLaTeX(src) {
     return res;
   }).join('\n');
   const cleanLines = clean.split('\n');
+  // 行首偏移表 + 二分定位：命中处求行号从 O(n) 降到 O(log n)，长文不再二次方
+  const lineStarts = [0];
+  for (let i = 0; i < clean.length; i++) if (clean.charCodeAt(i) === 10) lineStarts.push(i + 1);
+  const lineAt = (off) => {
+    let lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid] <= off) lo = mid; else hi = mid - 1; }
+    return lo;
+  };
 
   // 1) 环境配对
   const stack = [];
   const envRe = /\\(begin|end)\s*\{([^}]+)\}/g;
   let m;
   while ((m = envRe.exec(clean))) {
-    const line = clean.slice(0, m.index).split('\n').length - 1;
+    const line = lineAt(m.index);
     if (m[1] === 'begin') stack.push({ name: m[2], line });
     else {
       const top = stack[stack.length - 1];
@@ -84,13 +92,13 @@ export function lintLaTeX(src) {
   while ((m = refRe.exec(clean))) {
     const key = m[2].trim();
     if (!labels.has(key)) {
-      const line = clean.slice(0, m.index).split('\n').length - 1;
+      const line = lineAt(m.index);
       out.push({ line, msg: t('lint.badRef', { key }), severity: 'warn', kind: 'ref' });
     }
   }
   let citeRe = /\\cite[pt]?\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/g;
   while ((m = citeRe.exec(clean))) {
-    const line = clean.slice(0, m.index).split('\n').length - 1;
+    const line = lineAt(m.index);
     m[1].split(',').map(s => s.trim()).filter(Boolean).forEach(key => {
       if (!bibs.has(key)) out.push({ line, msg: t('lint.badCite', { key }), severity: 'warn', kind: 'cite' });
     });
@@ -104,7 +112,7 @@ export function lintLaTeX(src) {
     if (m[1]) inList++;
     else if (m[2]) inList = Math.max(0, inList - 1);
     else if (inList === 0) {
-      const line = clean.slice(0, m.index).split('\n').length - 1;
+      const line = lineAt(m.index);
       out.push({ line, msg: t('lint.itemOutside'), severity: 'warn', kind: 'item' });
     }
   }

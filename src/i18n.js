@@ -93,7 +93,7 @@ export const DICT = {
     'file.packaging': '正在打包…',
     'file.fontSize': '编辑器字号',
     'file.lineWrapping': '自动换行',
-    'file.compiler': 'TeX 编译器',
+    'file.engine': 'TeX 引擎',
     'file.theme': '界面皮肤',
     'file.themeHint': '只换界面配色；论文纸面与导出 PDF 始终是黑字白页。',
     'theme.ink': '墨纸书斋',
@@ -153,7 +153,7 @@ export const DICT = {
     'diag.srcRender': '渲染', 'diag.srcCompile': '编译',
     'diag.srcLint': '语法', 'diag.clear': '清空提示', 'diag.dismiss': '忽略此提示',
     'diag.hidden': '已隐藏 {n} 条提示', 'diag.restore': '恢复显示',
-    'diag.dismissTip': '仅隐藏当前提示；编辑或重新编译后会再次检查。编译报错在编辑后失效。',
+    'diag.dismissTip': '按「问题 + 所在那一行」记住忽略：改别处不会让它复活，改了这一行或点「恢复显示」会重新检查。',
     // ---- 文件树 ----
     'ft.readFailed': '（读取失败：{msg}）', 'ft.loading': '加载中…',
     'ft.newFilePrompt': '新建文件名（含扩展名）：', 'ft.newDirPrompt': '新建文件夹名：',
@@ -295,7 +295,7 @@ export const DICT = {
     'help.about': '关于 PaperLite', 'help.slogan': '本地优先的论文速写编辑器 · LaTeX 实时预览',
     'help.a1': '纯浏览器渲染：LaTeX → HTML + KaTeX 数学 + TikZ/Mermaid 流程图',
     'help.a2': '本地文件夹工作区：文件树 · 多标签 · Markdown/代码编辑',
-    'help.a3': 'TeX 真实编译（pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX，需本机引擎 + server.mjs）',
+    'help.a3': '真实编译出 PDF：内置 XeLaTeX（浏览器 wasm，免安装，静态托管可用）；或本机 pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX（需安装 TeX 并通过 node server.mjs 访问）',
     'help.a4': '多渠道 LLM：语法修复 · 对话改写 · 文档检索（OpenAI 兼容协议）',
     'help.repo': 'GitHub 仓库：github.com/Ikaros-521/PaperLite',
     // ---- AI 提示词（发给模型，随语言切换）----
@@ -382,9 +382,20 @@ export const DICT = {
     'tour.help.title': '帮助菜单：教程随时能重看',
     'tour.help.body': '「使用教程…」就是你现在看到的这套分步指引，任何时候点它都会从第 1 步重新开始；「快捷键」列出常用组合键；「关于」写明技术栈和 GitHub 仓库。顶栏最右侧的「中 / EN」也会把所有教程文案一起切换成英文。',
     'tour.statusbar.title': '状态栏：字数和问题一眼扫到',
-    'tour.statusbar.body': '从左到右依次是：当前文件路径（草稿显示浏览器内路径）、字数统计（中文按字、英文按词）、上一帧实时渲染耗时、问题计数。点问题计数会直接跳到左侧「问题」页签；全部忽略后这里会显示被隐藏条数。保存、编译、恢复版本等操作结果会在右侧短暂闪一下，不打断写作。',
+    'tour.statusbar.body': '从左到右依次是：当前文件路径（草稿显示浏览器内路径，未改动的内置示例会标一枚「示例论文」）、字数统计（中文按字、英文按词）、上一帧实时渲染耗时、问题计数。点问题计数会直接跳到左侧「问题」页签；全部忽略后这里会显示被隐藏条数。右侧常驻当前编译引擎与预热状态（与「编译」按钮同一份），保存、编译、恢复版本等操作结果会在它左边短暂闪一下，不打断写作。',
     'tour.end.title': '就这些，开始写吧',
-    'tour.end.body': '试试「文件 → 从模板新建 → 中文示例论文」，或「文件 → 打开文件夹…」接着改自己的稿子。教程随时能在「帮助 → 使用教程…」重看。'
+    'tour.end.body': '试试「文件 → 从模板新建 → 中文示例论文」，或「文件 → 打开文件夹…」接着改自己的稿子。教程随时能在「帮助 → 使用教程…」重看。',
+    'app.draftSaveFailed': '浏览器存储已满，草稿没能自动保存：请先用「文件 → 下载 → 源码 ZIP」备份，或清理旧版本历史。',
+    'app.savePermission': '保存「{name}」失败：浏览器已经失去这个文件夹的读写权限。请点顶栏「打开文件夹」重新授权后再按 Ctrl+S——内容还在标签里，没有丢。',
+    'app.engineIdle': '待预热', 'app.engineBusy': '编译中', 'app.engineReady': '已就绪',
+    'st.engine': '引擎', 'st.engineTip': '当前编译引擎与预热状态；点预览条的「编译」或按 Ctrl+Enter',
+    'st.sample': '示例论文', 'st.sampleTip': '这是内置示例，还没有保存。可以直接改，也可以用「文件 → 从模板新建」换一篇，或「文件 → 打开文件夹」改自己的稿子。',
+    'side.openFolder': '📂 打开文件夹', 'side.newDraft': '＋ 不打开文件夹，先写一篇',
+    'help.k6': '新建文件（不依赖文件夹）', 'help.k7': '编译当前文档', 'help.k8': '导出 PDF（已编译则打开 PDF）', 'help.k9': '视图：仅编辑 / 分栏 / 仅预览',
+    'hist.beforeAi': 'AI 替换前', 'hist.dropped': '版本历史已达上限，自动清理了 {n} 个最旧版本',
+    'prev.approx': '近似排版', 'prev.approxTip': '网页预览按 LaTeX 常用子集近似渲染，与真实编译的 PDF 会有差异。点击查看差异清单。',
+    'prev.approxNote': '网页预览按 LaTeX 常用子集近似渲染：双栏分页、bibtex 文献、自定义宏包与复杂 TikZ 一律以「编译」后的 PDF 为准。投稿前请务必先编译一次。',
+    'prev.approxClose': '收起说明'
   },
 
   en: {
@@ -457,7 +468,7 @@ export const DICT = {
     'file.packaging': 'Packaging…',
     'file.fontSize': 'Editor font size',
     'file.lineWrapping': 'Wrap lines',
-    'file.compiler': 'TeX compiler',
+    'file.engine': 'TeX engine',
     'file.theme': 'Interface skin',
     'file.themeHint': 'Chrome only — the paper and the exported PDF stay black-on-white.',
     'theme.ink': 'Ivory Study',
@@ -514,7 +525,7 @@ export const DICT = {
     'diag.srcRender': 'render', 'diag.srcCompile': 'compile',
     'diag.srcLint': 'syntax', 'diag.clear': 'Clear', 'diag.dismiss': 'Dismiss issue',
     'diag.hidden': '{n} issue(s) hidden', 'diag.restore': 'Restore',
-    'diag.dismissTip': 'Hides current issues; edits or compilation check again. Compile errors expire on edit.',
+    'diag.dismissTip': 'Dismissals are remembered per issue and per source line: editing elsewhere will not bring them back, editing that line or hitting Restore will.',
     'ft.readFailed': '(read failed: {msg})', 'ft.loading': 'Loading…',
     'ft.newFilePrompt': 'New file name (with extension):', 'ft.newDirPrompt': 'New folder name:',
     'ft.createFailed': 'Create failed: {msg}', 'ft.renamePrompt': 'Rename to:', 'ft.renameFailed': 'Rename failed: {msg}',
@@ -645,7 +656,7 @@ export const DICT = {
     'help.about': 'About PaperLite', 'help.slogan': 'Local-first paper sketch editor · live LaTeX preview',
     'help.a1': 'Pure browser rendering: LaTeX → HTML + KaTeX math + TikZ/Mermaid diagrams',
     'help.a2': 'Local folder workspace: file tree · tabs · Markdown/code editing',
-    'help.a3': 'Real TeX compile (pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX — local engine + server.mjs)',
+    'help.a3': 'Real PDF compilation: built-in XeLaTeX (wasm in the browser, nothing to install, works on static hosting) or local pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX (needs TeX installed and served through node server.mjs)',
     'help.a4': 'Multi-channel LLM: syntax fix · rewrite · doc retrieval (OpenAI-compatible)',
     'help.repo': 'GitHub repository: github.com/Ikaros-521/PaperLite',
     'ai.system': 'You are a paper-writing and LaTeX/Markdown typesetting assistant. Answer in English, concisely and structurally, using Markdown.' +
@@ -728,9 +739,20 @@ export const DICT = {
     'tour.help.title': 'Help menu: the tour is always one click away',
     'tour.help.body': '"Take the guided tour…" is this very walkthrough and always restarts at step 1; "Keyboard shortcuts" lists the key combos; "About" shows the stack and the GitHub repository. The 中 / EN switch at the far right of the menu bar also translates every tour string.',
     'tour.statusbar.title': 'Status bar: word count and issues at a glance',
-    'tour.statusbar.body': 'Left to right: current file path (drafts show the in-browser path), word count (CJK counts characters, Latin counts words), how long the last live render took, and the issue counter. Click the counter to jump to the sidebar Issues tab; when everything is dismissed it reports the hidden count instead. Save, compile and restore results flash briefly on the right without interrupting your typing.',
+    'tour.statusbar.body': 'Left to right: current file path (drafts show the in-browser path, and an untouched built-in sample gets a "Sample paper" badge), word count (CJK counts characters, Latin counts words), how long the last live render took, and the issue counter. Click the counter to jump to the sidebar Issues tab; when everything is dismissed it reports the hidden count instead. The current compile engine and its warm-up state sit permanently on the right (the same source as the Compile button); save, compile and restore results flash just left of it, without interrupting your typing.',
     'tour.end.title': 'That is it — go and write',
-    'tour.end.body': 'Try File → New from template → Demo paper, or open your own folder and keep editing. The tour is always available again under Help → Take the guided tour.'
+    'tour.end.body': 'Try File → New from template → Demo paper, or open your own folder and keep editing. The tour is always available again under Help → Take the guided tour.',
+    'app.draftSaveFailed': 'Browser storage is full, so drafts could not be saved automatically. Back them up with File → Download → Source ZIP, or clear old version history.',
+    'app.savePermission': 'Could not save "{name}": the browser lost read/write permission for this folder. Grant it again from the Open folder button in the top bar, then press Ctrl+S — the text is still in the tab, nothing was lost.',
+    'app.engineIdle': 'idle', 'app.engineBusy': 'compiling', 'app.engineReady': 'ready',
+    'st.engine': 'Engine', 'st.engineTip': 'Current compile engine and warm-up state. Use Compile in the preview bar or press Ctrl+Enter.',
+    'st.sample': 'Sample paper', 'st.sampleTip': 'This is the built-in sample and is not saved yet. Edit it directly, pick another under File → New from template, or open your own folder.',
+    'side.openFolder': '📂 Open folder', 'side.newDraft': '＋ Write a draft without a folder',
+    'help.k6': 'New file (no folder needed)', 'help.k7': 'Compile current document', 'help.k8': 'Export PDF (opens the compiled PDF when ready)', 'help.k9': 'View: editor / split / preview',
+    'hist.beforeAi': 'Before AI replace', 'hist.dropped': 'Version history hit its limit and dropped {n} oldest versions',
+    'prev.approx': 'Approximate', 'prev.approxTip': 'The web preview renders a LaTeX subset and differs from the compiled PDF. Click for the differences.',
+    'prev.approxNote': 'The web preview approximates a LaTeX subset: two-column pagination, bibtex references, custom packages and complex TikZ all follow the compiled PDF. Compile once before you submit.',
+    'prev.approxClose': 'Dismiss'
   }
 };
 

@@ -1,6 +1,7 @@
 const HISTORY_KEY = 'paperlite.history.v1';
 export const HISTORY_LIMITS = Object.freeze({ perFile: 20, total: 200, characters: 1000000 });
 let cachedRaw, cachedStore;
+let lastDropped = 0;
 
 function historyStore() {
   try {
@@ -27,10 +28,14 @@ function historyStore() {
 function persistHistory(input, protectedIds = []) {
   const protect = new Set(protectedIds);
   const all = Object.create(null);
+  let capped = 0;
   for (const [key, entries] of Object.entries(input)) {
     const sorted = [...entries].sort((a, b) => b.date - a.date);
     const kept = sorted.filter(v => protect.has(v.id));
-    for (const v of sorted) if (!protect.has(v.id) && kept.length < HISTORY_LIMITS.perFile) kept.push(v);
+    for (const v of sorted) {
+      if (protect.has(v.id)) continue;
+      if (kept.length < HISTORY_LIMITS.perFile) kept.push(v); else capped++;
+    }
     if (kept.length) all[key] = kept.sort((a, b) => b.date - a.date);
   }
   let count = Object.values(all).reduce((n, list) => n + list.length, 0);
@@ -54,6 +59,7 @@ function persistHistory(input, protectedIds = []) {
   const write = raw => {
     localStorage.setItem(HISTORY_KEY, raw);
     cachedRaw = raw; cachedStore = all;
+    lastDropped = dropped.size + capped;
   };
   try { write(materialize()); return true; }
   catch {
@@ -73,15 +79,18 @@ export function historyUsage(key) {
     files: Object.keys(all).length, fileVersions: (all[key] || []).length };
 }
 export function recordVersion(key, text, { label = '', reason = 'auto', force = false, protectIds = [] } = {}) {
+  lastDropped = 0;
   if (typeof text !== 'string' || text.length > HISTORY_LIMITS.characters) return { ok: false };
   const store = historyStore(), entries = store[key] || [];
   if (!force && !label.trim() && entries[0]?.text === text) {
     const lists = Object.values(store);
     const oversized = (cachedRaw || '').length > HISTORY_LIMITS.characters || lists.some(list => list.length > HISTORY_LIMITS.perFile) || lists.reduce((n, list) => n + list.length, 0) > HISTORY_LIMITS.total;
-    return { ok: oversized ? persistHistory(store, [entries[0].id, ...protectIds]) : true, version: entries[0] };
+    const ok = oversized ? persistHistory(store, [entries[0].id, ...protectIds]) : true;
+    return { ok, version: entries[0], dropped: lastDropped };
   }
   const version = { id: Date.now() + '-' + Math.random().toString(36).slice(2), date: Date.now(), text, label: label.trim().slice(0, 100), reason };
-  return { ok: persistHistory({ ...store, [key]: [version, ...entries] }, [version.id, ...protectIds]), version };
+  const ok = persistHistory({ ...store, [key]: [version, ...entries] }, [version.id, ...protectIds]);
+  return { ok, version, dropped: lastDropped };
 }
 export function renameVersion(key, id, label) {
   const all = historyStore();

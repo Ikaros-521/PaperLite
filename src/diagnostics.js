@@ -10,3 +10,10 @@ export function collectIssues(diagnostics = [], renderWarnings = [], compileErro
 export function currentCompileErrors(result, tabId, source) {
   return result?.tabId === tabId && result.source === source ? (result.errors || []) : [];
 }
+
+// Dismissals must survive unrelated typing: identify an issue by what it says about
+// its own source line, not by its position in the freshly rebuilt list.
+export function issueFingerprint(issue, lineTextOf) {
+  const src = issue.line == null ? '' : lineTextOf(issue.line);
+  return `${issue.src}|${issue.kind || ''}|${issue.msg}|${src}`;
+}

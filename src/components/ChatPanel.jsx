@@ -9,7 +9,7 @@ import * as ctx from '../context.js';
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -229,10 +229,13 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const applyBlock = (code, mode) => {
     const cm = buildContext.cm && buildContext.cm();
     if (!cm) return;
+    // 撤销栈一被冲掉就回不来了：整篇/整段替换前先存一份版本（取消则不留）
     if (mode === 'replaceDoc') {
       if (!window.confirm(t('chat.replaceDocConfirm'))) return;
+      if (onBeforeApply) onBeforeApply();
       cm.setValue(code);
     } else if (mode === 'replaceSel') {
+      if (onBeforeApply) onBeforeApply();
       if (!cm.getSelection()) { alert(t('chat.noSelInsert')); cm.replaceSelection(code); }
       else cm.replaceSelection(code);
     } else {
