@@ -88,16 +88,22 @@ export function lintLaTeX(src) {
   while ((m = labRe.exec(clean))) labels.add(m[1].trim());
   let bibRe = /\\bibitem\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g;
   while ((m = bibRe.exec(clean))) bibs.add(m[1].trim());
+  // 文档确实引用了外部文件（\input 子文件、\bibliography/.bib）时，符号表不在这篇里，
+  // 断言「引用不存在」只会把真问题淹掉；单文件文档照旧严格检查（走查 audit-15）
+  const pullsExternal = /\\(?:input|include|subfile|subfileinclude|import|subimport|bibliography|addbibresource)\s*[{[]/.test(clean);
+  const checkRef = !pullsExternal || labels.size > 0;
+  const checkCite = !pullsExternal || bibs.size > 0;
   let refRe = /\\(ref|eqref|autoref|cref|Cref)\{([^}]+)\}/g;
   while ((m = refRe.exec(clean))) {
     const key = m[2].trim();
-    if (!labels.has(key)) {
+    if (checkRef && !labels.has(key)) {
       const line = lineAt(m.index);
       out.push({ line, msg: t('lint.badRef', { key }), severity: 'warn', kind: 'ref' });
     }
   }
   let citeRe = /\\cite[pt]?\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/g;
   while ((m = citeRe.exec(clean))) {
+    if (!checkCite) continue;
     const line = lineAt(m.index);
     m[1].split(',').map(s => s.trim()).filter(Boolean).forEach(key => {
       if (!bibs.has(key)) out.push({ line, msg: t('lint.badCite', { key }), severity: 'warn', kind: 'cite' });

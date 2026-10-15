@@ -272,6 +272,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   return (
     <aside
       id="chatPanel"
+      role="complementary"
+      aria-label={t('m.aiAssistant')}
       ref={panelRef}
       className={'open' + (pos ? ' floating' : '')}
       style={{

@@ -16,15 +16,16 @@ export default function OutlinePanel({ kind, headings, onJump }) {
   return (
     <div className="outline">
       {items.map((h, i) => (
-        <div
+        <button
           key={i}
+          type="button"
           className={'ol-item ol-l' + h.level}
           onClick={() => onJump(h)}
           title={h.text}
         >
           {h.num ? <span className="ol-num">{h.num}</span> : null}
           <span className="ol-text">{h.text || t('outline.emptyHead')}</span>
-        </div>
+        </button>
       ))}
     </div>
   );

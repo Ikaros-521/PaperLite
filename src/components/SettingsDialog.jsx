@@ -113,7 +113,7 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
 
   return (
     <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={t('set.title')} onClick={e => e.stopPropagation()}>
         <div className="modal-h">
           {t('set.title')}
           <button className="btn sm" onClick={onClose}>✕</button>
