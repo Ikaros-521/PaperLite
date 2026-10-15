@@ -2,6 +2,7 @@
 import { renderLatex } from '../src/engines/latex.js';
 import { renderMarkdown, renderMarkdownFull } from '../src/engines/markdown.js';
 import { lintLaTeX } from '../src/engines/linter.js';
+import { collectIssues, currentCompileErrors } from '../src/diagnostics.js';
 import * as TIKZ from '../src/engines/tikz.js';
 import { samples } from '../src/engines/samples.js';
 
@@ -126,6 +127,22 @@ ok(ds.some(d => d.kind === 'math' && d.line === 3), '奇数 $ 警告在第 4 行
 ok(ds.some(d => d.kind === 'ref' && d.msg.includes('missing-label')), '未定义 label 引用');
 const good = lintLaTeX(samples.demo);
 ok(good.filter(d => d.kind === 'env' || d.kind === 'brace').length === 0, '示例论文环境/花括号零错误: ' + JSON.stringify(good.slice(0, 3)));
+ok(lintLaTeX('text % { $ \\begin{itemize}').length === 0, '注释中的括号、公式和环境不误报');
+ok(lintLaTeX('text \\% {').some(d => d.kind === 'brace'), '转义百分号后仍检查真实语法');
+ok(lintLaTeX('{fixed}').length === 0 && lintLaTeX('{broken').some(d => d.kind === 'brace'), '修改后重新检测，已修复的错误消失');
+
+console.log('== 诊断生命周期 ==');
+const compileError = { line: 0, msg: 'Undefined control sequence' };
+const compiled = { tabId: 1, source: '\\unknown', errors: [compileError] };
+ok(currentCompileErrors(compiled, 1, '\\unknown').length === 1, '当前文件与源码匹配时显示编译错误');
+ok(currentCompileErrors(compiled, 1, 'fixed').length === 0, '修改源码后不再显示旧编译错误');
+ok(currentCompileErrors(compiled, 2, '\\unknown').length === 0, '相同源码的另一文件不继承错误');
+ok(currentCompileErrors(null, 1, '').length === 0, '无编译结果时不显示编译错误');
+const issues = collectIssues([{ line: 1, msg: 'brace', severity: 'error' }], ['render'], [compileError]);
+ok(issues.map(d => d.src).join(',') === 'compile,lint,render', '统一收集全部诊断并保留来源');
+ok(new Set(issues.map(d => d.id)).size === 3, '每条提示独立标识，可逐条忽略');
+const remaining = issues.filter(d => d.id !== issues[0].id);
+ok(remaining.length === 2 && remaining.filter(d => d.line != null).length === 1, '忽略编译错误时计数和行内标记同步移除');
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

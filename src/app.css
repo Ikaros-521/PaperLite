@@ -207,6 +207,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   border-radius: 5px; cursor: pointer; font-size: 12.3px; line-height: 1.45;
 }
 .diag-item:hover { background: var(--accent-tint); }
+.diag-head { flex-wrap: wrap; }
+.diag-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.diag-note { padding: 4px 10px 8px; color: var(--ink-faint); font-size: 11.5px; }
+.diag-dismiss { flex: none; border: 0; background: transparent; color: var(--ink-faint); cursor: pointer; font-size: 16px; padding: 0 4px; }
+.diag-dismiss:hover, .diag-dismiss:focus-visible { color: var(--seal); background: var(--accent-tint); }
 .diag-item.error .diag-sev { color: var(--seal); }
 .diag-item.warn .diag-sev { color: #a16207; }
 .diag-sev { flex: none; }
@@ -238,6 +243,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   cursor: ew-resize; z-index: 5; touch-action: none;
 }
 .cp-resize:hover { background: rgba(31, 58, 95, .12); }
+/* 拖拽期间铺满视口的透明遮罩：指针越过预览 iframe 时事件仍归本页接收 */
+body.cp-dragging::before {
+  content: ''; position: fixed; inset: 0; z-index: 9999; cursor: inherit;
+}
 .cp-head-acts { margin-left: auto; display: flex; gap: 2px; }
 .cp-head-acts button, .ch-acts button {
   border: 0; background: none; cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; color: var(--ink-soft);

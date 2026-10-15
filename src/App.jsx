@@ -15,6 +15,7 @@ import SettingsDialog from './components/SettingsDialog.jsx';
 import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
+import { collectIssues, currentCompileErrors } from './diagnostics.js';
 import { preloadEngine, compileXeLaTeX, onEngineStatus } from './engines/xelatex.js';
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
@@ -99,6 +100,8 @@ export default function App() {
   const [builtinStatus, setBuiltinStatus] = useState('idle');
   const [compiling, setCompiling] = useState(false);
   const [compileResult, setCompileResult] = useState(null);
+  const [dismissedIssues, setDismissedIssues] = useState(null);
+  const compileContextRef = useRef(null);
   const [previewMode, setPreviewMode] = useState('rich');
   const pdfUrlRef = useRef(null);
 
@@ -121,6 +124,10 @@ export default function App() {
   const activeKind = activeTab ? activeTab.kind : 'tex';
   const isTexLike = activeKind === 'tex' || activeKind === 'draft';
   const isMd = activeKind === 'md';
+  // Invalidate pending compilation when switching documents, including switching back.
+  if (compileContextRef.current?.doc !== activeTab?.doc) {
+    compileContextRef.current = { doc: activeTab?.doc };
+  }
 
   const flash = useCallback((msg) => {
     setFlashMsg(msg);
@@ -244,6 +251,11 @@ export default function App() {
 
   // ---- 编辑器联动 ----
   const onDocChange = useCallback((doc, value) => {
+    compileContextRef.current = { doc };
+    setDismissedIssues(null);
+    // Compile diagnostics describe the old source. Keep PDF/log artifacts, but retire markers.
+    setCompileResult(r => r ? { ...r, errors: [] } : r);
+    setPreviewMode(mode => mode === 'log' ? 'rich' : mode);
     setActiveValue(value);
     setTabs(ts => ts.map(t => t.doc === doc ? { ...t, dirty: value !== t.saved } : t));
   }, []);
@@ -253,7 +265,7 @@ export default function App() {
       const v = activeTab.doc.getValue();
       setActiveValue(prev => (prev === v ? prev : v));
     } else setActiveValue('');
-    setCompileResult(null); setPreviewMode('rich');
+    setCompileResult(null); setDismissedIssues(null); setPreviewMode('rich');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
@@ -558,18 +570,22 @@ export default function App() {
       return;
     }
     setCompiling(true);
+    const context = compileContextRef.current;
+    const source = activeTab.doc.getValue();
+    const tabId = activeTab.id;
+    setDismissedIssues(null);
+    setCompileResult(r => r ? { ...r, errors: [] } : r);
     try {
-      if (pdfUrlRef.current) { URL.revokeObjectURL(pdfUrlRef.current); pdfUrlRef.current = null; }
       let ok, pdfBytes, log, errors, errText;
       if (engine === 'builtin') {
-        const r = await compileXeLaTeX(activeValue);
+        const r = await compileXeLaTeX(source);
         ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
         if (!ok) errText = (errors[0] && errors[0].msg) || t('app.compileFailed');
       } else {
         const r = await fetch('/api/compile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ engine, source: activeValue })
+          body: JSON.stringify({ engine, source })
         });
         const j = await r.json();
         ok = j.ok; log = j.log || ''; errors = j.errors || [];
@@ -579,16 +595,20 @@ export default function App() {
           for (let i = 0; i < bin.length; i++) pdfBytes[i] = bin.charCodeAt(i);
         } else errText = j.error || t('app.compileFailed');
       }
+      // A late response must never restore errors for edited or inactive documents.
+      if (compileContextRef.current !== context) return;
       if (ok) {
+        if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
         pdfUrlRef.current = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
-        setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log, errors, engine });
+        setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log, errors, engine, tabId, source });
         setPreviewMode('pdf');
         flash(t('app.compileOk', { engine: engine === 'builtin' ? t('app.builtinEngine') : engine }));
       } else {
-        setCompileResult({ ok: false, log, errors, error: errText, engine });
+        setCompileResult({ ok: false, log, errors, error: errText, engine, tabId, source });
         setPreviewMode('log');
       }
     } catch (e) {
+      if (compileContextRef.current !== context) return;
       alert(t('app.compileReqFailed', { msg: e.message || e }));
     } finally { setCompiling(false); }
   };
@@ -617,15 +637,21 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deferred, isMd]);
 
-  const diagnostics = useMemo(() => (isTexLike ? lintLaTeX(deferred) : []), [deferred, isTexLike]);
-
-  // 编辑器内联诊断：lint 问题 + TeX 编译错误（渲染警告无行号，不进 gutter）
-  const editorIssues = useMemo(() => {
-    const cs = compileResult && compileResult.errors
-      ? compileResult.errors.map(e => ({ line: e.line, msg: e.msg || tr(getLang(), 'app.compileErr'), severity: 'error', src: 'compile' }))
-      : [];
-    return diagnostics.concat(cs);
-  }, [diagnostics, compileResult]);
+  const diagnostics = useMemo(() => (isTexLike ? lintLaTeX(activeValue) : []), [activeValue, isTexLike, lang]);
+  const allIssues = collectIssues(
+    diagnostics,
+    deferred === activeValue ? (latexResult?.warnings || []) : [],
+    currentCompileErrors(compileResult, activeTab?.id, activeValue)
+  );
+  const dismissed = dismissedIssues?.tabId === activeTab?.id
+    && dismissedIssues.source === activeValue && dismissedIssues.result === compileResult
+    ? dismissedIssues.ids : [];
+  const visibleIssues = allIssues.filter(d => !dismissed.includes(d.id));
+  const editorIssues = visibleIssues.filter(d => d.src !== 'render');
+  const dismissIssues = ids => setDismissedIssues({
+    tabId: activeTab?.id, source: activeValue, result: compileResult,
+    ids: [...dismissed, ...ids]
+  });
 
   const outlineItems = isTexLike ? (latexResult ? latexResult.headings : [])
     : isMd ? (mdResult ? mdResult.headings : []) : [];
@@ -725,10 +751,7 @@ export default function App() {
     const channel = channels.filter(c => c.id === activeChannelId)[0];
     if (!channel) { setSettingsOpen(true); alert(tr(L, 'app.needChannel')); return; }
     if (!isTexLike) { flash(tr(L, 'app.onlyTexAiFix')); return; }
-    const issues = [
-      ...(compileResult && compileResult.errors ? compileResult.errors.map(e => ({ line: e.line, msg: e.msg })) : []),
-      ...diagnostics
-    ].slice(0, 20);
+    const issues = editorIssues.slice(0, 20);
     if (!issues.length) { flash(tr(L, 'app.noFixable')); return; }
     setAiBusy(true);
     setChatOpen(true); setPanelOpen(false);
@@ -776,8 +799,7 @@ export default function App() {
   const SNIP = makeSnippets(t);
   const stats = previewResult && previewResult.stats ? previewResult.stats : countOf(activeValue);
   const wordText = (stats.cjk ? t('st.chars', { n: stats.cjk }) : '') + (stats.cjk && stats.words - stats.cjk > 0 ? ' + ' : '') + (stats.words - stats.cjk > 0 ? t('st.words', { n: stats.words - stats.cjk }) : '');
-  const renderWarnCount = previewResult && previewResult.warnings ? previewResult.warnings.length : 0;
-  const issueCount = diagnostics.length + renderWarnCount + (compileResult && compileResult.errors ? compileResult.errors.length : 0);
+  const issueCount = visibleIssues.length;
   const hasEditor = !!activeTab?.doc;
   const channelCount = channels.length;
 
@@ -862,9 +884,11 @@ export default function App() {
             {sideTab === 'outline' && <OutlinePanel kind={outlineKind} headings={outlineItems} onJump={jumpToHeading} />}
             {sideTab === 'issues' && (
               <DiagnosticsPanel
-                diagnostics={diagnostics}
-                renderWarnings={previewResult && previewResult.warnings}
-                compileErrors={compileResult && compileResult.errors}
+                issues={visibleIssues}
+                dismissedCount={allIssues.length - visibleIssues.length}
+                onRestore={() => setDismissedIssues(null)}
+                onDismiss={d => dismissIssues([d.id])}
+                onClear={() => dismissIssues(visibleIssues.map(d => d.id))}
                 onJump={(d) => jumpToLine(d.line)}
                 onAiFix={aiFix} aiBusy={aiBusy}
               />
@@ -922,7 +946,7 @@ export default function App() {
               </div>
               <div id="previewScroll">
                 <div className="compile-log">
-                  {(compileResult.errors || []).map((e, i) => (
+                  {visibleIssues.filter(d => d.src === 'compile').map((e, i) => (
                     <div key={i} className="diag-item error" onClick={() => e.line != null && jumpToLine(e.line)}>
                       <span className="diag-sev">✖</span>
                       <span className="diag-msg">{e.msg}</span>
@@ -973,7 +997,7 @@ export default function App() {
         <span>{isTexLike || isMd ? lastRenderMs.toFixed(0) + ' ms' : t('st.textMode')}</span>
         <span className="sep">·</span>
         <span className={'st-warn' + (issueCount ? ' has' : '')} onClick={() => setSideTab('issues')}>
-          {issueCount ? t('st.issues', { n: issueCount }) : t('st.noIssues')}
+          {issueCount ? t('st.issues', { n: issueCount }) : dismissed.length ? t('diag.hidden', { n: allIssues.length }) : t('st.noIssues')}
         </span>
         <span className="grow"></span>
         {flashMsg && <span className="st-flash">{flashMsg}</span>}

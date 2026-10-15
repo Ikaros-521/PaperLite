@@ -20,6 +20,7 @@ export function lintLaTeX(src) {
     }
     return res;
   }).join('\n');
+  const cleanLines = clean.split('\n');
 
   // 1) 环境配对
   const stack = [];
@@ -44,7 +45,7 @@ export function lintLaTeX(src) {
   // 2) 花括号配对（全文净深度；负值即报错行）
   let depth = 0;
   for (let li = 0; li < lines.length; li++) {
-    const l = lines[li];
+    const l = cleanLines[li];
     let bs = 0;
     for (let i = 0; i < l.length; i++) {
       const c = l.charAt(i);
@@ -61,7 +62,7 @@ export function lintLaTeX(src) {
 
   // 3) 行内 $ 配对（逐行粗查，$$ 视为一对）
   for (let li = 0; li < lines.length; li++) {
-    const l = lines[li];
+    const l = cleanLines[li];
     let count = 0, bs = 0;
     for (let i = 0; i < l.length; i++) {
       const c = l.charAt(i);

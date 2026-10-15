@@ -85,7 +85,8 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     marksRef.current = [];
     cm.clearGutter && cm.clearGutter('pl-diag-gutter');
 
-    const issues = (diagnostics || []).filter(d => d.line != null && d.line < cm.lineCount());
+    const markedDoc = cm.getDoc();
+    const issues = (diagnostics || []).filter(d => Number.isInteger(d.line) && d.line >= 0 && d.line < cm.lineCount());
     if (!issues.length) return;
 
     const byLine = new Map();
@@ -123,6 +124,12 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
         ));
       } catch (e) { /* 跨行等边界忽略 */ }
     }
+    // Gutter markers belong to the Doc; clear that Doc even after swapDoc has run.
+    return () => {
+      marksRef.current.forEach(m => m.clear());
+      marksRef.current = [];
+      markedDoc.clearGutter('pl-diag-gutter');
+    };
   }, [diagnostics, doc]);
 
   return <div id="editorPane"><div id="editorHost" ref={hostRef} /></div>;

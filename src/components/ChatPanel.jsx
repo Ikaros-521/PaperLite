@@ -49,23 +49,12 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     const off = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
     setPos({ x: rect.left, y: rect.top });
     setHeight(rect.height);
-    const move = (ev) => {
+    beginPointerDrag(e, 'grabbing', (ev) => {
       const w = el.offsetWidth;
       const x = Math.min(Math.max(ev.clientX - off.dx, 60 - w), window.innerWidth - 60);
       const y = Math.min(Math.max(ev.clientY - off.dy, 8), window.innerHeight - 44);
       setPos({ x, y });
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'grabbing';
-    e.preventDefault();
+    });
   };
 
   // 左缘拉伸宽度：右缘保持不动（浮动态同时回移 left）
@@ -77,21 +66,12 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     const startW = rect.width;
     const startX = e.clientX;
     const fixedRight = rect.right;
-    const move = (ev) => {
-      const maxW = Math.min(720, window.innerWidth - 80);
+    beginPointerDrag(e, 'ew-resize', (ev) => {
+      const maxW = Math.min(960, window.innerWidth - 80);
       const w = Math.min(maxW, Math.max(300, startW + (startX - ev.clientX)));
       setWidth(w);
       if (pos) setPos(p => (p ? { ...p, x: fixedRight - w } : p));
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    document.body.style.userSelect = 'none';
-    e.preventDefault();
+    });
   };
 
   const send = async () => {
@@ -265,6 +245,32 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       </div>
     </aside>
   );
+}
+
+// 指针捕获 + 全屏遮罩接管指针：快速拖动甩离把手、越过预览 iframe 或移出窗口时事件不丢失
+function beginPointerDrag(e, cursor, onMove) {
+  const handle = e.currentTarget;
+  const pointerId = e.pointerId;
+  const move = (ev) => onMove(ev);
+  const finish = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', finish);
+    window.removeEventListener('pointercancel', finish);
+    window.removeEventListener('blur', finish);
+    if (handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    document.body.classList.remove('cp-dragging');
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', finish);
+  window.addEventListener('pointercancel', finish);
+  window.addEventListener('blur', finish);
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = cursor;
+  document.body.classList.add('cp-dragging');
+  try { handle.setPointerCapture(pointerId); } catch (err) { /* 捕获失败时由遮罩兜底 */ }
+  e.preventDefault();
 }
 
 // 极简 Markdown 渲染（聊天内）：**粗体** / `code` / 列表 / 换行
