@@ -37,6 +37,9 @@ jobs:
       - name: Smoke tests
         run: npm test
 
+      - name: XeLaTeX regression
+        run: npm run test:xelatex
+
       - name: Build
         run: npm run build
 

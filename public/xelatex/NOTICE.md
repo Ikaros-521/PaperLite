@@ -24,3 +24,9 @@
 `swiftlatexxetex.fmt` 及镜像文件由 PaperLite 维护者通过 TL2022 冻结存档
 （`ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final`）
 构建；升级需重新自举格式文件并回归验证中英文档。
+
+`repo/xetex/26/booktabs.sty` 同样取自上述 TL2022 冻结存档的
+`archive/booktabs.tar.xz`（booktabs 1.61803398，LPPL 许可），支持内置模板的三线表。
+Fandol 的六个 `.fontspec` 文件为 PaperLite 提供的空配置，仅结束输入，
+用于满足 fontspec 的可选配置探测，避免静态托管下的 404；字体和排版特性仍由
+ctex/xeCJK 设置，对应的 `.otf` 字体位于 `repo/xetex/47/`。

@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs",
+    "test:xelatex": "node test/xelatex.mjs"
   },
   "dependencies": {
     "codemirror": "^5.65.16",

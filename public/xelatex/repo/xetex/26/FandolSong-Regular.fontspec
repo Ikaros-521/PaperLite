@@ -1,0 +1,4 @@
+% PaperLite: Fandol needs no font-specific overrides.
+% The fontspec optional-config probe can resolve locally without an HTTP 404.
+% Font selection and features remain controlled by ctex/xeCJK.
+\endinput
