@@ -140,6 +140,8 @@ export default function Toolbar({
             <Mi icon="↷" label={t('m.redo')} hint="Ctrl+Shift+Z" close={close} onClick={editOp('redo')} />
             <MSep />
             <Mi icon="▦" label={t('m.selectAll')} hint="Ctrl+A" close={close} onClick={editOp('selectAll')} />
+            <Mi icon="⌕" label={t('m.find')} hint="Ctrl+F" close={close} onClick={editOp('find')} />
+            <Mi icon="⇄" label={t('m.replace')} hint="Ctrl+Shift+F" close={close} onClick={editOp('replace')} />
             <MSep />
             <Mi label={t('m.aiFix')} disabled={!channelCount} close={close} onClick={onAiFix} />
           </Mb>

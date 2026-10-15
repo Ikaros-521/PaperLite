@@ -3,6 +3,23 @@
 const engineMessageHandler = self.onmessage;
 self.onmessage = function (event) {
   const data = event.data || {};
+  if (data.cmd === 'writeproject') {
+    try {
+      for (const { name, bytes } of data.files || []) {
+        if (!name || name.startsWith('/') || /[\\\u0000]/.test(name)
+            || name.split('/').some(part => !part || part === '.' || part === '..')) {
+          throw new Error('Invalid project path: ' + name);
+        }
+        const target = WORKROOT + '/' + name;
+        FS.mkdirTree(target.slice(0, target.lastIndexOf('/')));
+        FS.writeFile(target, new Uint8Array(bytes));
+      }
+      self.postMessage({ cmd: data.cmd, result: 'ok' });
+    } catch (error) {
+      self.postMessage({ cmd: data.cmd, result: 'failed', error: String(error) });
+    }
+    return;
+  }
   if (data.cmd === 'gettexlivecache') {
     self.postMessage({ cmd: data.cmd, files: Object.keys(texlive200_cache) });
     return;

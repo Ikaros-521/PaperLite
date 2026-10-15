@@ -70,11 +70,32 @@
     "sha256": "cd19817b3db127424c727c9b29a9647daa22b4d8ff56a63c94cdbd2163a09690"
   },
   {
+    "name": "babel",
+    "revision": "65823",
+    "license": "lppl1.3",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/babel.tar.xz",
+    "sha256": "ce2fecba9c11a7e3f5e595475b840e9d5f3d895614b4973a24ca293fc3de7305"
+  },
+  {
+    "name": "babel-english",
+    "revision": "44495",
+    "license": "lppl1.3",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/babel-english.tar.xz",
+    "sha256": "9e22f853a3e4dc389742e9351a6b685527bce559e9dd68b86c4ae5a916614bbe"
+  },
+  {
     "name": "biblatex",
     "revision": "66405",
     "license": "lppl1.3",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/biblatex.tar.xz",
     "sha256": "8ce1f8b9083554daa01ef126efe54e0ee414aeae810e2e2552f4973cc0a673c2"
+  },
+  {
+    "name": "bibtex",
+    "revision": "64491",
+    "license": "knuth",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/bibtex.tar.xz",
+    "sha256": "3fc104a2ba0c7655e624ab5fadbc360889fbb20d8b38460726ebadd521acc873"
   },
   {
     "name": "bigfoot",
@@ -187,6 +208,13 @@
     "license": "lppl",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/environ.tar.xz",
     "sha256": "ab7c1c662b1425691b468a30e894a30d9a2898f470b2a7f4dd340aeb4ef21db7"
+  },
+  {
+    "name": "eso-pic",
+    "revision": "56658",
+    "license": "lppl1.2",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/eso-pic.tar.xz",
+    "sha256": "ce6bb406a15936c90be77f1e43112f6e08f6fa85d440475b2c380a8780f9c132"
   },
   {
     "name": "etex-pkg",
@@ -329,6 +357,20 @@
     "sha256": "d9ea778c6b4c5e44e005d75b69912d9fa3eb9775d81ddbcea9e73b0d875327af"
   },
   {
+    "name": "grfext",
+    "revision": "53024",
+    "license": "lppl1.3",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/grfext.tar.xz",
+    "sha256": "ede4e29c42ab74abef247d9ed1df9a8bb7b596d17ac75a573c6115d320701a54"
+  },
+  {
+    "name": "grffile",
+    "revision": "52756",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/grffile.tar.xz",
+    "sha256": "7b92ae5cb71b7dca848e33a8a18f2ec574c0efb6ee9955aa1edee8e92c673b81"
+  },
+  {
     "name": "hologo",
     "revision": "61719",
     "license": "lppl1.3c",
@@ -355,6 +397,13 @@
     "license": "lppl1.3",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/hyperref.tar.xz",
     "sha256": "37d4863a3f7c4f338da898838dfa68f75eaf30396cc85a4726e2d062c345d7ca"
+  },
+  {
+    "name": "hyphen-base",
+    "revision": "66418",
+    "license": "see package headers",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/hyphen-base.tar.xz",
+    "sha256": "65490a2b32ab125772671016c88aa39f710b2357d84dd8dd1a7623daa24bdf5a"
   },
   {
     "name": "ifoddpage",
@@ -390,6 +439,20 @@
     "license": "gpl",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/jknapltx.tar.xz",
     "sha256": "31ea5fc9b07272552899b0c753751961bf51327cf2109d1bae2ce53ccc60e638"
+  },
+  {
+    "name": "koma-script",
+    "revision": "64685",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/koma-script.tar.xz",
+    "sha256": "7f7b72ca1f7c5366b136d507d221db38bd879fbc4d843382a056c07cbb20577a"
+  },
+  {
+    "name": "kpathsea",
+    "revision": "65309",
+    "license": "lgpl2.1",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/kpathsea.tar.xz",
+    "sha256": "78d3c503e642f0cffa4efe8908a11f6c2433e2b190ad628120eadbe1116c1ae3"
   },
   {
     "name": "kvdefinekeys",
@@ -567,6 +630,13 @@
     "sha256": "11864b028a1901e7fe1083354b25918e305f45ebf846192e5aec4a04f01dea4b"
   },
   {
+    "name": "oberdiek",
+    "revision": "65521",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/oberdiek.tar.xz",
+    "sha256": "9b6b71a00f081adb3930c78d8401e536c435929323197f39ca7d5fb21c29e1a8"
+  },
+  {
     "name": "parskip",
     "revision": "58358",
     "license": "lppl1.3c",
@@ -579,6 +649,20 @@
     "license": "lppl1.3",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/pdfescape.tar.xz",
     "sha256": "2fb9398d868c954950fc4918199faca3f359e7b4c208163cba18846874163dd6"
+  },
+  {
+    "name": "pdflscape",
+    "revision": "64851",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/pdflscape.tar.xz",
+    "sha256": "242811acc8c83e31c59bffc8eaefc1e694fb1ba92b0c799a07ea89190dab1846"
+  },
+  {
+    "name": "pdfpages",
+    "revision": "65319",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/pdfpages.tar.xz",
+    "sha256": "1e9b5fbd363eeaf18aabe6d4cc2d1f9cc0c538c0b931aa8c9a14aa4ce483d3cf"
   },
   {
     "name": "pdftexcmds",
@@ -693,6 +777,13 @@
     "sha256": "4e80ed310f4c58ad03359be3d23e478eb5e4daa51067c3e0e14b8fa0d876c134"
   },
   {
+    "name": "svg",
+    "revision": "57010",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/svg.tar.xz",
+    "sha256": "94bbbf37738022753520a59902c482e5d0bba1f6c575e451ad3fb22ad66d59fb"
+  },
+  {
     "name": "svn-prov",
     "revision": "64967",
     "license": "lppl",
@@ -754,6 +845,13 @@
     "license": "lppl gpl",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/translator.tar.xz",
     "sha256": "8af2e0aa6e801feaf8d71b024383c06fa6de9e98e0df3c8f7b02c8d72fd16a32"
+  },
+  {
+    "name": "transparent",
+    "revision": "64852",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/transparent.tar.xz",
+    "sha256": "26b6d5818097916485cb6cce91a9d4970f59de3e2302c5d531e01f36fcb170ca"
   },
   {
     "name": "trimspaces",

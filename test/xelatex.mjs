@@ -58,11 +58,16 @@ async function loadEngine(name) {
   });
   context.onmessage({ data: { cmd: 'settexliveurl', url: 'https://paperlite.test/xelatex/repo/' } });
   context.onmessage({ data: { cmd: 'settexlivemanifest', files: manifest.files } });
-  return (cmd, payload = {}) => {
+  const send = (cmd, payload = {}) => {
     reply = undefined;
     context.onmessage({ data: { cmd, ...payload } });
     return reply;
   };
+  send.readFile = name => {
+    try { return context.FS.readFile(context.FS.cwd() + '/' + name, { encoding: 'utf8' }); }
+    catch { return ''; }
+  };
+  return send;
 }
 
 const tex = await loadEngine('swiftlatexxetex');
@@ -105,8 +110,54 @@ assert.ok(result.pdf, 'PDF produced');
 assert.equal(Buffer.from(result.pdf).subarray(0, 5).toString(), '%PDF-');
 console.log('XeLaTeX regression passed: Chinese fonts + booktabs → XDV → PDF');
 
+// A tiny, valid vector PDF authored here: no user assets or external fixtures.
+function vectorPdf() {
+  const stream = '0 0 1 RG 4 w 10 10 180 80 re S';
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`];
+  let body = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, i) => { offsets.push(body.length); body += `${i + 1} 0 obj\n${object}\nendobj\n`; });
+  const xref = body.length;
+  body += `xref\n0 5\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1)) body += String(offset).padStart(10, '0') + ' 00000 n \n';
+  return Buffer.from(body + `trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+}
+const graphicsFiles = [
+  { name: 'figures/中文.pdf', bytes: vectorPdf() },
+  { name: '1 (cropped) (figure).pdf', bytes: vectorPdf() },
+  { name: 'sections/正文.tex', bytes: Buffer.from('中文附件与 PDF 插图。') },
+  { name: '本地图像.png', bytes: fs.readFileSync(new URL('./fixtures/graphics.png', import.meta.url)) },
+  { name: '本地图像.jpg', bytes: fs.readFileSync(new URL('./fixtures/graphics.jpg', import.meta.url)) },
+  // Browser-converted SVG retains its path and is read through the bmp rule.
+  { name: 'figures/中文 (1).svg', bytes: fs.readFileSync(new URL('./fixtures/graphics.png', import.meta.url)) },
+];
+const bibliographyFiles = [{ name: 'refs.bib', bytes: Buffer.from('@article{paperlite2026, author={Example, Ada}, title={Vector figures}, journal={Test}, year={2026}}') }];
+
 const fixtures = {
   ...samples,
+  bibtexProject: String.raw`\documentclass{article}
+\begin{document}
+Test \cite{paperlite2026}.
+\bibliographystyle{alpha}
+\bibliography{refs}
+\end{document}`,
+  projectGraphics: String.raw`\documentclass{ctexart}
+\usepackage[english]{babel}
+\usepackage{graphicx,svg,unicode-math,pdfpages}
+\DeclareGraphicsRule{.svg}{bmp}{.xbb}{}
+\begin{document}
+\input{sections/正文.tex}
+Inline \verb|.bib| with a lazily loaded CJK monospace font.
+\includegraphics[width=0.6\textwidth]{figures/中文.pdf}
+\includegraphics[width=0.6\textwidth]{1 (cropped) (figure).pdf}
+\includegraphics[width=0.3\textwidth]{本地图像.png}
+\includegraphics[width=0.3\textwidth]{本地图像.jpg}
+\includegraphics[width=0.3\textwidth]{figures/中文 (1).svg}
+\includepdf{figures/中文.pdf}
+\end{document}`,
   elegantpaper: fs.readFileSync(new URL('./fixtures/elegantpaper-demo.tex', import.meta.url), 'utf8'),
   // Reproduce documents already saved before the template dependencies were
   // fixed; replacing samples alone does not update these browser documents.
@@ -185,25 +236,43 @@ const flags = process.argv.slice(2).filter(arg => arg.startsWith('--'));
 const fixturePaths = process.argv.slice(2).filter(arg => !arg.startsWith('--'));
 if (fixturePaths[0]) fixtures.userDocument = fs.readFileSync(fixturePaths[0], 'utf8');
 for (const [name, source] of Object.entries(fixtures)) {
+  const beforeUser = name === 'userDocument' ? { files: [...requests], tex: [...engineRequests.tex], pdf: [...engineRequests.pdf] } : null;
   tex('flushcache');
+  const projectFiles = name === 'userDocument' ? fs.readdirSync(path.dirname(fixturePaths[0]), { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name !== 'main.tex' && !entry.name.endsWith('.log'))
+    .map(entry => ({ name: entry.name, bytes: fs.readFileSync(path.join(path.dirname(fixturePaths[0]), entry.name)) }))
+    : name === 'projectGraphics' ? graphicsFiles : name === 'bibtexProject' ? bibliographyFiles : [];
+  assert.equal(tex('writeproject', { files: projectFiles }).result, 'ok');
   const prepared = prepareXeLaTeXSource(source);
   assert.equal(prepared.split('\n').length, source.split('\n').length, `${name}: error line numbers preserved`);
   assert.equal(prepareXeLaTeXSource(prepared), prepared, `${name}: preparation is idempotent`);
-  if (!name.startsWith('legacy')) assert.equal(prepared, source, `${name}: no compatibility changes needed`);
+  if (!name.startsWith('legacy') && !['userDocument', 'projectGraphics'].includes(name)) assert.equal(prepared, source, `${name}: no compatibility changes needed`);
   tex('writefile', { url: 'main.tex', src: prepared });
-  for (let pass = 1; pass <= 2; pass++) {
+  for (let pass = 1; pass <= (/\\bibliography\s*\{/.test(source) ? 3 : 2); pass++) {
     result = tex('compilelatex');
     assert.equal(result?.result, 'ok', `${name} pass ${pass}:\n${result?.log}`);
   }
+  if (name === 'bibtexProject') {
+    assert.match(tex.readFile('main.bbl'), /paperlite2026/, tex.readFile('main.blg'));
+    assert.doesNotMatch(result.log, /Citation .* undefined/, 'BibTeX citation labels resolved');
+  }
   pdf('flushcache');
+  assert.equal(pdf('writeproject', { files: projectFiles }).result, 'ok');
   pdf('writefile', { url: 'main.xdv', src: new Uint8Array(result.pdf) });
   result = pdf('compilepdf');
   assert.equal(result?.result, 'ok', `${name} PDF:\n${result?.log}`);
   assert.equal(Buffer.from(result.pdf).subarray(0, 5).toString(), '%PDF-');
   if (name === 'userDocument' && fixturePaths[1]) {
+    if (source.includes('greenwade93')) assert.match(tex.readFile('main.bbl'), /greenwade93/, 'Example bibliography produced');
     fs.writeFileSync(fixturePaths[1], Buffer.from(result.pdf));
   }
   console.log(`Template ${name}: XeTeX → PDF passed`);
+  if (beforeUser) {
+    requests.clear(); beforeUser.files.forEach(key => requests.add(key));
+    for (const engine of ['tex', 'pdf']) {
+      engineRequests[engine].clear(); beforeUser[engine].forEach(key => engineRequests[engine].add(key));
+    }
+  }
 }
 tex('flushcache');
 tex('writefile', { url: 'main.tex', src: String.raw`\documentclass{article}
@@ -271,7 +340,12 @@ try {
     });
   };
   const appSource = fs.readFileSync(new URL('../src/engines/xelatex.js', import.meta.url), 'utf8')
-    .replace("'./xelatexCompatibility.js'", JSON.stringify(new URL('../src/engines/xelatexCompatibility.js', import.meta.url).href));
+    // SVG fixture bytes above are already rasterized. Browser decode/canvas is
+    // covered in-browser; keep exercising the real driver/upload path in Node.
+    .replace('import { prepareCompileGraphics }', 'import { prepareCompileGraphics as prepareGraphics }')
+    .replace("'./xelatexCompatibility.js'", JSON.stringify(new URL('../src/engines/xelatexCompatibility.js', import.meta.url).href))
+    .replace("'../compileGraphics.js'", JSON.stringify(new URL('../src/compileGraphics.js', import.meta.url).href))
+    + '\nconst prepareCompileGraphics = (source, files) => prepareGraphics(source, files, async bytes => bytes);\n';
   const app = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
   const warm = app.warmEngine(samples.demo);
   assert.equal(app.warmEngine(samples.demo), warm, 'Concurrent warm-up calls share the same job');
@@ -279,8 +353,8 @@ try {
   assert.ok(commands.includes('compilepdf'), 'Warm-up reaches the PDF Worker');
   assert.ok(prefetched.has('xetex/26/elegantpaper.cls'), 'ElegantPaper is prefetched before opening it, even with no-store');
   const warmedRequests = requestCount;
-  for (const name of ['elegantpaper', 'mathematics', 'unicodeMath']) {
-    const compiled = await app.compileXeLaTeX(fixtures[name]);
+  for (const name of ['elegantpaper', 'mathematics', 'unicodeMath', 'projectGraphics', 'bibtexProject']) {
+    const compiled = await app.compileXeLaTeX(fixtures[name], name === 'projectGraphics' ? graphicsFiles : name === 'bibtexProject' ? bibliographyFiles : []);
     assert.equal(compiled.ok, true, `${name}: ${JSON.stringify(compiled.errors)}`);
     assert.equal(Buffer.from(compiled.pdfBytes).subarray(0, 5).toString(), '%PDF-');
     assert.equal(requestCount, warmedRequests, `${name}: switching documents after warm-up downloads zero resources, even without HTTP caching`);

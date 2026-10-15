@@ -8,10 +8,14 @@ export function prepareXeLaTeXSource(value) {
     && active.includes('\\tikzset{');
   const flow = active.includes('\\section{TikZ 流程图速查}')
     && active.includes('trapezium left angle=70');
-  if (!demo && !flow) return source;
-
   const setup = [];
-  if (!/\\usetikzlibrary\s*\{[^}]*\bshapes\.geometric\b/.test(active)) {
+  // xeCJK lazily loads its monospace font. Loading a fontspec config for the
+  // first time inside \verb inherits verbatim EOF hooks and breaks its group.
+  // Prime the CJK monospace font in a discarded box before body text is read.
+  const primeMono = '\\AtBeginDocument{\\begingroup\\setbox0=\\hbox{\\ttfamily 中}\\endgroup}';
+  if (/\\verb\*?[^a-zA-Z]/.test(active) && /\b(?:ctex\w*|xeCJK)\b/.test(active)
+      && !active.includes(primeMono)) setup.push(primeMono);
+  if ((demo || flow) && !/\\usetikzlibrary\s*\{[^}]*\bshapes\.geometric\b/.test(active)) {
     setup.push('\\usetikzlibrary{shapes.geometric,positioning,arrows}');
   }
   if (demo && /\\mathbb\b/.test(active)

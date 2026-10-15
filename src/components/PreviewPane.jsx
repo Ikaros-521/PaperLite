@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { exportSvg, exportPng } from '../exporter.js';
 import { useT } from '../useI18n.js';
 import { readMermaidGeoms } from '../mermaidMutations.js';
+import { loadPdfLibrary } from '../pdf.js';
 
 let mermaidInited = false;
 let mermaidSeq = 0;
@@ -10,13 +11,62 @@ let mermaidSeq = 0;
 export default function PreviewPane({
   result, selection, onSelectNode, onSelMermaid, onScrollRatio, zoom, onZoom,
   panelOpen, onTogglePanel, syncScroll, onSyncToggle,
-  engines, engine, setEngine, compiling, onCompile, hasCompile, builtinStatus,
-  onOpenSettings, onOpenChat
+  engines, engine, setEngine, compiling, onCompile, onCancelCompile, hasCompile, builtinStatus,
+  onOpenSettings, onOpenChat, assetDir, assetTabs = []
 }) {
   const t = useT();
   const scrollRef = useRef(null);
   const paperRef = useRef(null);
   const [mmdTick, setMmdTick] = useState(0); // Mermaid 异步渲染完成后自增，驱动选中态重放
+  const [noteOpen, setNoteOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const urls = [], tasks = [];
+    const images = paperRef.current?.querySelectorAll('img.includegraphics') || [];
+    const resolve = async name => {
+      const parts = name.replace(/\\/g, '/').replace(/^\.\//, '').split('/');
+      if (parts.some(p => !p || p === '..')) return null;
+      if (assetDir) {
+        let dir = assetDir;
+        for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part);
+        return (await dir.getFileHandle(parts.at(-1))).getFile();
+      }
+      return assetTabs.find(tab => tab.name === name)?.uploadedFile || null;
+    };
+    for (const img of images) {
+      const original = img.getAttribute('src') || '';
+      if (/^(?:[a-z]+:|\/\/)/i.test(original)) continue;
+      (async () => {
+        let file;
+        const names = /\.[a-z\d]+$/i.test(original) ? [original]
+          : [original, ...['pdf', 'png', 'jpg', 'jpeg'].map(ext => original + '.' + ext)];
+        for (const name of names) {
+          try { file = await resolve(name); } catch { /* Try next graphics extension. */ }
+          if (file) break;
+        }
+        if (!file || cancelled) return;
+        if (/\.pdf$/i.test(file.name)) {
+          const lib = await loadPdfLibrary();
+          if (cancelled) return;
+          const task = lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+          tasks.push(task);
+          const doc = await task.promise, page = await doc.getPage(1);
+          if (cancelled) return;
+          const base = page.getViewport({ scale: 1 });
+          const viewport = page.getViewport({ scale: Math.min(2, 1400 / base.width) });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+          if (!cancelled) img.src = canvas.toDataURL('image/png');
+        } else {
+          const url = URL.createObjectURL(file); urls.push(url);
+          if (!cancelled) img.src = url;
+        }
+      })().catch(error => { if (!cancelled) img.title = original + ': ' + error.message; });
+    }
+    return () => { cancelled = true; urls.forEach(url => URL.revokeObjectURL(url)); tasks.forEach(task => task.destroy()); };
+  }, [result, assetDir, assetTabs]);
 
   useEffect(() => {
     const paper = paperRef.current;
@@ -218,7 +268,6 @@ export default function PreviewPane({
   const statusKey = { loading: 'app.engineLoading', warming: 'app.engineWarming', error: 'app.engineError' }[builtinStatus];
   const builtinLabel = t('app.builtinEngine') + (statusKey ? ' · ' + t(statusKey) : '');
   // 网页预览是子集近似：不点明，用户会拿它当最终排版（差异只写在 README 里没人看）
-  const [noteOpen, setNoteOpen] = useState(false);
 
   return (
     <section id="previewPane">
@@ -234,9 +283,11 @@ export default function PreviewPane({
             <select value={engine} onChange={e => setEngine(e.target.value)}>
               {engines.map(en => <option key={en} value={en}>{en === 'builtin' ? builtinLabel : en}</option>)}
             </select>
-            <button className={'btn sm' + (compiling ? ' busy' : '')} disabled={compiling} onClick={onCompile}>
-              {compiling ? t('prev.compiling') : t('prev.compile')}
-            </button>
+            {compiling ? (
+              <button className="btn sm busy" onClick={onCancelCompile} title={t('prev.cancelTip')}>{t('prev.cancel')}</button>
+            ) : (
+              <button className="btn sm" onClick={onCompile}>{t('prev.compile')}</button>
+            )}
           </span>
         ) : null}
 

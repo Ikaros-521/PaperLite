@@ -7,6 +7,8 @@ import Toolbar from './components/Toolbar.jsx';
 import { quickInsert, replaceTemplate } from './editorTools.js';
 import EditorPane from './components/EditorPane.jsx';
 import PreviewPane from './components/PreviewPane.jsx';
+import PdfViewer from './components/PdfViewer.jsx';
+import { collectCompileFiles } from './compileProject.js';
 import StylePanel from './components/StylePanel.jsx';
 import FileTree from './components/FileTree.jsx';
 import TabsBar from './components/TabsBar.jsx';
@@ -21,7 +23,7 @@ import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
-import { warmEngine, compileXeLaTeX, onEngineStatus } from './engines/xelatex.js';
+import { warmEngine, compileXeLaTeX, cancelCompile, onEngineStatus } from './engines/xelatex.js';
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
 import { infoFor } from './fileTypes.js';
@@ -133,6 +135,7 @@ export default function App() {
   const [dismissedIssues, setDismissedIssues] = useState(null);
   const compileContextRef = useRef(null);
   const [previewMode, setPreviewMode] = useState('rich');
+  const [logFull, setLogFull] = useState(false);
   const pdfUrlRef = useRef(null);
 
   // ---- LLM ----
@@ -286,9 +289,9 @@ export default function App() {
     const exist = tabsRef.current.filter(t => t.handle === fileHandle)[0];
     if (exist) { setActiveId(exist.id); return exist; }
     try {
-      if (info.kind === 'image') {
+      if (info.kind === 'image' || info.kind === 'pdf') {
         const url = await fs.fileBlobUrl(fileHandle);
-        const t = makeTab({ name, path, kind: 'image', handle: fileHandle, imageUrl: url });
+        const t = makeTab({ name, path, kind: info.kind, handle: fileHandle, parentDir, imageUrl: url });
         setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue('');
         return t;
       }
@@ -439,7 +442,7 @@ export default function App() {
             // Open uploaded files in memory when no local folder is connected.
             const info = infoFor(file.name);
             let uploaded;
-            if (info.kind === 'image') uploaded = makeTab({ name: file.name, kind: 'image', imageUrl: URL.createObjectURL(file) });
+            if (info.kind === 'image' || info.kind === 'pdf') uploaded = makeTab({ name: file.name, kind: info.kind, imageUrl: URL.createObjectURL(file) });
             else {
               const text = file.size <= 2 * 1024 * 1024 ? await file.text() : null;
               uploaded = text !== null && !text.includes('\u0000')
@@ -689,11 +692,13 @@ export default function App() {
     const tabId = activeTab.id;
     setCompileResult(r => r ? { ...r, errors: [] } : r);
     try {
-      let ok, pdfBytes, log, errors, errText;
+      let ok, pdfBytes, log, errors, errText, wasCancelled = false;
       if (engine === 'builtin') {
-        const r = await compileXeLaTeX(source);
+        const files = await collectCompileFiles(activeTab, tabsRef.current);
+        const r = await compileXeLaTeX(source, files);
         ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
-        if (!ok) errText = (errors[0] && errors[0].msg) || t('app.compileFailed');
+        wasCancelled = !!r.cancelled;
+        if (!ok && !wasCancelled) errText = (errors[0] && errors[0].msg) || t('app.compileFailed');
       } else {
         const r = await fetch('/api/compile', {
           method: 'POST',
@@ -710,6 +715,7 @@ export default function App() {
       }
       // A late response must never restore errors for edited or inactive documents.
       if (compileContextRef.current !== context) return;
+      if (wasCancelled) { flash(t('app.compileCancelled')); return; }
       if (ok) {
         if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
         pdfUrlRef.current = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
@@ -718,13 +724,18 @@ export default function App() {
         flash(t('app.compileOk', { engine: engine === 'builtin' ? t('app.builtinEngine') : engine }));
       } else {
         setCompileResult({ ok: false, log, errors, error: errText, engine, tabId, source });
+        setLogFull(false);
         setPreviewMode('log');
       }
     } catch (e) {
       if (compileContextRef.current !== context) return;
+      if (String(e && e.message || e) === 'cancelled') { flash(t('app.compileCancelled')); return; }
       alert(t('app.compileReqFailed', { msg: e.message || e }));
     } finally { setCompiling(false); }
   };
+
+  // 编译中按钮变「取消」：拆掉 Worker 立刻归还界面，长任务不该只能干等
+  const doCancelCompile = () => { cancelCompile(); };
 
   // ---- 预览渲染 ----
   const deferred = useDeferredValue(activeValue);
@@ -822,6 +833,15 @@ export default function App() {
       if (mod && (e.key === '1' || e.key === '2' || e.key === '3')) {
         e.preventDefault();
         setViewMode(e.key === '1' ? 'edit' : e.key === '2' ? 'split' : 'preview');
+      }
+      // 焦点不在编辑器时，Ctrl+F 原本会走浏览器查找——统一交给编辑器内查找
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F') && !e.target.closest?.('.CodeMirror')) {
+        e.preventDefault();
+        const c = cm(); if (c) { c.focus(); c.execCommand('find'); }
+      }
+      if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+        e.preventDefault();
+        const c = cm(); if (c) { c.focus(); c.execCommand('replace'); }
       }
       const editorFocused = e.target.closest?.('.CodeMirror');
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tB', null, { markdown: isMd }); }
@@ -1003,7 +1023,7 @@ export default function App() {
             if (!c) return;
             if (op === 'undo') c.undo();
             else if (op === 'redo') c.redo();
-            else if (op === 'selectAll') c.execCommand('selectAll');
+            else if (op === 'find' || op === 'replace' || op === 'selectAll') c.execCommand(op);
             c.focus();
           },
           tool: (id, value) => {
@@ -1020,13 +1040,56 @@ export default function App() {
               case 'tFn': return wrap('\\footnote{', '}');
               case 'tImg': {
                 const inp = document.createElement('input');
-                inp.type = 'file'; inp.accept = 'image/*';
-                inp.onchange = () => {
+                const targetDoc = activeTab.doc;
+                const from = targetDoc.getCursor('from'), to = targetDoc.getCursor('to');
+                const dir = activeTab.parentDir || rootDir;
+                inp.type = 'file'; inp.accept = isMd ? 'image/*,application/pdf,.pdf' : 'image/png,image/jpeg,image/svg+xml,application/pdf,.pdf,.svg';
+                inp.onchange = async () => {
                   const f = inp.files && inp.files[0];
                   if (!f) return;
-                  const r = new FileReader();
-                  r.onload = () => insert('\n\\begin{figure}[h]\n\\centering\n\\includegraphics[width=0.7\\textwidth]{' + r.result + '}\n\\caption{' + t('app.imageCaption') + '}\n\\label{fig:img}\n\\end{figure}\n');
-                  r.readAsDataURL(f);
+                  try {
+                    if (isMd && !/\.pdf$/i.test(f.name)) {
+                      const data = await new Promise((resolve, reject) => {
+                        const reader = new FileReader(); reader.onload = () => resolve(reader.result);
+                        reader.onerror = () => reject(reader.error); reader.readAsDataURL(f);
+                      });
+                      targetDoc.replaceRange('\n![' + f.name + '](' + data + ')\n', from, to, '+input');
+                      return;
+                    }
+                    const original = f.name.replace(/[%#{}~^]/g, '_');
+                    if (!validName(original)) throw new Error(t('app.badFileName'));
+                    let name = original, suffix = 1;
+                    for (;;) {
+                      let exists = tabsRef.current.some(tab => tab.name === name);
+                      if (dir) {
+                        try { await dir.getFileHandle(name); exists = true; }
+                        catch (error) { if (error.name !== 'NotFoundError') throw error; }
+                      }
+                      if (!exists) break;
+                      const dot = original.lastIndexOf('.');
+                      name = (dot > 0 ? original.slice(0, dot) : original) + ' (' + suffix++ + ')' + (dot > 0 ? original.slice(dot) : '');
+                    }
+                    if (dir) {
+                      const handle = await fs.createFile(dir, name);
+                      const writable = await handle.createWritable();
+                      await writable.write(f); await writable.close();
+                      setTreeKey(n => n + 1);
+                    } else {
+                      const asset = makeTab({ name, kind: infoFor(name).kind, imageUrl: URL.createObjectURL(f) });
+                      asset.uploadedFile = f;
+                      setTabs(ts => ts.concat(asset));
+                    }
+                    const snippet = isMd ? '\n' + (/\.pdf$/i.test(name) ? '' : '!') + '[' + name + '](' + name + ')\n'
+                      : '\n\\begin{figure}[h]\n\\centering\n\\includegraphics[width=0.7\\textwidth]{' + name + '}\n\\caption{' + t('app.imageCaption') + '}\n\\label{fig:img-' + Date.now() + '}\n\\end{figure}\n';
+                    targetDoc.replaceRange(snippet, from, to, '+input');
+                    if (!isMd) {
+                      const value = targetDoc.getValue();
+                      if (!/\\(?:usepackage|RequirePackage)(?:\s*\[[^\]]*\])?\s*\{[^}]*\bgraphicx\b/.test(value)) {
+                        const begin = value.search(/^[ \t]*\\begin\s*\{document\}/m);
+                        if (begin >= 0) targetDoc.replaceRange('\\usepackage{graphicx}\n', targetDoc.posFromIndex(begin), undefined, '+input');
+                      }
+                    }
+                  } catch (error) { alert(t('file.uploadFailed', { name: f.name, msg: error.message })); }
                 };
                 inp.click();
                 return;
@@ -1119,47 +1182,56 @@ export default function App() {
         )}
 
         {viewMode !== 'edit' && (
-          activeTab && activeTab.kind === 'image' ? (
+          activeTab && activeTab.kind === 'pdf' ? (
+            <PdfViewer key={activeTab.id} url={activeTab.imageUrl} title={activeTab.name} lang={lang}
+              onDownload={async () => downloadFile(activeTab.name, activeTab.uploadedFile || await (await fetch(activeTab.imageUrl)).blob())} />
+          ) : activeTab && activeTab.kind === 'image' ? (
             <section id="previewPane">
               <div id="previewBar"><span className="pb-title">{t('prev.title')}</span></div>
               <div id="previewScroll"><div id="preview"><div id="paper" className="paper image-view" style={{ zoom }}>
                 <img src={activeTab.imageUrl} alt={activeTab.name} style={{ maxWidth: '100%' }} />
               </div></div></div>
             </section>
-          ) : previewMode === 'pdf' && compileResult && compileResult.ok ? (
-            <section id="previewPane">
-              <div id="previewBar">
-                <span className="pb-title">✓ {compileResult.engine} {t('prev.compileOk')}</span>
-                <span className="pb-spacer"></span>
-                <button className="btn sm" onClick={() => downloadCompiled(compileResult)}>{t('prev.dlPdf')}</button>
-                <button className="btn sm" onClick={() => window.open(compileResult.pdfUrl, '_blank')}>{t('prev.newWindow')}</button>
-                <button className="btn sm" onClick={() => setPreviewMode('rich')}>{t('prev.close')}</button>
-              </div>
-              <div className="pdf-host"><iframe src={compileResult.pdfUrl} title="PDF" /></div>
-            </section>
+          ) : previewMode === 'pdf' && compileResult?.ok && compileResult.tabId === activeTab?.id ? (
+            <PdfViewer url={compileResult.pdfUrl} title={activeTab.name + ' · PDF'} lang={lang}
+              stale={compileResult.source !== activeValue} compiling={compiling} onCompile={doCompile}
+              onDownload={() => downloadCompiled(compileResult)} onClose={() => setPreviewMode('rich')} />
           ) : previewMode === 'log' && compileResult ? (
             <section id="previewPane">
               <div id="previewBar">
                 <span className="pb-title bad">✕ {compileResult.engine} {t('prev.compileFail')}</span>
                 <span className="pb-spacer"></span>
+                <button className="btn sm" onClick={doCompile} disabled={compiling}>{compiling ? t('prev.compiling') : t('prev.retry')}</button>
+                <button className="btn sm" onClick={() => { navigator.clipboard?.writeText(compileResult.log || ''); flash(t('prev.logCopied')); }}>{t('prev.copyLog')}</button>
+                <button className="btn sm" onClick={() => setLogFull(f => !f)} aria-expanded={logFull}>{logFull ? t('prev.logTail') : t('prev.logFull')}</button>
                 <button className="btn sm" onClick={() => setPreviewMode('rich')}>{t('prev.back')}</button>
               </div>
               <div id="previewScroll">
                 <div className="compile-log">
                   {visibleIssues.filter(d => d.src === 'compile').map((e, i) => (
-                    <div key={i} className="diag-item error" onClick={() => e.line != null && jumpToLine(e.line)}>
+                    <div key={i} className={'diag-item error' + (e.line == null ? ' no-line' : '')}
+                      aria-disabled={e.line == null} title={e.line == null ? t('diag.noLine') : t('diag.jump')}
+                      onClick={() => e.line != null && jumpToLine(e.line)}>
                       <span className="diag-sev">✖</span>
                       <span className="diag-msg">{e.msg}</span>
                       {e.line != null && <span className="diag-line">{t('diag.line', { n: e.line + 1 })}</span>}
                     </div>
                   ))}
-                  <pre>{(compileResult.log || '').split('\n').slice(-120).join('\n')}</pre>
+                  {(() => {
+                    const all = (compileResult.log || '').split('\n');
+                    const shown = logFull || all.length <= 120 ? all : all.slice(-120);
+                    return <>
+                      {!logFull && all.length > 120 && <div className="log-note">{t('prev.logTruncated', { n: all.length })}</div>}
+                      <pre>{shown.join('\n')}</pre>
+                    </>;
+                  })()}
                 </div>
               </div>
             </section>
           ) : previewResult ? (
             <PreviewPane
               result={previewResult}
+              assetDir={activeTab?.parentDir} assetTabs={tabs}
               selection={selection}
               onSelectNode={(did, sidx) => { setSelection({ did, sel: { type: 'node', sidx } }); setPanelOpen(true); setChatOpen(false); }}
               onSelMermaid={(block, id, cur) => { setSelection({ did: 0, sel: { type: 'mermaid', block, id, cur } }); setPanelOpen(true); setChatOpen(false); }}
@@ -1167,7 +1239,7 @@ export default function App() {
               zoom={zoom} onZoom={setZoomClamped}
               panelOpen={panelOpen} onTogglePanel={() => { setPanelOpen(o => !o); setChatOpen(false); }}
               syncScroll={syncScroll} onSyncToggle={setSyncScroll}
-              engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} builtinStatus={builtinStatus}
+              engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} onCancelCompile={doCancelCompile} builtinStatus={builtinStatus}
               hasCompile={!!compileResult}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }}
@@ -1273,13 +1345,15 @@ export default function App() {
 
       {helpOpen === 'keys' && (
         <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
-          <div className="modal help-modal" onClick={e => e.stopPropagation()}>
+          <div className="modal help-modal" role="dialog" aria-modal="true" aria-label={t('help.keys')} onClick={e => e.stopPropagation()}>
             <div className="modal-h">{t('help.keys')} <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
             <div className="modal-body">
               <table className="keys-table">
                 <tbody>
                   {[['Ctrl+S', t('help.k1')],
                     ['Ctrl+Alt+N', t('help.k6')],
+                    ['Ctrl+F', t('help.k10')],
+                    ['Ctrl+Shift+F', t('help.k11')],
                     ['Ctrl+Enter', t('help.k7')],
                     ['Ctrl+P', t('help.k8')],
                     ['Ctrl+1 / 2 / 3', t('help.k9')],
@@ -1298,7 +1372,7 @@ export default function App() {
 
       {helpOpen === 'about' && (
         <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
-          <div className="modal help-modal" onClick={e => e.stopPropagation()}>
+          <div className="modal help-modal" role="dialog" aria-modal="true" aria-label={t('help.about')} onClick={e => e.stopPropagation()}>
             <div className="modal-h">{t('help.about')} <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
             <div className="modal-body about-body">
               <div className="about-logo"><span className="brand-seal">论</span>PaperLite</div>

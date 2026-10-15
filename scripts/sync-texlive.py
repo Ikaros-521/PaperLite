@@ -25,7 +25,7 @@ xurl infwarerr siunitx physics cancel jknapltx rsfs stmaryrd wasysym wasy wasy-t
 upquote xunicode xltxtra tipa kvoptions etex-pkg everysel everyshi filehook
 hopatch ifoddpage lineno multido newfloat bigfoot ragged2e realscripts svn-prov
 translations translator varwidth zref algorithms ntheorem unicode-math lm-math latex-fonts cm
-abstract hologo appendix biblatex tex-gyre'''.split()
+abstract hologo appendix biblatex bibtex tex-gyre babel babel-english hyphen-base svg pdfpages pdflscape koma-script transparent'''.split()
 # These bundles support other engines too. Import their XeTeX runtime files,
 # without pulling platform binaries or the entire pTeX/LuaTeX font ecosystem.
 BUNDLES = ['latex', 'ctex', 'xecjk', 'fontspec', 'l3kernel', 'l3packages', 'lm']
@@ -44,7 +44,12 @@ def download(relative):
 
 
 def destinations(filename):
+    filename = filename.removeprefix('texmf-dist/')
     p = PurePosixPath(filename)
+    if filename.startswith('bibtex/bst/'):
+        return [('7', p.name)]
+    if filename.startswith('bibtex/bib/'):
+        return [('6', p.name)]
     if filename.startswith('tex/'):
         return [('26', p.name)]
     formats = {'tfm': '3', 'afm': '4', 'type1': '32', 'vf': '33',

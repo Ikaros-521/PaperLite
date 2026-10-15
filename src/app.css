@@ -206,7 +206,10 @@ body.dragging::before { content: ''; position: fixed; inset: 0; z-index: 9999; }
 .ol-item {
   display: flex; gap: 6px; align-items: baseline; padding: 4px 8px; border-radius: 4px;
   cursor: pointer; color: var(--ink); margin: 0 4px;
+  /* 大纲条目是 <button>（键盘可达），去掉浏览器默认按钮外观 */
+  width: calc(100% - 8px); text-align: left; font: inherit; background: none; border: 0;
 }
+.ol-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ol-item:hover { background: rgba(var(--accent-rgb), .08); }
 .ol-l1 { font-weight: 700; font-size: 13.5px; }
 .ol-l2 { padding-left: 22px !important; font-size: 12.8px; color: var(--ink); }
@@ -479,8 +482,29 @@ body.cp-dragging::before {
 .preview-note .btn { flex: none; }
 .pb-title.bad { color: var(--seal-deep); }
 .pdf-host { flex: 1; min-height: 0; }
+.pdf-toolbar { flex-wrap: wrap; height: auto !important; min-height: 42px; gap: 6px; padding: 8px 12px !important; }
+.pdf-toolbar .pb-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; }
+.pdf-controls { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.pdf-controls input { width: 52px; padding: 3px; background: var(--paper); color: inherit; border: 1px solid var(--line); border-radius: 4px; text-align: center; }
+.pdf-stale { font-size: 11px; color: var(--ink-soft); }
+.pdf-scroll { flex: 1; min-height: 0; overflow: auto; background: var(--pdf-bg); padding: 24px; }
+.pdf-page { --total-scale-factor: 1; position: relative; margin: 0 auto 20px; background: var(--doc-img-bg); box-shadow: 0 2px 10px rgba(var(--shadow-rgb), .2); flex-shrink: 0; }
+.pdf-page canvas { display: block; width: 100%; height: 100%; }
+.pdf-text-layer { position: absolute; inset: 0; overflow: clip; line-height: 1; text-size-adjust: none; transform-origin: 0 0;
+  --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size)); }
+.pdf-text-layer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
+.pdf-text-layer > :not(.markedContent), .pdf-text-layer .markedContent span:not(.markedContent) {
+  --font-height: 0; --scale-x: 1; --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+.pdf-text-layer .markedContent { display: contents; }
+.pdf-message { padding: 24px; text-align: center; overflow-wrap: anywhere; }
 .pdf-host iframe { width: 100%; height: 100%; border: 0; background: var(--pdf-bg); }
 .compile-log { max-width: 900px; margin: 0 auto; padding: 14px; }
+/* 没有行号的报错：点不动就别说得动，给出禁用态与解释 */
+.compile-log .diag-item.no-line { cursor: default; opacity: .72; }
+.compile-log .diag-item.no-line:hover { background: none; }
+.compile-log .log-note { font-size: 12px; color: var(--ink-faint); margin-top: 10px; }
 .compile-log pre {
   font-family: Consolas, monospace; font-size: 12px; background: var(--code-bg); color: var(--code-ink);
   border-radius: 8px; padding: 12px; overflow-x: auto; white-space: pre-wrap; margin-top: 10px;
@@ -542,6 +566,12 @@ body.cp-dragging::before {
 #editorHost .CodeMirror-activeline-background { background: rgba(var(--accent-rgb), .045); }
 #editorHost .CodeMirror-cursor { border-left: 2px solid var(--accent); }
 #editorHost .CodeMirror-selected { background: rgba(var(--accent-rgb), .13); }
+/* 查找 / 替换条：addon 自带样式是浏览器默认色，这里跟皮肤走 */
+#editorHost .CodeMirror-dialog { background: var(--paper); color: var(--ink); border-bottom: 1px solid var(--line); padding: 6px 10px; z-index: 30; box-shadow: 0 2px 10px rgba(var(--ink-rgb), .14); }
+#editorHost .CodeMirror-dialog .CodeMirror-search-label { font-size: 13px; }
+#editorHost .CodeMirror-dialog input { font: inherit; color: var(--ink); background: rgba(var(--accent-rgb), .05); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; }
+#editorHost .CodeMirror-dialog button { font: inherit; font-size: 12px; color: var(--ink-soft); background: var(--chip-bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 9px; margin: 0 2px; cursor: pointer; }
+#editorHost .CodeMirror-search-field { width: 20em; }
 /* 语法高亮：codemirror.css 的 .cm-s-default 配色是给白底写的（#708 / #00f / #170…），
  * 深色皮肤下几乎读不出来，故按主题的 --syn-* 令牌重涂；#editorHost 的 id 权重足以压过默认主题。 */
 #editorHost .CodeMirror .cm-keyword { color: var(--syn-kw); }
@@ -690,6 +720,8 @@ figure.float .diagram { display: block; }
 }
 .dgrid-tools { position: absolute; top: -10px; right: -6px; display: none; gap: 4px; z-index: 5; }
 .diagram:hover .dgrid-tools { display: flex; }
+/* 触屏没有 hover：导出 SVG/PNG 的按钮必须常驻可见 */
+@media (hover: none) { .dgrid-tools { display: flex; } }
 .dgrid-tools button {
   border: 1px solid var(--line); background: var(--paper); font-size: 11px; padding: 1px 7px;
   border-radius: 4px; cursor: pointer; box-shadow: 0 1px 4px rgba(var(--shadow-rgb), .14); color: var(--ink-soft);

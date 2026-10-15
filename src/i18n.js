@@ -118,7 +118,7 @@ export const DICT = {
     'm.bold': '加粗 \\textbf', 'm.italic': '斜体 \\emph', 'm.underline': '下划线 \\underline', 'm.mono': '等宽 \\texttt',
     'm.inlineMath': '行内公式 $…$', 'm.displayMath': '行间公式环境',
     'm.itemize': '无序列表 itemize', 'm.enumerate': '有序列表 enumerate', 'm.booktabs': '三线表 booktabs',
-    'm.localImage': '本地图片…', 'm.tikzFlow': 'TikZ 流程图', 'm.mermaid': 'Mermaid 图',
+    'm.localImage': '本地图片 / PDF…', 'm.tikzFlow': 'TikZ 流程图', 'm.mermaid': 'Mermaid 图',
     'm.cite': '引用 \\cite', 'm.footnote': '脚注 \\footnote',
     'm.viewMode': '视图', 'm.vmEdit': '仅编辑', 'm.vmSplit': '编辑 + 预览', 'm.vmPreview': '仅预览',
     'm.syncScroll': '编辑器与预览同步滚动',
@@ -395,7 +395,15 @@ export const DICT = {
     'hist.beforeAi': 'AI 替换前', 'hist.dropped': '版本历史已达上限，自动清理了 {n} 个最旧版本',
     'prev.approx': '近似排版', 'prev.approxTip': '网页预览按 LaTeX 常用子集近似渲染，与真实编译的 PDF 会有差异。点击查看差异清单。',
     'prev.approxNote': '网页预览按 LaTeX 常用子集近似渲染：双栏分页、bibtex 文献、自定义宏包与复杂 TikZ 一律以「编译」后的 PDF 为准。投稿前请务必先编译一次。',
-    'prev.approxClose': '收起说明'
+    'prev.approxClose': '收起说明',
+    'm.find': '查找…', 'm.replace': '查找替换…',
+    'help.k10': '在编辑器内查找', 'help.k11': '查找并替换（支持 /正则/）',
+    'prev.cancel': '取消', 'prev.cancelTip': '中止本次编译并归还界面（引擎会重新装载，资源走缓存）',
+    'prev.retry': '重试', 'prev.copyLog': '复制日志', 'prev.logFull': '完整日志', 'prev.logTail': '只看末尾',
+    'prev.logTruncated': '仅显示最后 120 行（共 {n} 行），点「完整日志」展开',
+    'prev.logCopied': '编译日志已复制到剪贴板',
+    'app.compileCancelled': '已取消编译',
+    'diag.noLine': '这条报错没给出源码行号，请展开完整日志定位', 'diag.jump': '点击跳到出错行'
   },
 
   en: {
@@ -492,7 +500,7 @@ export const DICT = {
     'm.bold': 'Bold \\textbf', 'm.italic': 'Italic \\emph', 'm.underline': 'Underline \\underline', 'm.mono': 'Monospace \\texttt',
     'm.inlineMath': 'Inline math $…$', 'm.displayMath': 'Display math environment',
     'm.itemize': 'Bullet list (itemize)', 'm.enumerate': 'Numbered list (enumerate)', 'm.booktabs': 'Booktabs table',
-    'm.localImage': 'Local image…', 'm.tikzFlow': 'TikZ flowchart', 'm.mermaid': 'Mermaid diagram',
+    'm.localImage': 'Local image / PDF…', 'm.tikzFlow': 'TikZ flowchart', 'm.mermaid': 'Mermaid diagram',
     'm.cite': 'Citation \\cite', 'm.footnote': 'Footnote \\footnote',
     'm.viewMode': 'View Mode', 'm.vmEdit': 'Editor only', 'm.vmSplit': 'Editor + Preview', 'm.vmPreview': 'Preview only',
     'm.syncScroll': 'Sync editor & preview scroll',
@@ -752,7 +760,15 @@ export const DICT = {
     'hist.beforeAi': 'Before AI replace', 'hist.dropped': 'Version history hit its limit and dropped {n} oldest versions',
     'prev.approx': 'Approximate', 'prev.approxTip': 'The web preview renders a LaTeX subset and differs from the compiled PDF. Click for the differences.',
     'prev.approxNote': 'The web preview approximates a LaTeX subset: two-column pagination, bibtex references, custom packages and complex TikZ all follow the compiled PDF. Compile once before you submit.',
-    'prev.approxClose': 'Dismiss'
+    'prev.approxClose': 'Dismiss',
+    'm.find': 'Find…', 'm.replace': 'Find & replace…',
+    'help.k10': 'Find in the editor', 'help.k11': 'Find and replace (supports /regex/)',
+    'prev.cancel': 'Cancel', 'prev.cancelTip': 'Abort this compile and get the UI back (the engine reloads; resources come from cache)',
+    'prev.retry': 'Retry', 'prev.copyLog': 'Copy log', 'prev.logFull': 'Full log', 'prev.logTail': 'Tail only',
+    'prev.logTruncated': 'Showing the last 120 of {n} lines — hit "Full log" to expand',
+    'prev.logCopied': 'Compile log copied to the clipboard',
+    'app.compileCancelled': 'Compile cancelled',
+    'diag.noLine': 'This error carries no source line — expand the full log to locate it', 'diag.jump': 'Click to jump to the line'
   }
 };
 

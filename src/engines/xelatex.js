@@ -12,6 +12,7 @@
  */
 
 import { prepareXeLaTeXSource } from './xelatexCompatibility.js';
+import { prepareCompileGraphics } from '../compileGraphics.js';
 
 const BASE = ((import.meta.env && import.meta.env.BASE_URL) || '/') + 'xelatex/';
 // Worker 里同步 XHR 的相对 URL 以 Worker 脚本位置为基准，必须在主线程解析成绝对地址
@@ -20,8 +21,8 @@ const FMT_KEY = '10/swiftlatexxetex.fmt';
 const WARM_URL = REPO_URL + 'warm.json';
 // 清单里的键沿用 manifest 的「格式号/文件名」，Worker 实际请求时才加 xetex/ 一层
 const repoUrl = key => REPO_URL + 'xetex/' + key;
-// 慢链路首编译要拉 ~31MB 格式文件 + 宏包字体，给足时间
-const COMPILE_TIMEOUT = 900000;
+// 慢链路首编译要拉 ~31MB 格式文件 + 宏包字体，给足时间；再长就该由用户手动取消
+const COMPILE_TIMEOUT = 300000;
 // 后台预取并发：够填满带宽，又不至于饿死编译自身的请求
 const PREFETCH_CONCURRENCY = 6;
 
@@ -210,6 +211,8 @@ export function preloadEngine() {
 }
 
 // 调一次命令并等待特定回执（协议见胶水 onmessage）
+// 在途的 reject 记进 inFlight，用户点「取消」时统一拒绝并拆掉 Worker
+const inFlight = new Set();
 function call(w, label, send, match, timeoutMs) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { cleanup(); reject(new Error(label + ' timeout')); }, timeoutMs || COMPILE_TIMEOUT);
@@ -220,11 +223,28 @@ function call(w, label, send, match, timeoutMs) {
       resolve(d);
     }
     function onerr(e) { cleanup(); reject(new Error(label + ' crashed: ' + (e.message || 'worker error'))); }
-    function cleanup() { clearTimeout(timer); w.removeEventListener('message', onmsg); w.removeEventListener('error', onerr); }
+    function cleanup() { clearTimeout(timer); inFlight.delete(reject); w.removeEventListener('message', onmsg); w.removeEventListener('error', onerr); }
+    inFlight.add(reject);
     w.addEventListener('message', onmsg);
     w.addEventListener('error', onerr);
     send();
   });
+}
+
+/** 取消进行中的编译/预热：拒绝所有在途调用并销毁 Worker，下次编译重新装载（资源走 HTTP 缓存，秒级） */
+export function cancelCompile() {
+  const rejects = [...inFlight];
+  inFlight.clear();
+  rejects.forEach(rej => { try { rej(new Error('cancelled')); } catch (e) { /* noop */ } });
+  try { texWorker && texWorker.terminate(); } catch (e) { /* noop */ }
+  try { pdfWorker && pdfWorker.terminate(); } catch (e) { /* noop */ }
+  texWorker = pdfWorker = null;
+  loadPromise = null;
+  warmCompile = null;
+  warmPromise = null;
+  warming = false;
+  resourcesWarmed = false;
+  setStatus('idle');
 }
 
 // 从 TeX 日志解析错误行（与 server.mjs 的 parseLog 保持同一形状）
@@ -246,22 +266,42 @@ function parseLog(log) {
 }
 
 /** 编译 LaTeX 源码。返回 { ok, pdfBytes?, log, errors, engine:'builtin' } */
-export async function compileXeLaTeX(source) {
-  await preloadEngine();
+// 用户取消不算报错：单独标记，让 UI 说「已取消」而不是甩一条红色异常
+function cancelled(e) {
+  return String(e && e.message || e) === 'cancelled'
+    ? { ok: false, cancelled: true, log: '', errors: [], engine: 'builtin' } : null;
+}
+
+export async function compileXeLaTeX(source, files = []) {
+  try {
+    await preloadEngine();
+  } catch (e) {
+    const c = cancelled(e);
+    if (c) return c;
+    return { ok: false, log: '', errors: [{ line: null, msg: e.message || String(e) }], engine: 'builtin' };
+  }
   // 定向预热正在用 Worker：等它跑完再发自己的命令，否则会错拿它的回执
   if (warmCompile) { try { await warmCompile; } catch (e) { /* 交给下面的正式编译 */ } }
   setStatus('busy');
   try {
+    source = prepareXeLaTeXSource(source);
+    ({ source, files } = await prepareCompileGraphics(source, files));
     // 两遍编译：目录/交叉引用（与 server.mjs 行为一致）
     texWorker.postMessage({ cmd: 'flushcache' });
     pdfWorker.postMessage({ cmd: 'flushcache' });
-    texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
+    // XeTeX needs figure dimensions; dvipdfmx needs the original PDF/image bytes.
+    for (const worker of [texWorker, pdfWorker]) {
+      const uploaded = await call(worker, 'Project upload',
+        () => worker.postMessage({ cmd: 'writeproject', files }), d => d.cmd === 'writeproject');
+      if (uploaded.result !== 'ok') throw new Error(uploaded.error || 'Project upload failed');
+    }
+    texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: source });
     texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
     let r1;
     try {
       r1 = await call(texWorker, 'XeTeX pass 1', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
     } catch (e) {
-      return { ok: false, log: '', errors: [{ line: null, msg: e.message || String(e) }], engine: 'builtin' };
+      return cancelled(e) || { ok: false, log: '', errors: [{ line: null, msg: e.message || String(e) }], engine: 'builtin' };
     }
     if (r1.result !== 'ok' || r1.status !== 0) {
       const log = r1.log || '';
@@ -270,16 +310,42 @@ export async function compileXeLaTeX(source) {
     let r2 = r1;
     try {
       r2 = await call(texWorker, 'XeTeX pass 2', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
-    } catch (e) { /* 第二遍失败不致命：沿用第一遍产物 */ }
+    } catch (e) {
+      const c = cancelled(e);
+      if (c) return c;
+      /* 第二遍失败不致命：沿用第一遍产物 */
+    }
     if (r2.result !== 'ok' || r2.status !== 0) {
       const log = r2.log || r1.log || '';
       return { ok: false, log, errors: parseLog(log), engine: 'builtin' };
+    }
+    // BibTeX writes the bibliography after a TeX pass. A third pass resolves
+    // citation labels read from the bibliography on pass two.
+    if (/\\bibliography\s*\{/.test(source)) {
+      try {
+        r2 = await call(texWorker, 'XeTeX pass 3',
+          () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+      } catch (error) {
+        return cancelled(error) || { ok: false, log: r2.log || '',
+          errors: [{ line: null, msg: error.message || String(error) }], engine: 'builtin' };
+      }
+      if (r2.result !== 'ok' || r2.status !== 0) {
+        const log = r2.log || '';
+        return { ok: false, log, errors: parseLog(log), engine: 'builtin' };
+      }
     }
     const xdv = new Uint8Array(r2.pdf);
 
     pdfWorker.postMessage({ cmd: 'writefile', url: 'main.xdv', src: xdv });
     pdfWorker.postMessage({ cmd: 'setmainfile', url: 'main.xdv' });
-    const r3 = await call(pdfWorker, 'dvipdfmx', () => pdfWorker.postMessage({ cmd: 'compilepdf' }), d => d.cmd === 'compile');
+    let r3;
+    try {
+      r3 = await call(pdfWorker, 'dvipdfmx', () => pdfWorker.postMessage({ cmd: 'compilepdf' }), d => d.cmd === 'compile');
+    } catch (e) {
+      const c = cancelled(e);
+      if (c) return c;
+      return { ok: false, log: '', errors: [{ line: null, msg: 'dvipdfmx: ' + (e.message || String(e)) }], engine: 'builtin' };
+    }
     if (r3.result !== 'ok' || !r3.pdf) {
       const log = r3.log || '';
       return { ok: false, log, errors: parseLog(log).concat([{ line: null, msg: 'dvipdfmx failed' }]), engine: 'builtin' };

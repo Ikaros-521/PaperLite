@@ -9,7 +9,7 @@
     "prebuild": "node scripts/texlive-manifest.mjs --check",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/smoke.mjs && node test/editorTools.mjs && node test/history.mjs",
+    "test": "node test/smoke.mjs && node test/editorTools.mjs && node test/history.mjs && node test/compileProject.mjs",
     "test:xelatex": "node scripts/texlive-manifest.mjs --check && node test/xelatex.mjs",
     "tex:manifest": "node scripts/texlive-manifest.mjs",
     "tex:warm": "node scripts/texlive-manifest.mjs --check && node test/xelatex.mjs --write-warm"
@@ -20,6 +20,7 @@
     "katex": "^0.16.11",
     "markdown-it": "^15.0.2",
     "mermaid": "^10.9.3",
+    "pdfjs-dist": "^5.4.624",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

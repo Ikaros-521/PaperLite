@@ -20,6 +20,11 @@ import 'codemirror/mode/dockerfile/dockerfile';
 import 'codemirror/addon/edit/closebrackets';
 import 'codemirror/addon/edit/matchbrackets';
 import 'codemirror/addon/selection/active-line';
+import 'codemirror/addon/dialog/dialog';
+import 'codemirror/addon/dialog/dialog.css';
+import 'codemirror/addon/search/searchcursor';
+import 'codemirror/addon/search/search';
+import { cmPhrases } from '../cmPhrases.js';
 
 /* CodeMirror 5 封装：单一编辑器实例 + 每 Tab 一个 CodeMirror.Doc（swapDoc 切换，
  * 各文件独立撤销历史与光标）。mode 由 Doc 创建时指定。
@@ -28,6 +33,7 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
   const hostRef = useRef(null);
   const cmRef = useRef(null);
   const marksRef = useRef([]);
+  const langRef = useRef(null);
   const cb = useRef({});
   cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue };
 
@@ -42,8 +48,13 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       styleActiveLine: true,
       extraKeys: {
         'Ctrl-S': () => { cb.current.onSave && cb.current.onSave(); return false; },
-        'Cmd-S': () => { cb.current.onSave && cb.current.onSave(); return false; }
-      }
+        'Cmd-S': () => { cb.current.onSave && cb.current.onSave(); return false; },
+        'Ctrl-F': 'find',
+        'Cmd-F': 'find',
+        'Ctrl-Shift-F': 'replace',
+        'Cmd-Alt-F': 'replace'
+      },
+      phrases: cmPhrases(getLang())
     });
     cmRef.current = cm;
     // 关闭隐藏 textarea 的拼写检查：Chromium 会把拼写红线“透”到可见行上，造成假报错
@@ -76,6 +87,13 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       cm.focus();
     }
   }, [doc]);
+
+  // 切语言时同步查找/替换对话框文案（phrase() 每次调用都读 options.phrases）
+  useEffect(() => {
+    const cm = cmRef.current;
+    const L = getLang();
+    if (cm && langRef.current !== L) { langRef.current = L; cm.setOption('phrases', cmPhrases(L)); }
+  });
 
   // 诊断标记：按行分组（错误优先），gutter 圆点可点击触发 AI 修复，行内画波浪线
   useEffect(() => {

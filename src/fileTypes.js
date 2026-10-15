@@ -2,6 +2,7 @@
 
 // kind: tex | md | code | text | image
 const MAP = {
+  pdf: { kind: 'pdf', mode: null, icon: '▤' },
   tex: { kind: 'tex', mode: 'stex', icon: '§' }, sty: { kind: 'tex', mode: 'stex', icon: '§' },
   cls: { kind: 'tex', mode: 'stex', icon: '§' }, bib: { kind: 'tex', mode: 'stex', icon: '§' },
   md: { kind: 'md', mode: 'markdown', icon: '¶' }, markdown: { kind: 'md', mode: 'markdown', icon: '¶' },
@@ -47,5 +48,5 @@ export function infoFor(name) {
 }
 
 export function isTextEditable(name) {
-  return infoFor(name).kind !== 'image';
+  return !['image', 'pdf'].includes(infoFor(name).kind);
 }

@@ -16,7 +16,8 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
     setLoading(l => ({ ...l, [path]: true }));
     try {
       const entries = await listDir(dirHandle);
-      setChildren(c => ({ ...c, [path]: entries }));
+      setChildren(c => ({ ...c, [path]: entries.map(entry => ({ ...entry,
+        path: path ? path + '/' + entry.name : entry.name })) }));
     } catch (e) {
       setChildren(c => ({ ...c, [path]: [{ name: t('ft.readFailed', { msg: e.message || e }), kind: 'error' }] }));
     }
@@ -55,10 +56,10 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
     const seg = parentPath.split('/');
     let h = root, prefix = '';
     for (const name of seg) {
-      prefix = prefix ? prefix + '/' + name : name;
       const hit = (children[prefix] || []).find(x => x.kind === 'directory' && x.name === name);
       if (!hit) return null;
       h = hit.handle;
+      prefix = prefix ? prefix + '/' + name : name;
     }
     return h;
   };
@@ -117,7 +118,8 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
         <div
           className={'ft-row' + (selDir === entry.path && isDir ? ' sel' : '')}
           style={{ paddingLeft: depth * 12 + 8 }}
-          onClick={() => isDir ? toggle(entry) : onOpenFile(entry.handle, entry.path, null)}
+          onClick={() => isDir ? toggle(entry) : onOpenFile(entry.handle, entry.path,
+            parentHandle(entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : ''))}
         >
           <span className="ft-icon">{icon}</span>
           <span className="ft-name" title={entry.path}>{entry.name}</span>
