@@ -10,7 +10,7 @@
 npm install
 npm run dev        # 开发：http://localhost:5173
 npm run build      # 构建 → dist/
-npm test           # 冒烟测试（48 项断言）
+npm test           # 冒烟测试（渲染引擎 + 皮肤 token 契约）
 node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http://localhost:8788
 ```
 
@@ -25,18 +25,25 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 - 字数统计：估算当前文档预览正文的中文字数、其他语言词数及字符数；所选源码单独统计。
 - 下载：提供源码 ZIP、当前文件源码、打印导出 PDF 与已编译 PDF。ZIP 按文件树可见目录收集资源，已打开的文件使用最新编辑内容；未保存标签放入 `unsaved/` 避免覆盖同名文件。
 - 提交：导出投稿所需的源码包与 PDF，再自行提交至期刊或会议系统。
-- 设置：编辑器字号、自动换行、同步滚动和可用 TeX 编译器，编辑器设置随浏览器保存。
+- 设置：编辑器字号、自动换行、同步滚动、界面皮肤和可用 TeX 编译器，设置随浏览器保存。
 
 文件操作补充测试：`node test/fileActions.mjs`（ZIP 解压校验使用 Python 标准库）。
 
 ## TeX 引擎编译（pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX）
 
-1. **内置 XeLaTeX（浏览器）——默认可用，无需安装**：XeTeX/dvipdfmx 的 WebAssembly 构建 + 随站点分发的 TeX 宏包/字体镜像（`public/xelatex/`，来源与许可见 [public/xelatex/NOTICE.md](public/xelatex/NOTICE.md)），GitHub Pages 纯静态托管即可把 LaTeX（含 `ctexart` 中文）编译成 PDF。应用空闲时后台预热引擎，就绪后再按 `repo/warm.json`（内置模板首次编译实际会加载的 455 个资源）并行预取进浏览器缓存，此时引擎仍可编译、界面显示「资源预热中」；实测 40ms 往返链路下，demo 模板首次编译从 53s 降到 10s
+1. **内置 XeLaTeX（浏览器）——默认可用，无需安装**：XeTeX/dvipdfmx 的 WebAssembly 构建 + 随站点分发的 TeX 宏包/字体镜像（`public/xelatex/`，来源与许可见 [public/xelatex/NOTICE.md](public/xelatex/NOTICE.md)），GitHub Pages 纯静态托管即可把 LaTeX（含 `ctexart` 中文）编译成 PDF。应用空闲时后台预热引擎，就绪后**先用当前打开的文档跑一遍预热编译**（把这篇真正要用的宏包/字体拉进引擎内存），再按 `repo/warm.json`（内置模板冷编译实际加载的 456 项）并行预取进浏览器缓存；预取期间界面显示「资源预热中」，随时可编译。实测 40ms 往返链路下 demo 模板首次编译从 53s 降到 9s
 2. 本机引擎（可选）：安装 [MiKTeX](https://miktex.org) 或 TeX Live 并加入 PATH，`npm run build && node server.mjs` 后引擎下拉会多出本机引擎
 3. 「编译」→ 编译两遍（解析目录/引用）→ 预览区直接看 PDF（可下载/新窗口）；`latex` 引擎自动经 `dvipdfmx` 转 PDF
 4. **编译失败**：自动切换日志视图，`!` 错误与 `l.NN` 行号被解析成可点击条目，一键跳到源码行（进入「⚠ 问题」面板同样可跳转）
 
 未安装 TeX / 静态打开时仍可使用内置引擎与浏览器打印导出 PDF。
+
+## 界面皮肤
+
+「查看 → 皮肤」或「文件 → 设置… → 界面皮肤」切换 6 套配色：墨纸书斋（默认暖象牙）、素纸霜白、青瓷苔绿、夜航深蓝、石墨鎏金、紫夜幽兰；选择记在浏览器（`paperlite.theme.v1`），深色皮肤同时置 `color-scheme: dark`，原生控件与滚动条一起变暗。
+
+- 换肤只换界面（书桌、菜单栏、侧栏、编辑器、AI 面板），**论文纸面与导出 PDF 始终黑字白页**：TikZ / Mermaid / KaTeX 的描边与字色按浅纸设计，深色皮肤下预览只是把纸色调和一点（冷灰 / 暖米），不会变成黑底图。
+- 配色全是 CSS 变量：`src/themes.css` 每套皮肤一个 `@palette` 块（同一套 token，含 CodeMirror 语法色与纸面底色），`src/app.css` 只用 `var()` 消费。加一套皮肤 = 复制一个 `@palette` 块 + 在 `src/theme.js` 的 `THEME_IDS` 与 `i18n.js` 的 `theme.<id>` 补名称，`npm test` 会校验 token 有没有漏、缩略色与调色板是否同源。
 
 ## 大纲窗口
 
@@ -118,7 +125,9 @@ paperlite/
 │   ├── App.jsx           # 多标签状态中枢（文件夹/标签/预览路由/保存/同步滚动/快捷键）
 │   ├── fs.js             # File System Access API（目录遍历/读写/增删改 + IndexedDB 持久化）
 │   ├── fileTypes.js      # 扩展名 → 编辑器模式 / 预览类型 / 图标
-│   ├── app.css           # 界面 + 论文/Markdown 排版样式
+│   ├── app.css           # 界面 + 论文/Markdown 排版样式（只 var() 消费配色）
+│   ├── themes.css        # ★ 皮肤调色板：每套皮肤一个 @palette 块（含语法色、纸面底色）
+│   ├── theme.js          # 皮肤注册表 + 读写 localStorage / 涂 <html data-theme>
 │   ├── engines/          # ★ 纯渲染引擎（无 React/DOM 依赖，Node 可直接单测）
 │   │   ├── latex.js      #   LaTeX → HTML（注释等长抹除，保证源码偏移可回写）
 │   │   ├── tikz.js       #   TikZ 子集 → SVG（记录节点/样式源码区间）

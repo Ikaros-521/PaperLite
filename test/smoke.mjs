@@ -1,4 +1,5 @@
 /* PaperLite 冒烟测试（Node + 真实 KaTeX） */
+import { readFileSync } from 'node:fs';
 import { renderLatex } from '../src/engines/latex.js';
 import { renderMarkdown, renderMarkdownFull } from '../src/engines/markdown.js';
 import { lintLaTeX } from '../src/engines/linter.js';
@@ -6,6 +7,10 @@ import { collectIssues, currentCompileErrors } from '../src/diagnostics.js';
 import * as TIKZ from '../src/engines/tikz.js';
 import { samples } from '../src/engines/samples.js';
 import * as C from '../src/context.js';
+import { DICT } from '../src/i18n.js';
+import { THEME_IDS, DEFAULT_THEME, detectTheme } from '../src/theme.js';
+
+const PICK_TO_TOKEN = { '--t-desk': '--desk', '--t-paper': '--paper', '--t-accent': '--accent', '--t-seal': '--seal' };
 
 let pass = 0, fail = 0;
 function ok(cond, msg) {
@@ -131,6 +136,53 @@ ok(good.filter(d => d.kind === 'env' || d.kind === 'brace').length === 0, '示�
 ok(lintLaTeX('text % { $ \\begin{itemize}').length === 0, '注释中的括号、公式和环境不误报');
 ok(lintLaTeX('text \\% {').some(d => d.kind === 'brace'), '转义百分号后仍检查真实语法');
 ok(lintLaTeX('{fixed}').length === 0 && lintLaTeX('{broken').some(d => d.kind === 'brace'), '修改后重新检测，已修复的错误消失');
+
+// ---------- 主题皮肤 ----------
+console.log('== 主题皮肤 ==');
+const readSrc = f => readFileSync(new URL('../src/' + f, import.meta.url), 'utf8');
+const themesCss = readSrc('themes.css');
+const appCss = readSrc('app.css');
+const stripComments = css => css.replace(/\/\*[\s\S]*?\*\//g, '');
+// 打印样式与图表波浪线 data-URI 必须固定白/固定色，允许出现字面颜色
+const printBlock = (appCss.match(/@media print\s*\{[\s\S]*?\n\}/) || [''])[0];
+const chrome = stripComments(appCss.replace(printBlock, '')).replace(/url\("[^"]*"\)/g, 'url()');
+const chromeColors = chrome.match(/#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d/g) || [];
+ok(!chromeColors.length, 'app.css 界面样式不该写死颜色：' + chromeColors.join(' '));
+ok(detectTheme() === DEFAULT_THEME, '读不到偏好时回退默认皮肤');
+
+// 每套皮肤 = 一个 /* @palette */ 块，且 token 集合完全一致（少一个就会露出默认暖白）
+const palettes = [...themesCss.matchAll(/\/\* @palette \*\/\s*([^{}]*)\{([^{}]*)\}/g)]
+  .map(m => ({ sel: m[1], body: m[2], ids: [...m[1].matchAll(/data-theme="([^"]+)"/g)].map(x => x[1]) }));
+ok(palettes.length === THEME_IDS.length, '每套皮肤一个 @palette 块：' + palettes.length + ' vs ' + THEME_IDS.length);
+const tokensOf = body => [...new Set((body.match(/(^|[;{\s])(--[a-z0-9-]+)\s*:/g) || []).map(s => s.replace(/[^a-z0-9-]/g, '')))];
+const inkTokens = tokensOf(palettes[0].body);
+ok(palettes.every(p => p.ids.some(id => THEME_IDS.includes(id))), '调色板都对应已注册皮肤');
+ok(inkTokens.some(t => t.startsWith('--doc-')) && inkTokens.some(t => t.startsWith('--syn-')) === false, '@palette 块含纸面色调、不含语法色');
+for (const p of palettes.slice(1)) {
+  const mine = tokensOf(p.body);
+  for (const t of inkTokens) ok(mine.includes(t), p.ids.join('/') + ' 缺少 token ' + t);
+  for (const t of mine) ok(inkTokens.includes(t), p.ids.join('/') + ' 多出 token ' + t);
+}
+
+// 皮肤 id 三方对齐：theme.js 注册表 ↔ themes.css 的 [data-theme] / [data-pick] ↔ DICT 文案
+for (const id of THEME_IDS) {
+  ok(new RegExp('\\[data-theme="' + id + '"\\]').test(themesCss), '缺少 [data-theme="' + id + '"] 调色板');
+  ok(new RegExp('\\[data-pick="' + id + '"\\]').test(themesCss), '缺少 [data-pick="' + id + '"] 缩略色');
+  for (const l of ['zh', 'en']) ok(DICT[l]['theme.' + id], l + ' 缺少文案 theme.' + id);
+}
+ok(THEME_IDS.includes(DEFAULT_THEME) && palettes[0].sel.includes(':root'), '默认皮肤挂在 :root 上兜底');
+
+// 选择器缩略色与真实调色板同源
+const propVal = (body, name) => (body.match(new RegExp(name + '\\s*:\\s*([^;]+);')) || [, ''])[1].trim().toLowerCase();
+for (const p of palettes) for (const [pick, real] of Object.entries(PICK_TO_TOKEN)) {
+  const block = (themesCss.match(new RegExp('\\[data-pick="' + (p.ids[0]) + '"\\] \\{([^}]*)\\}')) || [, ''])[1];
+  ok(propVal(block, pick) === propVal(p.body, real), p.ids[0] + ' 的 ' + pick + ' 缩略色与调色板不一致');
+}
+
+// app.css 用到的变量都得有定义，否则该处直接失去颜色
+const declared = new Set((stripComments(appCss + themesCss).match(/(^|[;{\s])(--[a-z0-9-]+)\s*:/g) || []).map(s => s.replace(/[^a-z0-9-]/g, '')));
+const referenced = new Set([...(appCss + themesCss).matchAll(/var\((--[a-z0-9-]+)/g)].map(m => m[1]));
+for (const v of referenced) ok(declared.has(v), '变量无人定义：' + v);
 
 console.log('== 诊断生命周期 ==');
 const compileError = { line: 0, msg: 'Undefined control sequence' };

@@ -1,0 +1,194 @@
+/* PaperLite 主题皮肤
+ * 约定：每个 `@palette` 块都要定义同一套 token（app.css 只消费 var()，少定义一个就会露出
+ *       默认皮肤的暖白）；改配色只改这里，不要在 app.css 里写死颜色。
+ * 不变量：--doc-* 纸面族在所有皮肤下都保持浅色 —— TikZ / Mermaid / KaTeX 的黑色描边
+ *       与字色是按浅纸设计的，深色纸面会让图形不可读。
+ *       打印与 PDF 导出走 exporter.js 的 PRINT_CSS，始终是白纸黑字，不受皮肤影响。 */
+
+/* ---------- 文档纸面的结构性颜色（所有皮肤共用，皮肤只调下面 6 个底色 token） ---------- */
+:root {
+  --doc-ink: #14181f;         /* 正文 + booktabs 粗线 */
+  --doc-soft: #4a5261;        /* 日期、摘要元信息 */
+  --doc-cap: #232833;         /* 图/公式编号 */
+  --doc-edge: #e4e6ea;        /* 摘要框、Markdown H1 下划线 */
+  --doc-vline: #46505e;       /* 表格竖线 */
+  --doc-rule-soft: #6b7482;   /* booktabs 细横线 */
+  --doc-quote-edge: #b6bcc7;
+  --doc-quote-ink: #3c4453;
+  --doc-img-edge: #d5d9df;
+  --doc-img-bg: #fff;         /* 插图底：图片本身不跟着染色 */
+  --doc-toc-edge: #ccd1d8;
+  --doc-code-edge: #e4e7ec;
+  --doc-pb-edge: #c9cedb;
+  --doc-pb-ink: #9aa3b2;
+  --doc-ref: #17325c;         /* \ref / \cite 上标 */
+  --doc-link: #1d4ed8;
+  --doc-error: #c0392b;       /* 未解析引用、公式报错 */
+  --md-cell-edge: #d7dbe2;
+  --md-hr: #dfe3e9;
+  --md-code-bg: #f0f2f5;
+  --doc-shadow-rgb: 74, 61, 36;
+}
+
+/* ---------- CodeMirror 语法色：浅色皮肤一套、深色皮肤一套 ---------- */
+:root,
+[data-theme="ink"], [data-theme="frost"], [data-theme="moss"] {
+  --syn-kw: #770088; --syn-atom: #221199; --syn-num: #116644; --syn-def: #0000ff;
+  --syn-var2: #0055aa; --syn-var3: #007a4d; --syn-comment: #aa5500; --syn-string: #aa1111;
+  --syn-string2: #b8500c; --syn-meta: #555555; --syn-builtin: #3300aa; --syn-bracket: #6f6033;
+  --syn-tag: #117700; --syn-attr: #0000cc; --syn-header: #0033aa; --syn-quote: #008833;
+  --syn-link: #0000cc; --syn-error: #dd2222;
+}
+[data-theme="midnight"], [data-theme="graphite"], [data-theme="orchid"] {
+  --syn-kw: #c792ea; --syn-atom: #ffcb6b; --syn-num: #f78c6c; --syn-def: #82aaff;
+  --syn-var2: #7fdbca; --syn-var3: #a9d47f; --syn-comment: #8b98a8; --syn-string: #c3e88d;
+  --syn-string2: #f9a86b; --syn-meta: #9aa7b8; --syn-builtin: #82aaff; --syn-bracket: #8fa6c0;
+  --syn-tag: #f07178; --syn-attr: #ffcb6b; --syn-header: #82aaff; --syn-quote: #7fdbca;
+  --syn-link: #82aaff; --syn-error: #ff6b6b;
+}
+
+/* ---------- 墨纸书斋：暖象牙书桌 + 墨蓝 + 朱砂（默认） ---------- */
+/* @palette */
+:root, [data-theme="ink"] {
+  color-scheme: light;
+  --desk: #ebe6d9; --desk-deep: #e6e0d0; --chrome: #f6f2e7; --paper: #fffdf8;
+  --hover: #f4f0e4; --hover-sunken: #ddd5c0;
+  --line: #d8d1bd; --line-soft: #e8e2d2; --edge: #bdb49a; --edge-strong: #9a9276;
+  --ink: #2e2b23; --ink-soft: #6c6656; --ink-faint: #9c947e;
+  --on-accent: #f8f6ef; --on-seal: #fdf8ef;
+  --ink-rgb: 46, 43, 35; --paper-rgb: 255, 253, 248; --accent-rgb: 31, 58, 95; --shadow-rgb: 64, 54, 34;
+  --accent: #1f3a5f; --accent-deep: #172e4d; --accent-border: #8fa7c4;
+  --seal: #b3432e; --seal-deep: #8e3522; --seal-wash: #f8ebe6; --seal-edge: #e3b7a9;
+  --ok: #2f6b33; --ok-wash: #eef3e7; --warn: #a16207; --warn-strong: #d97706;
+  --chip-bg: #f0e6d2; --chip-ink: #7a5c17;
+  --scroll: #cdc5ae; --scroll-hover: #b5ab8e; --backdrop: rgba(43, 38, 27, .45);
+  --divider: #ddd6c3; --divider-active: #a9bdd6; --flash: #fdf3d7;
+  --gutter-ink: #b3ab93; --pdf-bg: #525659;
+  --bubble-user: #e7ecf3; --badge-bg: #eaeef4; --code-bg: #23211b; --code-ink: #e4dfd0;
+  --doc-paper: #fffdf8; --doc-block-bg: #fafafa; --doc-code-bg: #f6f7f9;
+  --doc-toc-bg: #fbfcfd; --md-th-bg: #f4f6f9; --md-quote-bg: #fafbfc;
+  --serif: Georgia, "Times New Roman", "Noto Serif SC", "Source Han Serif SC", "SimSun", serif;
+}
+
+/* ---------- 素纸霜白：冷灰白纸面 + 钢蓝，去掉一切暖调 ---------- */
+/* @palette */
+[data-theme="frost"] {
+  color-scheme: light;
+  --desk: #eef1f5; --desk-deep: #e3e8ef; --chrome: #fafbfc; --paper: #ffffff;
+  --hover: #eef3f8; --hover-sunken: #dbe3ec;
+  --line: #d4dce5; --line-soft: #e7edf3; --edge: #c1ccd7; --edge-strong: #93a2b1;
+  --ink: #1c2430; --ink-soft: #586573; --ink-faint: #7a8694;
+  --on-accent: #f4f9fd; --on-seal: #fff6f1;
+  --ink-rgb: 28, 36, 48; --paper-rgb: 255, 255, 255; --accent-rgb: 46, 110, 173; --shadow-rgb: 24, 38, 56;
+  --accent: #2e6ead; --accent-deep: #235283; --accent-border: #9dc0dd;
+  --seal: #c2410c; --seal-deep: #96310a; --seal-wash: #fdece2; --seal-edge: #f0bfa1;
+  --ok: #137a4a; --ok-wash: #e6f4ec; --warn: #8a6100; --warn-strong: #b45309;
+  --chip-bg: #e6eff7; --chip-ink: #3f6485;
+  --scroll: #c6d0da; --scroll-hover: #a9b6c4; --backdrop: rgba(15, 23, 32, .45);
+  --divider: #d4dce5; --divider-active: #9dc0dd; --flash: #fdf4d8;
+  --gutter-ink: #a3aebb; --pdf-bg: #3c4450;
+  --bubble-user: #e2ecf7; --badge-bg: #dbe9f6; --code-bg: #12181f; --code-ink: #dde5ee;
+  --doc-paper: #ffffff; --doc-block-bg: #f7f9fb; --doc-code-bg: #f5f7fa;
+  --doc-toc-bg: #fafcfe; --md-th-bg: #f1f5f8; --md-quote-bg: #f7f9fb;
+  --serif: Cambria, "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+}
+
+/* ---------- 青瓷苔绿：淡苔桌面 + 深松绿主色 ---------- */
+/* @palette */
+[data-theme="moss"] {
+  color-scheme: light;
+  --desk: #e7ece3; --desk-deep: #dde5d8; --chrome: #f3f6ee; --paper: #fcfef8;
+  --hover: #eaf0e3; --hover-sunken: #d6dfce;
+  --line: #cedbc7; --line-soft: #e2ead9; --edge: #b3c2a9; --edge-strong: #869a7c;
+  --ink: #232c25; --ink-soft: #5a6a57; --ink-faint: #75836b;
+  --on-accent: #f3f8ef; --on-seal: #fdf5ee;
+  --ink-rgb: 35, 44, 37; --paper-rgb: 252, 254, 248; --accent-rgb: 47, 107, 79; --shadow-rgb: 34, 52, 34;
+  --accent: #2f6b4f; --accent-deep: #234f3a; --accent-border: #8fb8a1;
+  --seal: #b4562f; --seal-deep: #8c4222; --seal-wash: #f7e9df; --seal-edge: #e6bc9f;
+  --ok: #2b6b3a; --ok-wash: #e9f2e4; --warn: #7d6410; --warn-strong: #c07800;
+  --chip-bg: #e7eed7; --chip-ink: #55631b;
+  --scroll: #c2cfba; --scroll-hover: #a7b8a0; --backdrop: rgba(22, 32, 22, .45);
+  --divider: #d3ddca; --divider-active: #8fb8a1; --flash: #f6f3d2;
+  --gutter-ink: #a2b199; --pdf-bg: #414d43;
+  --bubble-user: #dce9df; --badge-bg: #d8e8dc; --code-bg: #1b211c; --code-ink: #e2e8dc;
+  --doc-paper: #fbfcf5; --doc-block-bg: #f2f5ea; --doc-code-bg: #f2f5ec;
+  --doc-toc-bg: #f7faf2; --md-th-bg: #eff4e8; --md-quote-bg: #f4f7ee;
+  --serif: "Palatino Linotype", "Book Antiqua", "Noto Serif SC", Georgia, serif;
+}
+
+/* ---------- 夜航深蓝：暗海军蓝界面 + 冰蓝主色，纸面压成冷灰浅调 ---------- */
+/* @palette */
+[data-theme="midnight"] {
+  color-scheme: dark;
+  --desk: #111825; --desk-deep: #0c1220; --chrome: #18212f; --paper: #141d2b;
+  --hover: #1f2b3d; --hover-sunken: #28374b;
+  --line: #2b3a4f; --line-soft: #223044; --edge: #3d5270; --edge-strong: #5b728c;
+  --ink: #dce5f2; --ink-soft: #9db0c6; --ink-faint: #708398;
+  --on-accent: #08121d; --on-seal: #1d0e0b;
+  --ink-rgb: 220, 229, 242; --paper-rgb: 20, 29, 43; --accent-rgb: 97, 168, 232; --shadow-rgb: 0, 0, 0;
+  --accent: #61a8e8; --accent-deep: #8cc2f2; --accent-border: #3f6c95;
+  --seal: #e5735c; --seal-deep: #f09078; --seal-wash: #39231f; --seal-edge: #6d3a2e;
+  --ok: #5fc27f; --ok-wash: #1c2e22; --warn: #d7a94f; --warn-strong: #e3a008;
+  --chip-bg: #223145; --chip-ink: #9fc0e2;
+  --scroll: #31435a; --scroll-hover: #42586f; --backdrop: rgba(4, 8, 14, .6);
+  --divider: #2b3a4f; --divider-active: #3f6c95; --flash: #3a3520;
+  --gutter-ink: #5d6f85; --pdf-bg: #0a0e14;
+  --bubble-user: #22354d; --badge-bg: #23384f; --code-bg: #0a1018; --code-ink: #d5e0ef;
+  --doc-paper: #e6ebf2; --doc-block-bg: #dbe2ec; --doc-code-bg: #dde4ee;
+  --doc-toc-bg: #e9eef5; --md-th-bg: #d8e0ea; --md-quote-bg: #e0e7f0;
+  --serif: Georgia, "Times New Roman", "Noto Serif SC", "Source Han Serif SC", "SimSun", serif;
+}
+
+/* ---------- 石墨鎏金：中性石墨灰 + 琥珀金，标题改用无衬线 ---------- */
+/* @palette */
+[data-theme="graphite"] {
+  color-scheme: dark;
+  --desk: #1c1c1f; --desk-deep: #161618; --chrome: #26262a; --paper: #1f1f23;
+  --hover: #2b2b31; --hover-sunken: #3a3a41;
+  --line: #3b3b41; --line-soft: #2f2f34; --edge: #4d4d56; --edge-strong: #6e6e78;
+  --ink: #e7e4de; --ink-soft: #a8a49b; --ink-faint: #8f8a80;
+  --on-accent: #1d1608; --on-seal: #1f0f0c;
+  --ink-rgb: 231, 228, 222; --paper-rgb: 31, 31, 35; --accent-rgb: 217, 164, 65; --shadow-rgb: 0, 0, 0;
+  --accent: #d9a441; --accent-deep: #eab95c; --accent-border: #7a5f22;
+  --seal: #e2694f; --seal-deep: #f08a72; --seal-wash: #39211a; --seal-edge: #6f3626;
+  --ok: #63bd7b; --ok-wash: #20301f; --warn: #d7a94f; --warn-strong: #e08b3c;
+  --chip-bg: #322a18; --chip-ink: #dcbb7a;
+  --scroll: #3d3d44; --scroll-hover: #54545c; --backdrop: rgba(0, 0, 0, .6);
+  --divider: #3b3b41; --divider-active: #7a5f22; --flash: #3a3018;
+  --gutter-ink: #6a6a72; --pdf-bg: #0f0f11;
+  --bubble-user: #32291b; --badge-bg: #32291b; --code-bg: #101012; --code-ink: #e2ded4;
+  --doc-paper: #e8e5de; --doc-block-bg: #dedad0; --doc-code-bg: #dfdbd2;
+  --doc-toc-bg: #e6e3db; --md-th-bg: #ddd9cf; --md-quote-bg: #e2dfd6;
+  --serif: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* ---------- 紫夜幽兰：暗紫罗兰底 + 薰衣草主色 ---------- */
+/* @palette */
+[data-theme="orchid"] {
+  color-scheme: dark;
+  --desk: #1a1523; --desk-deep: #141019; --chrome: #241c31; --paper: #1e1729;
+  --hover: #2b2139; --hover-sunken: #3a2d4c;
+  --line: #3c2f4c; --line-soft: #2f2540; --edge: #564368; --edge-strong: #7c6694;
+  --ink: #e8e0f2; --ink-soft: #a898bd; --ink-faint: #9080a8;
+  --on-accent: #160f22; --on-seal: #210f16;
+  --ink-rgb: 232, 224, 242; --paper-rgb: 30, 23, 41; --accent-rgb: 167, 139, 250; --shadow-rgb: 8, 4, 14;
+  --accent: #a78bfa; --accent-deep: #c4b5fd; --accent-border: #6a4fa0;
+  --seal: #ec6a9b; --seal-deep: #f58bb1; --seal-wash: #341d2b; --seal-edge: #6b3550;
+  --ok: #6ecf9a; --ok-wash: #1f3028; --warn: #dcac63; --warn-strong: #e2a13c;
+  --chip-bg: #2e2440; --chip-ink: #c0aef0;
+  --scroll: #413450; --scroll-hover: #57466a; --backdrop: rgba(8, 4, 14, .6);
+  --divider: #3c2f4c; --divider-active: #6a4fa0; --flash: #3a2f1c;
+  --gutter-ink: #6f5f85; --pdf-bg: #0d0912;
+  --bubble-user: #2e2440; --badge-bg: #332848; --code-bg: #120d1a; --code-ink: #e0d6ef;
+  --doc-paper: #ece7f1; --doc-block-bg: #e2dcea; --doc-code-bg: #e3dde9;
+  --doc-toc-bg: #e9e4f0; --md-th-bg: #e0d9e9; --md-quote-bg: #e5dff0;
+  --serif: "Book Antiqua", "Palatino Linotype", Georgia, "Noto Serif SC", serif;
+}
+
+/* ---------- 皮肤选择器缩略色（与上方调色板同源，改皮肤时一起改） ---------- */
+[data-pick="ink"] { --t-desk: #ebe6d9; --t-paper: #fffdf8; --t-accent: #1f3a5f; --t-seal: #b3432e; }
+[data-pick="frost"] { --t-desk: #eef1f5; --t-paper: #ffffff; --t-accent: #2e6ead; --t-seal: #c2410c; }
+[data-pick="moss"] { --t-desk: #e7ece3; --t-paper: #fcfef8; --t-accent: #2f6b4f; --t-seal: #b4562f; }
+[data-pick="midnight"] { --t-desk: #111825; --t-paper: #141d2b; --t-accent: #61a8e8; --t-seal: #e5735c; }
+[data-pick="graphite"] { --t-desk: #1c1c1f; --t-paper: #1f1f23; --t-accent: #d9a441; --t-seal: #e2694f; }
+[data-pick="orchid"] { --t-desk: #1a1523; --t-paper: #1e1729; --t-accent: #a78bfa; --t-seal: #ec6a9b; }

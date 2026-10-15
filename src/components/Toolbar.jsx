@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useT } from '../useI18n.js';
+import { THEME_IDS } from '../theme.js';
 
 /* 顶栏重构为经典菜单栏（文件/编辑/插入/查看/TeX/AI/帮助）+ 第二行上下文工具条。
  * 菜单行为遵循桌面惯例：点击展开、再点收起、展开时悬停切换、Esc / 点击外部关闭、
@@ -73,7 +74,8 @@ export default function Toolbar({
   engines, engine, setEngine, compiling, onCompile, downloadPdf, builtinStatus,
   channelCount, onOpenChat, onOpenSettings, onAiFix,
   syncScroll, setSyncScroll, zoom, onZoom,
-  onHelp, lang, setLang
+  onHelp, lang, setLang,
+  theme, setTheme
 }) {
   const t = useT();
   const [open, setOpen] = useState(null);
@@ -197,6 +199,12 @@ export default function Toolbar({
               <Mi check={viewMode === 'preview'} label={t('m.vmPreview')} close={close} onClick={() => setViewMode('preview')} />
             </MiSub>
             <Mi check={syncScroll} label={t('m.syncScroll')} close={close} onClick={() => setSyncScroll(!syncScroll)} />
+            <MSep />
+            <MiSub label={t('m.theme')}>
+              {THEME_IDS.map(id => (
+                <Mi key={id} check={theme === id} label={t('theme.' + id)} hint={<span className="mini-sw" data-pick={id}></span>} close={close} onClick={() => setTheme(id)} />
+              ))}
+            </MiSub>
             <MSep />
             <MiSub label={t('m.zoom')}>
               <Mi icon="＋" label={t('m.zoomIn')} close={close} onClick={() => onZoom(0.1)} />

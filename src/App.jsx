@@ -16,7 +16,7 @@ import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors } from './diagnostics.js';
-import { preloadEngine, compileXeLaTeX, onEngineStatus } from './engines/xelatex.js';
+import { warmEngine, compileXeLaTeX, onEngineStatus } from './engines/xelatex.js';
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
 import { infoFor } from './fileTypes.js';
@@ -24,6 +24,7 @@ import * as fs from './fs.js';
 import * as llm from './llm.js';
 import * as ctxBudget from './context.js';
 import { LS_LANG, detectLang, getLang, setLang as setModuleLang, tr } from './i18n.js';
+import { detectTheme, applyTheme } from './theme.js';
 import { LangContext } from './useI18n.js';
 
 const LS_KEY = 'paperlite.doc.v2';
@@ -72,6 +73,7 @@ export default function App() {
 
   // ---- 视图 ----
   const [viewMode, setViewMode] = useState(() => { try { return localStorage.getItem(LS_MODE) || 'split'; } catch (e) { return 'split'; } });
+  const [theme, setTheme] = useState(detectTheme);
   const [splitPct, setSplitPct] = useState(50);
   const [zoom, setZoom] = useState(1);
   const [editorSettings, setEditorSettings] = useState(() => {
@@ -147,6 +149,9 @@ export default function App() {
     document.title = t('app.title');
   }, [lang, t]);
 
+  // ---- 皮肤：切换即涂 <html data-theme> 并落盘 ----
+  useEffect(() => { applyTheme(theme); }, [theme]);
+
   // ---- 恢复文件夹 & 检测 TeX 引擎 ----
   useEffect(() => {
     (async () => {
@@ -173,7 +178,7 @@ export default function App() {
   // ---- 内置 XeLaTeX 引擎：状态订阅 + 空闲时后台预热（不阻塞界面） ----
   useEffect(() => {
     const off = onEngineStatus(setBuiltinStatus);
-    const kick = () => { preloadEngine().catch(() => { /* 状态已置 error，由 UI 提示 */ }); };
+    const kick = () => { warmEngine(compileContextRef.current?.doc?.getValue() || '').catch(() => { /* 状态已置 error，由 UI 提示 */ }); };
     let ic = null, tid = null;
     if ('requestIdleCallback' in window) { ic = requestIdleCallback(kick, { timeout: 20000 }); }
     else tid = setTimeout(kick, 3000);
@@ -876,6 +881,7 @@ export default function App() {
         zoom={zoom} onZoom={setZoomClamped}
         onHelp={setHelpOpen}
         lang={lang} setLang={setLang}
+        theme={theme} setTheme={setTheme}
       />
 
       <main id="layout" data-mode={viewMode} style={{ '--split': splitPct + '%' }}>
@@ -1049,6 +1055,7 @@ export default function App() {
         versions={readHistory(historyKey)} onSnapshot={snapshot}
         onRestore={version => { snapshot(); activeTab.doc.setValue(version.text); setCompileResult(null); setPreviewMode('rich'); setFileDialog(null); flash(t('file.restored')); }}
         settings={{ ...editorSettings, syncScroll }} onSettings={settings => { setEditorSettings(settings); setSyncScroll(settings.syncScroll); }}
+        theme={theme} setTheme={setTheme}
         engines={engines} engine={engine} setEngine={setEngine}
         onSource={exportProject} busy={packaging} pdfAvailable={isTexLike || isMd}
         onPdf={compileResult?.ok ? () => downloadCompiled(compileResult) : exportPdfPrint}
