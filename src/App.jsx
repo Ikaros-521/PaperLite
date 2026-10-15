@@ -34,6 +34,14 @@ import { LangContext } from './useI18n.js';
 
 const LS_KEY = 'paperlite.doc.v2';
 const LS_MODE = 'paperlite.viewmode.v2';
+const LS_LAYOUT = 'paperlite.layout.v1';
+// 把手宽度与 app.css 的 .divider 保持一致，拖拽换算按它补偿半格偏移
+const DIVIDER_W = 5;
+const SIDEBAR_MIN = 150, SIDEBAR_MAX = 520, SIDEBAR_DEFAULT = 232;
+const SPLIT_MIN = 15, SPLIT_MAX = 85, SPLIT_DEFAULT = 52;
+// 侧栏拖到最宽时，仍要给编辑区 + 预览区留出的最小空间
+const PANES_KEEP = 350;
+const clampNum = (v, lo, hi, dflt) => (Number.isFinite(v) && v > 0 ? Math.min(hi, Math.max(lo, v)) : dflt);
 let lastRenderMs = 0;
 let tabSeq = 0;
 
@@ -80,7 +88,13 @@ export default function App() {
   // ---- 视图 ----
   const [viewMode, setViewMode] = useState(() => { try { return localStorage.getItem(LS_MODE) || 'split'; } catch (e) { return 'split'; } });
   const [theme, setTheme] = useState(detectTheme);
-  const [splitPct, setSplitPct] = useState(50);
+  // 三栏宽度：侧栏按 px，编辑/预览按比例（随窗口缩放）
+  const [layoutSize, setLayoutSize] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem(LS_LAYOUT) || '{}');
+      return { sidebar: clampNum(+s.sidebar, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT), split: clampNum(+s.split, SPLIT_MIN, SPLIT_MAX, SPLIT_DEFAULT) };
+    } catch (e) { return { sidebar: SIDEBAR_DEFAULT, split: SPLIT_DEFAULT }; }
+  });
   const [zoom, setZoom] = useState(1);
   const [editorSettings, setEditorSettings] = useState(() => {
     try { const s = JSON.parse(localStorage.getItem('paperlite.editor-settings') || '{}'); return { fontSize: [12,14,16,18,20].includes(s.fontSize) ? s.fontSize : 14, lineWrapping: s.lineWrapping !== false, syncScroll: s.syncScroll !== false }; }
@@ -318,6 +332,25 @@ export default function App() {
   }, [activeValue, activeTab]);
 
   useEffect(() => { try { localStorage.setItem(LS_MODE, viewMode); } catch (e) { /* ignore */ } }, [viewMode]);
+
+  // 分栏宽度防抖落盘：拖动过程中不写 localStorage
+  useEffect(() => {
+    const t = setTimeout(() => { try { localStorage.setItem(LS_LAYOUT, JSON.stringify(layoutSize)); } catch (e) { /* ignore */ } }, 300);
+    return () => clearTimeout(t);
+  }, [layoutSize]);
+
+  // 窗口收窄时收回侧栏宽度，并让 CodeMirror 按新列宽重排
+  useEffect(() => {
+    const onResize = () => {
+      const layout = document.getElementById('layout');
+      if (!layout) return;
+      const max = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, layout.clientWidth - PANES_KEEP));
+      setLayoutSize(p => (p.sidebar <= max ? p : { ...p, sidebar: max }));
+      const c = cmRef.current; if (c) c.refresh();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // ---- 新建文件（未保存标签；Ctrl+S 时另存到已开文件夹，或弹出系统另存为）----
   const newFile = () => {
@@ -732,24 +765,50 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // ---- 分栏拖拽 ----
-  const dragDivider = (e) => {
+  // ---- 分栏拖拽：左把手调侧栏宽度，右把手调编辑/预览占比 ----
+  // 指针捕获 + body.dragging 遮罩：甩快、越过 PDF iframe 或移出窗口时事件不丢
+  const dragDivider = (e, edge) => {
+    if (e.button !== 0) return;
+    const layout = document.getElementById('layout');
+    const ec = document.getElementById('editorCol');
+    if (!layout || !ec) return;
     e.preventDefault();
+    const handle = e.currentTarget;
+    const rect = layout.getBoundingClientRect();
+    const sidebarEl = document.getElementById('sidebar');
+    const sidebarW = sidebarEl ? sidebarEl.offsetWidth : 0;
+    const ecLeft = ec.getBoundingClientRect().left - rect.left;
+    // 编辑/预览两条把手之间可分配的宽度（侧栏与把手都是固定的）
+    const free = Math.max(1, rect.width - sidebarW - 2 * DIVIDER_W);
+    const maxSidebar = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, rect.width - PANES_KEEP));
     const move = (ev) => {
-      const layout = document.getElementById('layout');
-      if (!layout) return;
-      const rect = layout.getBoundingClientRect();
-      setSplitPct(Math.min(80, Math.max(20, (ev.clientX - rect.left - 232) / rect.width * 100)));
+      const x = ev.clientX - rect.left - DIVIDER_W / 2;
+      if (edge === 'left') setLayoutSize(p => ({ ...p, sidebar: Math.min(maxSidebar, Math.max(SIDEBAR_MIN, x)) }));
+      else setLayoutSize(p => ({ ...p, split: Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, (x - ecLeft) / free * 100)) }));
     };
-    const up = () => {
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
+    const finish = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      if (handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
       document.body.classList.remove('dragging');
       const c = cmRef.current; if (c) c.refresh();
     };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
     document.body.classList.add('dragging');
+    try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 捕获失败由遮罩兜底 */ }
+  };
+
+  // 双击复位、方向键微调：把手可聚焦，不用鼠标也能改宽度
+  const resetDivider = (edge) => setLayoutSize(p => (edge === 'left' ? { ...p, sidebar: SIDEBAR_DEFAULT } : { ...p, split: SPLIT_DEFAULT }));
+  const nudgeDivider = (e, edge) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    if (edge === 'left') setLayoutSize(p => ({ ...p, sidebar: clampNum(p.sidebar + dir * 16, SIDEBAR_MIN, SIDEBAR_MAX, p.sidebar) }));
+    else setLayoutSize(p => ({ ...p, split: clampNum(p.split + dir * 2, SPLIT_MIN, SPLIT_MAX, p.split) }));
   };
 
   const setZoomClamped = (d) => setZoom(z => Math.min(1.6, Math.max(0.5, +(z + d).toFixed(2))));
@@ -924,7 +983,7 @@ export default function App() {
         theme={theme} setTheme={setTheme}
       />
 
-      <main id="layout" data-mode={viewMode} style={{ '--split': splitPct + '%' }}>
+      <main id="layout" data-mode={viewMode} style={{ '--sidebar-w': layoutSize.sidebar + 'px', '--g-edit': String(layoutSize.split), '--g-prev': String(100 - layoutSize.split) }}>
         <div id="sidebar">
           <div className="side-tabs">
             <button className={sideTab === 'files' ? 'on' : ''} title={t('side.files')} onClick={() => setSideTab('files')} disabled={!rootDir && !restorePrompt}>{lang === 'zh' ? '文' : '▤'}</button>
@@ -956,6 +1015,13 @@ export default function App() {
           </div>
         </div>
 
+        {viewMode !== 'preview' && (
+          <div id="sideDivider" className="divider" role="separator" aria-orientation="vertical" tabIndex={0}
+            aria-valuenow={Math.round(layoutSize.sidebar)} aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX}
+            title={lang === 'zh' ? '拖动调整侧栏宽度 · 双击复位' : 'Drag to resize sidebar · double-click to reset'}
+            onPointerDown={e => dragDivider(e, 'left')} onDoubleClick={() => resetDivider('left')} onKeyDown={e => nudgeDivider(e, 'left')}></div>
+        )}
+
         <section id="editorCol">
           <TabsBar tabs={tabs} activeId={activeId} onActivate={id => setActiveId(id)} onClose={closeTab} />
           {hasEditor ? (
@@ -976,7 +1042,12 @@ export default function App() {
           )}
         </section>
 
-        {viewMode === 'split' && <div id="divider" title={lang === 'zh' ? '拖动调整分栏' : 'Drag to resize split'} onMouseDown={dragDivider}></div>}
+        {viewMode === 'split' && (
+          <div id="divider" className="divider" role="separator" aria-orientation="vertical" tabIndex={0}
+            aria-valuenow={Math.round(layoutSize.split)} aria-valuemin={SPLIT_MIN} aria-valuemax={SPLIT_MAX}
+            title={lang === 'zh' ? '拖动调整编辑/预览宽度 · 双击复位' : 'Drag to resize split · double-click to reset'}
+            onPointerDown={e => dragDivider(e, 'right')} onDoubleClick={() => resetDivider('right')} onKeyDown={e => nudgeDivider(e, 'right')}></div>
+        )}
 
         {viewMode !== 'edit' && (
           activeTab && activeTab.kind === 'image' ? (

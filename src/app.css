@@ -156,13 +156,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .view-switch .btn { border: 0; border-radius: 0; }
 
 /* ---------- 主体布局 ---------- */
-#layout { flex: 1; display: flex; min-height: 0; --split: 52%; }
+/* 侧栏固定 px、编辑/预览按 flex-grow 比例瓜分剩余宽度（数字由 App.jsx 写入 --g-*）
+ * 三处 min-width 与 App.jsx 的 SIDEBAR_MIN / 拖拽下限保持一致，窗口极窄时由侧栏先收缩。 */
+#layout { flex: 1; display: flex; min-height: 0; --sidebar-w: 232px; --g-edit: 52; --g-prev: 48; }
 #layout[data-mode="edit"] #previewPane, #layout[data-mode="edit"] #divider { display: none; }
 #layout[data-mode="preview"] #editorCol, #layout[data-mode="preview"] #divider, #layout[data-mode="preview"] #workspace { display: none; }
 
+/* 两条横向拖动的把手：左（侧栏|编辑）、右（编辑|预览） */
+.divider { width: 5px; flex: none; cursor: col-resize; background: var(--divider); transition: background .15s; touch-action: none; }
+.divider:hover, .divider:focus-visible, body.dragging .divider { background: var(--divider-active); }
+body.dragging { cursor: col-resize; user-select: none; }
+/* 拖拽期间铺满视口的透明遮罩：指针越过预览 iframe 时事件仍归本页接收 */
+body.dragging::before { content: ''; position: fixed; inset: 0; z-index: 9999; }
+
 /* ---------- 左侧栏（文件 / 大纲 / 问题） ---------- */
 #sidebar {
-  width: 232px; flex: none; background: var(--desk-deep); border-right: 1px solid var(--line);
+  flex: 0 1 var(--sidebar-w); min-width: 150px; background: var(--desk-deep); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0; font-size: 13px;
 }
 #layout[data-mode="preview"] #sidebar { display: none; }
@@ -494,7 +503,7 @@ body.cp-dragging::before {
 .ft-error { color: var(--seal-deep); padding: 3px 8px; font-size: 12px; }
 
 /* ---------- 标签栏 ---------- */
-#editorCol { width: var(--split); min-width: 260px; display: flex; flex-direction: column; background: var(--paper); min-height: 0; }
+#editorCol { flex: var(--g-edit) 1 0; min-width: 160px; display: flex; flex-direction: column; background: var(--paper); min-height: 0; }
 #tabsBar {
   display: flex; background: var(--desk-deep); border-bottom: 1px solid var(--line); overflow-x: auto; flex: none;
 }
@@ -563,10 +572,7 @@ body.cp-dragging::before {
 .btn:disabled:hover { background: var(--paper); border-color: var(--line); color: var(--ink-soft); }
 .btn.primary:disabled:hover { background: var(--accent); }
 
-#divider { width: 5px; cursor: col-resize; background: var(--divider); transition: background .15s; }
-#divider:hover, body.dragging #divider { background: var(--divider-active); }
-
-#previewPane { flex: 1; min-width: 320px; display: flex; flex-direction: column; position: relative; background: var(--desk); }
+#previewPane { flex: var(--g-prev) 1 0; min-width: 180px; display: flex; flex-direction: column; position: relative; background: var(--desk); }
 #previewBar {
   display: flex; align-items: center; gap: 10px; padding: 5px 12px;
   background: var(--chrome); border-bottom: 1px solid var(--line-soft); font-size: 12.5px; color: var(--ink-soft);
@@ -818,7 +824,7 @@ figure.float .diagram { display: block; }
 
 /* 打印（页内直接 Ctrl+P 时也尽量可用） */
 @media print {
-  #topbar, #statusbar, #previewBar, #stylePanel, #divider, #editorPane, .dgrid-tools { display: none !important; }
+  #topbar, #statusbar, #previewBar, #stylePanel, .divider, #editorPane, .dgrid-tools { display: none !important; }
   body, #root { overflow: visible; background: #fff; display: block; height: auto; }
   #layout { display: block; }
   #previewPane { background: #fff; }
