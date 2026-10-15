@@ -235,12 +235,14 @@ const flags = process.argv.slice(2).filter(arg => arg.startsWith('--'));
 // Compiled fixtures may be passed positionally: node test/xelatex.mjs in.tex out.pdf
 const fixturePaths = process.argv.slice(2).filter(arg => !arg.startsWith('--'));
 if (fixturePaths[0]) fixtures.userDocument = fs.readFileSync(fixturePaths[0], 'utf8');
+const userProjectFiles = fixturePaths[0] ? fs.readdirSync(path.dirname(fixturePaths[0]), { withFileTypes: true })
+  .filter(entry => entry.isFile() && entry.name !== path.basename(fixturePaths[0])
+    && !entry.name.endsWith('.log') && path.resolve(path.dirname(fixturePaths[0]), entry.name) !== path.resolve(fixturePaths[1] || fixturePaths[0]))
+  .map(entry => ({ name: entry.name, bytes: fs.readFileSync(path.join(path.dirname(fixturePaths[0]), entry.name)) })) : [];
 for (const [name, source] of Object.entries(fixtures)) {
   const beforeUser = name === 'userDocument' ? { files: [...requests], tex: [...engineRequests.tex], pdf: [...engineRequests.pdf] } : null;
   tex('flushcache');
-  const projectFiles = name === 'userDocument' ? fs.readdirSync(path.dirname(fixturePaths[0]), { withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name !== 'main.tex' && !entry.name.endsWith('.log'))
-    .map(entry => ({ name: entry.name, bytes: fs.readFileSync(path.join(path.dirname(fixturePaths[0]), entry.name)) }))
+  const projectFiles = name === 'userDocument' ? userProjectFiles
     : name === 'projectGraphics' ? graphicsFiles : name === 'bibtexProject' ? bibliographyFiles : [];
   assert.equal(tex('writeproject', { files: projectFiles }).result, 'ok');
   const prepared = prepareXeLaTeXSource(source);
@@ -353,12 +355,22 @@ try {
   assert.ok(commands.includes('compilepdf'), 'Warm-up reaches the PDF Worker');
   assert.ok(prefetched.has('xetex/26/elegantpaper.cls'), 'ElegantPaper is prefetched before opening it, even with no-store');
   const warmedRequests = requestCount;
-  for (const name of ['elegantpaper', 'mathematics', 'unicodeMath', 'projectGraphics', 'bibtexProject']) {
-    const compiled = await app.compileXeLaTeX(fixtures[name], name === 'projectGraphics' ? graphicsFiles : name === 'bibtexProject' ? bibliographyFiles : []);
-    assert.equal(compiled.ok, true, `${name}: ${JSON.stringify(compiled.errors)}`);
+  // This font is prefetched by the TeX Worker but absent from the PDF Worker's
+  // warm list. A cold compile alone cannot catch synthetic font names in XDV.
+  fixtures.preloadedFont = String.raw`\documentclass{article}
+\usepackage{unicode-math}
+\begin{document}{\small Native nine-point font.}\end{document}`;
+  for (const name of ['elegantpaper', 'mathematics', 'unicodeMath', 'projectGraphics', 'bibtexProject', 'preloadedFont', ...(fixturePaths[0] ? ['userDocument'] : [])]) {
+    const files = name === 'userDocument' ? userProjectFiles
+      : name === 'projectGraphics' ? graphicsFiles : name === 'bibtexProject' ? bibliographyFiles : [];
+    const compiled = await app.compileXeLaTeX(fixtures[name], files);
+    assert.equal(compiled.ok, true, `${name}: ${JSON.stringify(compiled.errors)}\n${compiled.log}`);
     assert.equal(Buffer.from(compiled.pdfBytes).subarray(0, 5).toString(), '%PDF-');
-    assert.equal(requestCount, warmedRequests, `${name}: switching documents after warm-up downloads zero resources, even without HTTP caching`);
+    if (!['preloadedFont', 'userDocument'].includes(name)) assert.equal(requestCount, warmedRequests, `${name}: switching documents after warm-up downloads zero resources, even without HTTP caching`);
+    if (name === 'userDocument' && fixturePaths[1]) fs.writeFileSync(fixturePaths[1], compiled.pdfBytes);
+    if (['preloadedFont', 'userDocument'].includes(name)) console.log(`Warm-cache ${name}: XeTeX → PDF passed`);
   }
+  const afterDocuments = requestCount;
   const busy = new Promise(resolve => {
     const off = app.onEngineStatus(s => { if (s === 'busy') { off(); resolve(); } });
   });
@@ -367,7 +379,7 @@ try {
   const queuedWarm = app.warmEngine(fixtures.elegantpaper);
   assert.equal((await foreground).ok, true, 'Foreground compile survives a document warm-up request');
   await queuedWarm;
-  assert.equal(requestCount, warmedRequests, 'Queued document warm-up reuses the preloaded resources');
+  assert.equal(requestCount, afterDocuments, 'Queued document warm-up reuses the preloaded resources');
   assert.equal(app.engineStatus(), 'ready');
   console.log('Application warm-up: default document → ElegantPaper/math/Unicode, zero compile downloads with no-store');
 } finally {

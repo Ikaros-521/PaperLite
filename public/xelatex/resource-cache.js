@@ -31,8 +31,12 @@ self.onmessage = function (event) {
       throw new Error('Invalid TeX cache key');
     }
     if (!(key in texlive200_cache)) {
-      // Include the format number: different kpathsea formats can share a name.
-      const savepath = TEXCACHEROOT + '/preloaded-' + key.replace('/', '-');
+      // XeTeX serializes native font basenames into XDV. dvipdfmx must be able
+      // to resolve those names in its own cache/mirror, including fonts it has
+      // never loaded. Keep OpenType names identical to demand-loaded fonts.
+      // Other formats retain their namespace to avoid same-name collisions.
+      const savepath = TEXCACHEROOT + '/' + (key.startsWith('47/')
+        ? key.slice(3) : 'preloaded-' + key.replace('/', '-'));
       FS.writeFile(savepath, new Uint8Array(data.src));
       texlive200_cache[key] = savepath;
       delete texlive404_cache[key];
