@@ -5,6 +5,7 @@ import { lintLaTeX } from '../src/engines/linter.js';
 import { collectIssues, currentCompileErrors } from '../src/diagnostics.js';
 import * as TIKZ from '../src/engines/tikz.js';
 import { samples } from '../src/engines/samples.js';
+import * as C from '../src/context.js';
 
 let pass = 0, fail = 0;
 function ok(cond, msg) {
@@ -143,6 +144,44 @@ ok(issues.map(d => d.src).join(',') === 'compile,lint,render', '统一收集全�
 ok(new Set(issues.map(d => d.id)).size === 3, '每条提示独立标识，可逐条忽略');
 const remaining = issues.filter(d => d.id !== issues[0].id);
 ok(remaining.length === 2 && remaining.filter(d => d.line != null).length === 1, '忽略编译错误时计数和行内标记同步移除');
+
+console.log('== 上下文预算（token 口径）==');
+ok(C.inferWindow('claude-sonnet-4-5') === 200000, 'Claude 200k');
+ok(C.inferWindow('gpt-4o') === 128000 && C.inferWindow('deepseek-chat') === 64000, 'OpenAI 128k / DeepSeek 64k');
+ok(C.inferWindow('moonshot-v1-32k') === 32000, '模型名后缀显式窗口');
+ok(C.inferWindow('some-random-model') === 0 && C.inferWindow('') === 0, '认不出返回 0');
+ok(C.resolveWindow({ chatModel: 'gpt-4o' }).tokens === 128000, '默认按模型推断');
+ok(C.resolveWindow({ chatModel: 'gpt-4o', ctxWindow: 8000 }).tokens === 8000, '自定义覆盖优先于推断');
+ok(C.resolveWindow({ chatModel: 'unknown-x' }).tokens === C.FALLBACK_WINDOW, '未知模型走兜底窗口');
+const chDs = { chatModel: 'deepseek-chat' };
+ok(C.inputBudget(chDs) === C.resolveWindow(chDs).tokens - C.outputReserve(chDs) - Math.max(256, Math.round(64000 * 0.02)), '输入预算 = 窗口 − 输出预留 − 估算余量');
+ok(C.estimateTokens('') === 0, '空文本 0 token');
+ok(C.estimateTokens('这是一段中文论文引言') > 8 && C.estimateTokens('This is an introduction paragraph.') < 10, '中文按字计、英文按密度计');
+ok(C.formatTokens(999) === '999' && C.formatTokens(12345) === '12.3k' && C.formatTokens(200000) === '200k', 'token 缩写');
+const longDoc = 'A'.repeat(40000) + '\n' + '研究'.repeat(2000);
+const cutDoc = C.truncateToTokens(longDoc, 500, '……中略……');
+ok(C.estimateTokens(cutDoc) <= 500 && cutDoc.includes('中略') && cutDoc.length < longDoc.length, '按 token 截断且不超预算: ' + C.estimateTokens(cutDoc));
+ok(C.truncateToTokens('short text', 500, '……') === 'short text', '未超预算原样返回');
+const hist = [];
+for (let i = 0; i < 24; i++) hist.push({ role: i % 2 ? 'assistant' : 'user', content: 'x'.repeat(2000) });
+const built = C.buildPayload({ system: 'sys', docHeader: 'DOC', doc: 'd'.repeat(8000), summaryHeader: 'SUM', history: hist, budget: 8000 });
+ok(built.usage.total <= 8000 && built.usage.dropped > 0, '历史超预算时丢最早条: total=' + built.usage.total + ' dropped=' + built.usage.dropped);
+ok(built.messages[0].role === 'system' && built.messages[1].role === 'system' && built.messages[1].content.startsWith('DOC'), '系统提示与文档块在最前');
+ok(built.messages[built.messages.length - 1].content === hist[hist.length - 1].content, '本轮提问始终保留');
+const tight = C.buildPayload({ system: 's', history: [{ role: 'user', content: 'hi' }], budget: 10 });
+ok(tight.messages.length === 2 && tight.usage.dropped === 0, '预算极小也至少保留本轮提问');
+const withSummary = C.buildPayload({
+  system: 's', summaryHeader: 'SUM', budget: 8000,
+  history: [{ role: 'assistant', kind: 'summary', content: '要点' }, ...hist.slice(-4)]
+});
+ok(withSummary.messages[1].role === 'system' && withSummary.messages[1].content.startsWith('SUM'), '摘要按 system 注入而非冒充用户发言');
+const sp = C.splitForCompact(hist, 6);
+ok(sp && sp.head.length === hist.length - 6 && sp.tail.length === 6, '压缩切分保留末尾 6 条');
+ok(C.splitForCompact(hist.slice(0, 6), 6) === null, '对话太短不压缩');
+ok(C.splitForCompact(new Array(9).fill({ role: 'assistant', kind: 'summary', content: 'a' }), 6) === null, '只剩摘要时不重复压缩');
+ok(C.summaryBudget({ chatModel: 'claude-sonnet-4-5' }) <= 2000 && C.summaryBudget({ chatModel: 'glm-4.5-flash' }) >= 600, '摘要预算夹在 600~2000，避免摘要请求打满窗口');
+ok(C.rawUsage({ system: 'sys', history: hist }).total > built.usage.history, 'rawUsage 不裁剪，可显示超出预算');
+ok(C.historyToText([{ role: 'user', content: 'u' }, { role: 'assistant', kind: 'summary', content: 's' }], { user: 'U', assistant: 'A', summary: 'S' }).split('\n')[1].startsWith('S:'), '摘要历史再次压缩时保留标记');
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

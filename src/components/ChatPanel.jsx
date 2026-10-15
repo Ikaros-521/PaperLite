@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
+import * as ctx from '../context.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
- * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复） */
+ * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复）、
+ * 上下文用量状态栏（实测/估算）与压缩（模型摘要，失败回退本地裁剪）。
+ * 载荷装配与 token 口径统一在 context.js，后续 agent 工具调用共用同一预算。 */
+const KEEP_TURNS = 6;      // 压缩时保留末尾条数
+const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
+
 export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject }) {
   const t = useT();
   const lang = useLang();
@@ -13,7 +19,13 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const [pos, setPos] = useState(null);      // null=停靠右侧；{x,y}=浮动位置（同样式面板）
   const [width, setWidth] = useState(null);  // null=默认 360；左缘可拉伸
   const [height, setHeight] = useState(null);
+  const [reqUsage, setReqUsage] = useState(null); // 最近一次请求装配出的分类用量
+  const [realUsage, setRealUsage] = useState(null); // 服务端返回的实测 usage（缺省则用估算）
+  const [compacting, setCompacting] = useState(false);
+  const [compactSecs, setCompactSecs] = useState(0);
+  const [note, setNote] = useState('');   // 状态栏短暂提示（压缩结果等）
   const abortRef = useRef(null);
+  const noteTimer = useRef(null);
   const listRef = useRef(null);
   const taRef = useRef(null);
   const panelRef = useRef(null);
@@ -37,6 +49,27 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       }, 60);
     }
   }, [inject && inject.n]);
+
+  // 用量基线：只随消息条数变化重算，流式增量不触发整段历史重新估算
+  const settledCount = busy ? messages.length - 1 : messages.length;
+  const base = useMemo(() => {
+    const u = ctx.rawUsage({
+      system: t('ai.system'),
+      summaryHeader: t('ai.summaryHeader'),
+      history: messages.slice(0, Math.max(0, settledCount))
+    });
+    const docCost = reqUsage ? reqUsage.doc : 0;
+    return { ...u, doc: docCost, total: u.total + docCost };
+  }, [settledCount, reqUsage, lang]);
+
+  useEffect(() => () => clearTimeout(noteTimer.current), []);
+
+  // 压缩是同步等待的一次模型请求，慢渠道要让用户看到已经过了多久
+  useEffect(() => {
+    if (!compacting) { setCompactSecs(0); return undefined; }
+    const iv = setInterval(() => setCompactSecs(s => s + 1), 1000);
+    return () => clearInterval(iv);
+  }, [compacting]);
 
   if (!open) return null;
 
@@ -74,32 +107,113 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     });
   };
 
+  // 用量状态栏：服务端有 usage 时显示实测，否则用分类估算汇总
+  const winInfo = ctx.resolveWindow(channel);
+  const win = winInfo.tokens;
+  const budget = ctx.inputBudget(channel);
+  const reserve = ctx.outputReserve(channel);
+  const liveOut = busy ? ctx.estimateTokens((messages[messages.length - 1] || {}).content) : 0;
+  const isReal = !busy && !!realUsage;
+  const used = isReal ? realUsage.input + realUsage.output : base.total + liveOut;
+  const pct = win ? used / win : 0;
+  const level = pct >= COMPACT_AT ? 'bad' : pct >= 0.6 ? 'warn' : 'ok';
+  const srcKey = { model: 'chat.ctxWinModel', custom: 'chat.ctxWinCustom', fallback: 'chat.ctxWinDefault' }[winInfo.source];
+  const tipText = [
+    t('chat.ctxSys') + ' ' + ctx.formatTokens(base.system),
+    t('chat.ctxDoc') + ' ' + ctx.formatTokens(base.doc),
+    t('chat.ctxHist') + ' ' + ctx.formatTokens(base.history),
+    // 回复只在已知时列出：空闲且无实测时它已计入「历史」，再列一遍会重复计数
+    isReal ? t('chat.ctxOut') + ' ' + ctx.formatTokens(realUsage.output) : null,
+    busy ? t('chat.ctxOut') + ' ' + ctx.formatTokens(liveOut) : null,
+    t('chat.ctxReserve') + ' ' + ctx.formatTokens(reserve),
+    t('chat.ctxWin') + ' ' + ctx.formatTokens(win) + ' · ' + t(srcKey)
+  ].filter(Boolean).join(' · ');
+
+  const flashNote = (msg) => {
+    setNote(msg);
+    clearTimeout(noteTimer.current);
+    noteTimer.current = setTimeout(() => setNote(''), 5000);
+  };
+
+  // 压缩上下文：较早的历史交给模型生成摘要，末尾若干条保留原文；
+  // 摘要请求失败时退化为本地裁剪（丢弃最早消息），保证一定能腾出预算。
+  const runCompact = async (list, auto) => {
+    if (!channel || compacting) return null;
+    const split = ctx.splitForCompact(list, KEEP_TURNS);
+    if (!split) { if (!auto) flashNote(t('chat.compactSkip')); return null; }
+    const before = ctx.rawUsage({ summaryHeader: t('ai.summaryHeader'), history: list }).total;
+    let summary = '';
+    try {
+      setCompacting(true);
+      const llm = await import('../llm.js');
+      const text = ctx.historyToText(split.head, {
+        user: t('chat.roleUser'), assistant: t('chat.roleAi'), summary: t('chat.summaryLabel')
+      });
+      summary = (await llm.summarize(channel, text, ctx.summaryBudget(channel))).content;
+    } catch (e) {
+      summary = '';
+    } finally {
+      setCompacting(false);
+    }
+    const msg = {
+      role: 'assistant',
+      kind: 'summary',
+      count: split.head.length,
+      content: summary || t('chat.compactTrimmed', { n: split.head.length })
+    };
+    const next = [msg].concat(split.tail);
+    const after = ctx.rawUsage({ summaryHeader: t('ai.summaryHeader'), history: next }).total;
+    setMessages(next);
+    setRealUsage(null);
+    setReqUsage(null);
+    flashNote(t(auto ? 'chat.compactAuto' : 'chat.compactDone', {
+      n: split.head.length,
+      saved: ctx.formatTokens(Math.max(0, before - after))
+    }));
+    return next;
+  };
+
   const send = async () => {
     const q = input.trim();
     if (!q || busy) return;
     if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
     setInput('');
-    const ctx = await buildContext(scope, q, channel);
-    const userMsg = { role: 'user', content: q, ctxNote: ctx.note };
-    const history = [...messages, userMsg];
-    setMessages([...history, { role: 'assistant', content: '', reasoning: '' }]);
+    setNote('');
+    const pack = await buildContext(scope, q, channel);
+    const build = (list) => ctx.buildPayload({
+      system: t('ai.system'),
+      docHeader: t('ai.ctxHeader'),
+      doc: pack.text,
+      summaryHeader: t('ai.summaryHeader'),
+      history: list,
+      budget
+    });
+    let history = messages.concat([{ role: 'user', content: q, ctxNote: pack.note }]);
+    let built = build(history);
+    // 判断用未裁剪的总占用：装配结果本身会被预算截断，看不出「到底差多少」
+    const need = ctx.rawUsage({
+      system: t('ai.system'), docHeader: t('ai.ctxHeader'), doc: pack.text,
+      summaryHeader: t('ai.summaryHeader'), history
+    }).total;
+    if (need >= budget * COMPACT_AT) {
+      const compacted = await runCompact(history, true);
+      if (compacted) { history = compacted; built = build(history); }
+    }
+    setReqUsage(built.usage);
+    setRealUsage(null);
     setBusy(true);
     const ac = new AbortController();
     abortRef.current = ac;
+    setMessages(history.concat([{ role: 'assistant', content: '', reasoning: '' }]));
     try {
-      const sys = { role: 'system', content: t('ai.system') };
-      const payload = [sys];
-      if (ctx.text) payload.push({ role: 'system', content: t('ai.ctxHeader') + '\n' + ctx.text });
-      payload.push(...history.slice(-10).map(m => ({ role: m.role, content: m.content })));
-
-      await import('../llm.js').then(async (llm) => {
-        await llm.chat(channel, payload, {
-          stream: true,
-          signal: ac.signal,
-          onDelta: (t) => setMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, content: m.content + t } : m)),
-          onReasoning: (t) => setMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, reasoning: (m.reasoning || '') + t } : m))
-        });
+      const llm = await import('../llm.js');
+      const res = await llm.chat(channel, built.messages, {
+        stream: true,
+        signal: ac.signal,
+        onDelta: (d) => setMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, content: m.content + d } : m)),
+        onReasoning: (d) => setMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, reasoning: (m.reasoning || '') + d } : m))
       });
+      setRealUsage(res.usage || null);
     } catch (e) {
       if (e.name !== 'AbortError') {
         setMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content
@@ -172,7 +286,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <span className="sp-t">{t('chat.title')}</span>
         <span className="cp-head-acts">
           <button title={t('chat.settings')} onClick={onOpenSettings}>⚙</button>
-          <button title={t('chat.clear')} onClick={() => setMessages([])}>{lang === 'zh' ? '清' : 'Clr'}</button>
+          <button title={t('chat.clear')} onClick={() => { setMessages([]); setReqUsage(null); setRealUsage(null); setNote(''); }}>{lang === 'zh' ? '清' : 'Clr'}</button>
           <button title={t('chat.close')} onClick={onClose}>✕</button>
         </span>
       </div>
@@ -211,7 +325,15 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             </div>
           )
         )}
-        {messages.map((m, i) => (
+        {messages.map((m, i) => m.kind === 'summary' ? (
+          <div key={i} className="chat-summary">
+            <div className="chat-summary-h">
+              <b>{t('chat.summaryLabel')}</b>
+              <em>{t('chat.summaryNote', { n: m.count || 0 })}</em>
+            </div>
+            <div className="chat-summary-b">{m.content}</div>
+          </div>
+        ) : (
           <div key={i} className={'chat-msg ' + m.role}>
             {m.role === 'user' && m.ctxNote && <div className="chat-ctx">{m.ctxNote}</div>}
             {m.role === 'assistant' && m.reasoning ? (
@@ -225,6 +347,25 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             {m.content ? renderBlocks(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
           </div>
         ))}
+      </div>
+
+      <div className={'ctx-bar ' + level} title={tipText}>
+        <span className="ctx-track">
+          <i className="ctx-fill" style={{ width: Math.min(100, Math.round(pct * 100)) + '%' }} />
+        </span>
+        <span className="ctx-num">
+          {ctx.formatTokens(used)}/{ctx.formatTokens(win)} · {Math.round(pct * 100)}%
+          <em>{t(isReal ? 'chat.ctxReal' : 'chat.ctxEst')}</em>
+        </span>
+        <span className="ctx-acts">
+          {note ? <span className="ctx-note">{note}</span>
+            : pct >= COMPACT_AT ? <span className="ctx-hint">{t('chat.ctxNear')}</span> : null}
+          <button className="ctx-compact" onClick={() => runCompact(messages, false)}
+            disabled={!channel || busy || compacting || !messages.length}
+            title={t('chat.compactTip')}>
+            {compacting ? t('chat.compacting') + ' ' + compactSecs + 's' : t('chat.compact')}
+          </button>
+        </span>
       </div>
 
       <div className="chat-input">

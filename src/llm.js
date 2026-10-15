@@ -55,11 +55,16 @@ export function loadChannels() {
   try {
     const arr = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
     if (!Array.isArray(arr)) return [];
-    return arr.map(c => ({
-      ...c,
-      protocol: c.protocol === 'anthropic' ? 'anthropic' : 'openai',
-      contextLimit: +c.contextLimit || 24000
-    }));
+    return arr.map(c => {
+      const next = {
+        ...c,
+        protocol: c.protocol === 'anthropic' ? 'anthropic' : 'openai',
+        // 0 = 按模型自动推断窗口；旧版按字符的 contextLimit 已废弃
+        ctxWindow: +c.ctxWindow || 0
+      };
+      delete next.contextLimit;
+      return next;
+    });
   } catch (e) { return []; }
 }
 export function saveChannels(list) {
@@ -75,7 +80,7 @@ export function newChannel() {
     chatModel: 'paperlite-mock',
     embedModel: '',
     cot: false,
-    contextLimit: 24000
+    ctxWindow: 0
   };
 }
 
@@ -149,6 +154,10 @@ function chatOpenAI(channel, messages, opts) {
     messages,
     stream: !!opts.stream
   };
+  // 流式默认不回计量，需显式声明；个别网关不认识该字段会在解析层降级重试
+  if (body.stream) body.stream_options = { include_usage: true };
+  // 摘要这类机械任务不需要推理：GLM-4.5 / Z1 系支持显式关闭，能省下十几秒
+  if (opts.noReasoning && /glm-4\.5|glm-z1|glm4\.5/i.test(body.model)) body.thinking = { type: 'disabled' };
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (channel.cot) {
@@ -181,7 +190,7 @@ function chatAnthropic(channel, messages, opts) {
     stream: !!opts.stream
   };
   if (sys) body.system = sys;
-  if (channel.cot) {
+  if (channel.cot && !opts.noReasoning) {
     body.thinking = { type: 'enabled', budget_tokens: 4000 };
     if (body.max_tokens <= 4000) body.max_tokens = 8000;
   } else if (opts.temperature !== undefined) {
@@ -197,25 +206,55 @@ export async function chat(channel, messages, opts = {}) {
     : chatOpenAI(channel, messages, opts);
 }
 
+// ---- 请求 + 解析（两种协议各自归一化 usage，缺字段时返回 null 由界面降级估算） ----
+// stream_options / thinking 都是可选扩展字段，个别网关不认识会回 400，去掉后重试一次而不是让整个请求失败
+const OPTIONAL_FIELDS = ['stream_options', 'thinking'];
+
+async function postJson(u, channel, body, opts) {
+  const send = () => fetch(u, {
+    method: 'POST', headers: headers(channel), body: JSON.stringify(body), signal: opts.signal
+  });
+  let r = await send();
+  if (!r.ok && r.status === 400 && OPTIONAL_FIELDS.some(f => body[f])) {
+    OPTIONAL_FIELDS.forEach(f => { delete body[f]; });
+    r = await send();
+  }
+  if (!r.ok) throw new Error('HTTP ' + r.status + '：' + (await r.text()).slice(0, 200));
+  return r;
+}
+
+function openAIUsage(u) {
+  if (!u) return null;
+  const input = +u.prompt_tokens || 0;
+  const output = +u.completion_tokens || 0;
+  if (!input && !output) return null;
+  return { input, output, cached: +(u.prompt_tokens_details || {}).cached_tokens || 0 };
+}
+// Anthropic 把缓存命中/写入单列，都算作已占用的输入
+function anthropicUsage(u) {
+  if (!u) return null;
+  const raw = +u.input_tokens || 0;
+  const cacheRead = +u.cache_read_input_tokens || 0;
+  const cacheWrite = +u.cache_creation_input_tokens || 0;
+  const input = raw + cacheRead + cacheWrite;
+  const output = +u.output_tokens || 0;
+  if (!input && !output) return null;
+  return { input, output, cached: cacheRead };
+}
+
 // ---- OpenAI 兼容：POST + 解析（含 SSE，delta.content / delta.reasoning_content） ----
 async function parseOpenAIStream(u, channel, body, opts) {
-  const r = await fetch(u, {
-    method: 'POST',
-    headers: headers(channel),
-    body: JSON.stringify(body),
-    signal: opts.signal
-  });
-  if (!r.ok) throw new Error('HTTP ' + r.status + '：' + (await r.text()).slice(0, 200));
+  const r = await postJson(u, channel, body, opts);
 
   if (!body.stream) {
     const j = await r.json();
     const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
-    return { content: msg.content || '', reasoning: msg.reasoning_content || '' };
+    return { content: msg.content || '', reasoning: msg.reasoning_content || '', usage: openAIUsage(j.usage) };
   }
 
   const reader = r.body.getReader();
   const dec = new TextDecoder();
-  let buf = '', content = '', reasoning = '';
+  let buf = '', content = '', reasoning = '', usage = null;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -223,29 +262,24 @@ async function parseOpenAIStream(u, channel, body, opts) {
     const lines = buf.split('\n');
     buf = lines.pop() || '';
     for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const payload = t.slice(5).trim();
+      const ln = line.trim();
+      if (!ln.startsWith('data:')) continue;
+      const payload = ln.slice(5).trim();
       if (payload === '[DONE]') continue;
       let j;
       try { j = JSON.parse(payload); } catch (e) { continue; }
       const d = (j.choices && j.choices[0] && j.choices[0].delta) || {};
       if (d.content) { content += d.content; opts.onDelta && opts.onDelta(d.content); }
       if (d.reasoning_content) { reasoning += d.reasoning_content; opts.onReasoning && opts.onReasoning(d.reasoning_content); }
+      if (j.usage) usage = openAIUsage(j.usage) || usage;
     }
   }
-  return { content, reasoning };
+  return { content, reasoning, usage };
 }
 
 // ---- Anthropic：POST /v1/messages + 解析（SSE content_block_delta：text_delta / thinking_delta） ----
 async function parseAnthropicStream(u, channel, body, opts) {
-  const r = await fetch(u, {
-    method: 'POST',
-    headers: headers(channel),
-    body: JSON.stringify(body),
-    signal: opts.signal
-  });
-  if (!r.ok) throw new Error('HTTP ' + r.status + '：' + (await r.text()).slice(0, 200));
+  const r = await postJson(u, channel, body, opts);
 
   if (!body.stream) {
     const j = await r.json();
@@ -255,12 +289,12 @@ async function parseAnthropicStream(u, channel, body, opts) {
       if (b.type === 'text') content += b.text || '';
       else if (b.type === 'thinking') reasoning += b.thinking || '';
     }
-    return { content, reasoning };
+    return { content, reasoning, usage: anthropicUsage(j.usage) };
   }
 
   const reader = r.body.getReader();
   const dec = new TextDecoder();
-  let buf = '', content = '', reasoning = '';
+  let buf = '', content = '', reasoning = '', usage = null;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -268,20 +302,38 @@ async function parseAnthropicStream(u, channel, body, opts) {
     const lines = buf.split('\n');
     buf = lines.pop() || '';
     for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const payload = t.slice(5).trim();
+      const ln = line.trim();
+      if (!ln.startsWith('data:')) continue;
+      const payload = ln.slice(5).trim();
       if (!payload || payload === '[DONE]') continue;
       let j;
       try { j = JSON.parse(payload); } catch (e) { continue; }
       if (j.type === 'error') throw new Error((j.error && j.error.message) || t('llm.anthropicErr'));
+      // message_start 带输入计量，message_delta 带输出计量，需分别合并
+      if (j.type === 'message_start') usage = anthropicUsage((j.message || {}).usage) || usage;
+      else if (j.type === 'message_delta') {
+        const d = anthropicUsage(j.usage);
+        if (d && usage) usage = { ...usage, output: d.output, cached: d.cached || usage.cached };
+        else if (d) usage = d;
+      }
       if (j.type !== 'content_block_delta') continue;
       const d = j.delta || {};
       if (d.type === 'text_delta' && d.text) { content += d.text; opts.onDelta && opts.onDelta(d.text); }
       else if (d.type === 'thinking_delta' && d.thinking) { reasoning += d.thinking; opts.onReasoning && opts.onReasoning(d.thinking); }
     }
   }
-  return { content, reasoning };
+  return { content, reasoning, usage };
+}
+
+// 压缩上下文：把较早的对话交给同一渠道生成摘要（失败由调用方回退本地裁剪）
+// 输出上限单独夹住：给到窗口比例会让摘要模型一直生成、压缩一次等上一分钟
+export async function summarize(channel, text, budget) {
+  const maxTokens = Math.min(1200, Math.max(400, Math.round((budget || 900) / 2)));
+  const r = await chat(channel, [
+    { role: 'system', content: t('ai.compactSystem') },
+    { role: 'user', content: t('ai.compactPrompt') + '\n\n' + text }
+  ], { temperature: 0.2, maxTokens, noReasoning: true });
+  return { content: String(r.content || '').trim(), usage: r.usage };
 }
 
 // ---------------- 嵌入检索 ----------------

@@ -308,6 +308,41 @@ body.cp-dragging::before {
 .chat-input textarea:focus { border-color: var(--accent); }
 .chat-input-acts { display: flex; justify-content: flex-end; margin-top: 5px; }
 
+/* ---------- 上下文用量状态栏 ---------- */
+.ctx-bar {
+  display: flex; align-items: center; gap: 8px;
+  border-top: 1px solid var(--line-soft); padding: 6px 10px; font-size: 11.5px; color: var(--ink-soft);
+}
+.ctx-track {
+  flex: 0 0 68px; height: 5px; border-radius: 3px; background: #e2dbc8; overflow: hidden;
+}
+.ctx-fill { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent); transition: width .18s ease, background .18s; }
+.ctx-bar.warn .ctx-fill { background: #a3762a; }
+.ctx-bar.bad .ctx-fill { background: var(--seal); }
+.ctx-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ctx-num em { font-style: normal; color: var(--ink-faint); margin-left: 4px; }
+.ctx-bar.bad .ctx-num { color: var(--seal-deep); }
+.ctx-acts { margin-left: auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ctx-hint { color: #a3762a; }
+.ctx-note {
+  color: var(--accent-deep); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px;
+}
+.ctx-compact {
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink-soft);
+  border-radius: 5px; padding: 2px 8px; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+}
+.ctx-compact:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-deep); background: var(--accent-tint); }
+.ctx-compact:disabled { opacity: .45; cursor: default; }
+.ctx-bar.bad .ctx-compact { border-color: var(--seal); color: var(--seal-deep); }
+/* 压缩后的历史摘要卡片：与气泡区分，表明这段不是本轮原文 */
+.chat-summary {
+  align-self: stretch; border: 1px dashed #c9c0a6; border-radius: 8px; background: #f7f3e8; padding: 7px 10px;
+}
+.chat-summary-h { display: flex; gap: 8px; align-items: baseline; font-size: 11.5px; color: var(--ink-soft); margin-bottom: 4px; }
+.chat-summary-h b { font-family: var(--serif); color: var(--accent-deep); }
+.chat-summary-h em { font-style: normal; color: var(--ink-faint); }
+.chat-summary-b { font-size: 12.2px; line-height: 1.65; color: #55503f; white-space: pre-wrap; word-break: break-word; }
+
 /* ---------- 设置弹窗 ---------- */
 .modal-mask {
   position: fixed; inset: 0; background: rgba(43, 38, 27, .45); z-index: 100;
@@ -347,6 +382,22 @@ body.cp-dragging::before {
 }
 .ch-row { display: flex; gap: 8px; }
 .ch-row label { flex: 1; min-width: 0; }
+/* 上下文窗口：默认只读展示推断结果，切到自定义才出现数值输入 */
+.ch-ctxwin {
+  border: 1px solid var(--line-soft); border-radius: 7px; background: var(--chrome);
+  padding: 7px 9px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: flex-end;
+}
+.ch-ctxwin label { flex: 0 0 auto; min-width: 140px; }
+.ch-ctxwin .ch-ctx-hint { flex: 1 1 100%; line-height: 1.55; }
+/* API Key：明文切换按钮压在输入框右内侧，密钥用等宽字便于核对 */
+.kv-wrap { position: relative; display: flex; }
+.kv-wrap input { flex: 1; min-width: 0; padding-right: 30px; font-family: Consolas, monospace; }
+.kv-eye {
+  position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+  border: 0; background: none; padding: 3px; line-height: 0; cursor: pointer;
+  color: var(--ink-faint); border-radius: 4px;
+}
+.kv-eye:hover, .kv-eye[aria-pressed='true'] { color: var(--accent-deep); background: var(--accent-tint); }
 .ch-proto {
   flex: none; font-size: 10px; line-height: 1.6; color: var(--ink-soft); background: #eeeadd;
   border-radius: 4px; padding: 0 5px;

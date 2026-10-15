@@ -153,19 +153,25 @@ const server = http.createServer(async (req, res) => {
     const last = (body.messages || []).filter(m => m.role === 'user').pop();
     const q = String(last && last.content || '');
     const reply = mockReply(q);
+    const pt = reqTokens(body), ct = estTok(reply);
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
       const deltas = reply.match(/[\s\S]{1,12}/g) || [];
       let i = 0;
       const t = setInterval(() => {
         if (i >= deltas.length) {
+          // OpenAI 约定：开启 include_usage 后，末尾以空 choices 的块回传计量
+          res.write('data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct } }) + '\n\n');
           res.write('data: [DONE]\n\n'); res.end(); clearInterval(t); return;
         }
         res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: deltas[i++] } }] }) + '\n\n');
       }, 30);
       return;
     }
-    return json(res, 200, { choices: [{ message: { content: reply } }], usage: {} });
+    return json(res, 200, {
+      choices: [{ message: { content: reply } }],
+      usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct }
+    });
   }
 
   // ---- Anthropic 协议 Mock（/v1/messages，供「Anthropic (Claude)」协议离线体验）----
@@ -179,17 +185,18 @@ const server = http.createServer(async (req, res) => {
       ? '（Mock 思维链演示）收到问题，无需复杂推理，直接给出演示回复。'
       : '';
     const reply = mockReply(q);
+    const pt = reqTokens(body) + estTok(thinking), ct = estTok(reply);
     const blocks = [];
     if (thinking) blocks.push({ type: 'thinking', text: thinking });
     blocks.push({ type: 'text', text: reply });
 
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
-      res.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock', content: [], usage: {} } })}\n\n`);
+      res.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock', content: [], usage: { input_tokens: pt, output_tokens: 1 } } })}\n\n`);
       let bi = 0;
       const nextBlock = () => {
         if (bi >= blocks.length) {
-          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } })}\n\n`);
+          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: ct } })}\n\n`);
           res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
           res.end();
           return;
@@ -215,7 +222,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, {
       id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock',
       content: blocks.map(b => b.type === 'thinking' ? { type: 'thinking', thinking: b.text } : { type: 'text', text: b.text }),
-      stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 10 }
+      stop_reason: 'end_turn', usage: { input_tokens: pt, output_tokens: ct }
     });
   }
 
@@ -257,7 +264,24 @@ function simpleVec(text) {
 }
 
 // Mock 回复生成（OpenAI 兼容与 Anthropic 协议共用）
+// Mock 的 token 计数：与前端 context.js 同口径的粗略估算，让用量条能演示「实测」
+function estTok(s) {
+  const str = String(s || '');
+  const cjk = (str.match(/[぀-ヿ㐀-䶿一-鿿가-힯＀-￯]/g) || []).length;
+  return Math.max(1, Math.round(cjk * 1.1 + (str.length - cjk) / 4));
+}
+function reqTokens(body) {
+  return estTok(JSON.stringify(body.messages || '')) + estTok(body.system || '') + estTok(body.model || '');
+}
+
 function mockReply(q) {
+  if (/压缩成要点摘要|Compact the following conversation/i.test(q)) {
+    return '- 目标：润色引言与相关工作，统一术语 BiLSTM-Att。\n' +
+      '- 已确认：保留三线表与流程图，长公式改用 align 环境。\n' +
+      '- 待办：补充第 2 章相关工作引用、实验小节的数据集说明。\n' +
+      '- 约束：中文输出，不改动作者与日期字段。\n' +
+      '（Mock 摘要：接入真实渠道后为模型生成内容）';
+  }
   if (/修复|fix|语法|错误/i.test(q)) {
     return '已分析并修复语法问题：补全未闭合的环境/花括号。\n\n```latex\n\\section{引言}\n这是修复后的段落，公式 $E=mc^2$ 正常。\n\\end{document}\n```\n\n说明：以上代码块可直接「替换全文」。';
   }

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
 import { testConnection, fetchModels, newChannel, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
+import { resolveWindow, inputBudget, formatTokens } from '../context.js';
 
 /* AI 设置弹窗：多渠道管理（内置平台预设 / OpenAI 兼容与 Anthropic 协议 /
- * 模型列表拉取 + 搜索下拉 / 测试连接） */
+ * 模型列表拉取 + 搜索下拉 / 测试连接 / 上下文窗口（默认按模型自动推断） */
 
 // 模型输入框：可手输；点「获取模型」拉取渠道列表，输入即时过滤，点选填入
 function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
@@ -70,6 +71,7 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
   const lang = useLang();
   const [editId, setEditId] = useState(null);
   const [testing, setTesting] = useState(null); // {id, result}
+  const [reveal, setReveal] = useState({});     // 各渠道 API Key 是否明文显示
 
   if (!open) return null;
 
@@ -124,6 +126,8 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
             {channels.map(ch => {
               const proto = protocolOf(ch);
               const preset = matchPreset(ch);
+              const win = resolveWindow(ch);
+              const srcKey = { model: 'set.ctxFromModel', custom: 'set.ctxFromCustom', fallback: 'set.ctxFromFallback' }[win.source];
               return (
                 <div key={ch.id} className={'ch-item' + (ch.id === activeChannelId ? ' on' : '')}>
                   <div className="ch-line" onClick={() => setActiveChannelId(ch.id)}>
@@ -159,7 +163,24 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                       </div>
                       <label>{t('set.name')}<input value={ch.name} onChange={e => patch(ch.id, 'name', e.target.value)} /></label>
                       <label>Base URL<input value={ch.baseUrl} onChange={e => patch(ch.id, 'baseUrl', e.target.value)} placeholder={proto === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.deepseek.com/v1'} /></label>
-                      <label>API Key<input type="password" value={ch.apiKey} onChange={e => patch(ch.id, 'apiKey', e.target.value)} /></label>
+                      <label>API Key
+                        <span className="kv-wrap">
+                          <input type={reveal[ch.id] ? 'text' : 'password'} value={ch.apiKey}
+                            autoComplete="off" spellCheck="false"
+                            onChange={e => patch(ch.id, 'apiKey', e.target.value)} />
+                          <button type="button" className="kv-eye"
+                            title={t(reveal[ch.id] ? 'set.keyHide' : 'set.keyShow')}
+                            aria-label={t(reveal[ch.id] ? 'set.keyHide' : 'set.keyShow')}
+                            aria-pressed={!!reveal[ch.id]}
+                            onClick={() => setReveal(r => ({ ...r, [ch.id]: !r[ch.id] }))}>
+                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M2.2 12S6 5.8 12 5.8 21.8 12 21.8 12 18 18.2 12 18.2 2.2 12 2.2 12z" />
+                              <circle cx="12" cy="12" r="2.7" />
+                              {!reveal[ch.id] && <path d="M4.5 4l15 15" />}
+                            </svg>
+                          </button>
+                        </span>
+                      </label>
                       <label>{t('set.chatModel')}
                         <ModelInput
                           value={ch.chatModel}
@@ -182,7 +203,25 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                         <input type="checkbox" checked={!!ch.cot} onChange={e => patch(ch.id, 'cot', e.target.checked)} />
                         {t('set.cot')}
                       </label>
-                      <label>{t('set.ctxLimit')}<input type="number" min="2000" step="1000" value={ch.contextLimit} onChange={e => patch(ch.id, 'contextLimit', +e.target.value || 24000)} /></label>
+                      <div className="ch-ctxwin">
+                        <label>{t('set.ctxWindow')}
+                          <select value={ch.ctxWindow ? 'custom' : 'auto'}
+                            onChange={e => patch(ch.id, 'ctxWindow', e.target.value === 'custom' ? win.tokens : 0)}>
+                            <option value="auto">{t('set.ctxAuto')}</option>
+                            <option value="custom">{t('set.ctxCustom')}</option>
+                          </select>
+                        </label>
+                        {!!ch.ctxWindow && (
+                          <label>{t('set.ctxTokens')}
+                            <input type="number" min="1000" step="1000" value={ch.ctxWindow}
+                              onChange={e => patch(ch.id, 'ctxWindow', Math.max(1000, +e.target.value || 1000))} />
+                          </label>
+                        )}
+                        <span className="hint ch-ctx-hint">
+                          {t('set.ctxResolved', { v: formatTokens(win.tokens) }) + ' · ' + t(srcKey, { m: ch.chatModel || t('set.noModel') })}
+                          <br />{t('set.ctxBudgetHint', { i: formatTokens(inputBudget(ch)), o: formatTokens(win.tokens - inputBudget(ch)) })}
+                        </span>
+                      </div>
                     </div>
                   )}
                 </div>

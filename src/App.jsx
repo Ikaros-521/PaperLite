@@ -22,6 +22,7 @@ import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.
 import { infoFor } from './fileTypes.js';
 import * as fs from './fs.js';
 import * as llm from './llm.js';
+import * as ctxBudget from './context.js';
 import { LS_LANG, detectLang, getLang, setLang as setModuleLang, tr } from './i18n.js';
 import { LangContext } from './useI18n.js';
 
@@ -711,37 +712,49 @@ export default function App() {
 
   const setZoomClamped = (d) => setZoom(z => Math.min(1.6, Math.max(0.5, +(z + d).toFixed(2))));
 
-  // ---- LLM 上下文构建 ----
+  // ---- LLM 上下文构建（按 token 预算截断，见 context.js） ----
   const buildContext = useCallback(async (scope, query, channel) => {
     const c = cm();
     const doc = valueRef.current || '';
-    const limit = channel && channel.contextLimit ? channel.contextLimit : 24000;
     const L = getLang();
-    const trunc = (t) => t.length > limit ? t.slice(0, Math.floor(limit * 0.7)) + '\n\n' + tr(L, 'app.ctxOmitted') + '\n\n' + t.slice(-Math.floor(limit * 0.3)) : t;
+    const budget = ctxBudget.docBudget(channel, scope);
+    const omitted = '\n\n' + tr(L, 'app.ctxOmitted') + '\n\n';
+    // 截断后确实验证超了预算才提示「已截断」，避免估算与展示不一致
+    const fit = (t) => {
+      const out = ctxBudget.truncateToTokens(t, budget, omitted);
+      return { text: out, cut: out !== t };
+    };
+    const note = (base, cut) => base + (cut ? tr(L, 'app.ctxTruncated') : '');
     if (scope === 'selection') {
       const sel = c ? c.getSelection() : '';
-      return { text: sel || '', note: sel ? tr(L, 'app.ctxSel') : tr(L, 'app.ctxSelEmpty') };
+      if (!sel) return { text: '', note: tr(L, 'app.ctxSelEmpty'), tokens: 0, budget };
+      const full = ctxBudget.inputBudget(channel);
+      const out = ctxBudget.truncateToTokens(sel, full, omitted);
+      return { text: out, note: note(tr(L, 'app.ctxSel'), out !== sel), tokens: ctxBudget.estimateTokens(out), budget: full };
     }
     if (scope === 'paragraph') {
-      if (!c) return { text: '', note: '' };
+      if (!c) return { text: '', note: '', tokens: 0, budget };
       const cur = c.getCursor();
       let a = cur.line, b = cur.line;
       const n = c.lineCount();
       while (a > 0 && (c.getLine(a - 1) || '').trim()) a--;
       while (b < n - 1 && (c.getLine(b + 1) || '').trim()) b++;
-      const text = rangeText(c, a, b);
-      return { text: trunc(text), note: tr(L, 'app.ctxPara', { a: a + 1, b: b + 1 }) };
+      const f = fit(rangeText(c, a, b));
+      return { text: f.text, note: note(tr(L, 'app.ctxPara', { a: a + 1, b: b + 1 }), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
     }
     if (scope === 'retrieve') {
       if (channel && channel.embedModel) {
         const chunks = await llm.retrieve(channel, query, doc, 6);
         if (chunks && chunks.length) {
-          return { text: chunks.join('\n\n——\n\n').slice(0, limit), note: tr(L, 'app.ctxRag', { n: chunks.length }) };
+          const f = fit(chunks.join('\n\n——\n\n'));
+          return { text: f.text, note: note(tr(L, 'app.ctxRag', { n: chunks.length }), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
         }
       }
-      return { text: trunc(doc), note: tr(L, 'app.ctxFallback') };
+      const f = fit(doc);
+      return { text: f.text, note: note(tr(L, 'app.ctxFallback'), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
     }
-    return { text: trunc(doc), note: tr(L, 'app.ctxFull') + (doc.length > limit ? tr(L, 'app.ctxTruncated') : '') };
+    const f = fit(doc);
+    return { text: f.text, note: note(tr(L, 'app.ctxFull'), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
   }, []);
   buildContext.cm = () => cmRef.current;
 
@@ -757,12 +770,12 @@ export default function App() {
     setChatOpen(true); setPanelOpen(false);
     const prompt = tr(L, 'ai.fixPrompt', {
       issues: issues.map(d => tr(L, 'ai.errLine', { n: d.line != null ? d.line + 1 : '?', msg: d.msg })).join('\n'),
-      doc: activeValue.slice(0, channel.contextLimit || 24000)
+      doc: ctxBudget.truncateToTokens(activeValue, ctxBudget.docBudget(channel, 'full'), '\n\n' + tr(L, 'app.ctxOmitted') + '\n\n')
     });
     setChatMessages(ms => ms.concat([{ role: 'user', content: tr(L, 'app.aiFixReq'), ctxNote: '🛠 ' + tr(L, 'app.nIssues', { n: issues.length }) }, { role: 'assistant', content: '', reasoning: '' }]));
     try {
       const r = await llm.chat(channel, [{ role: 'user', content: prompt }], { temperature: 0.2 });
-      setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, content: r.content, reasoning: r.reasoning || '' } : m));
+      setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, content: r.content, reasoning: r.reasoning || '', usage: r.usage || null } : m));
     } catch (e) {
       setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content ? { ...m, content: tr(L, 'app.aiFixFailed', { msg: e.message || e }) } : m));
     } finally { setAiBusy(false); }
