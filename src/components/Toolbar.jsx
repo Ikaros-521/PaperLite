@@ -37,11 +37,12 @@ function MiSub({ icon, label, children }) {
   );
 }
 
-function Mb({ title, open, setOpen, width = 220, disabled, children }) {
+function Mb({ title, open, setOpen, width = 220, disabled, tour, children }) {
   const isOpen = open === title;
   return (
     <div
       className={'mb-item' + (isOpen ? ' open' : '') + (disabled ? ' disabled' : '')}
+      data-tour={tour}
       onMouseEnter={() => { if (open && !disabled) setOpen(title); }}
     >
       <button
@@ -102,8 +103,8 @@ export default function Toolbar({
       <div id="menubar">
         <div className="brand compact"><span className="brand-seal">论</span>PaperLite</div>
 
-        <nav className="menus" role="menubar">
-          <Mb title={t('menu.file')} open={open} setOpen={setOpen} width={236}>
+        <nav className="menus" role="menubar" data-tour="menubar">
+          <Mb title={t('menu.file')} open={open} setOpen={setOpen} width={236} tour="menu-file">
             <Mi label={t('m.new')} hint="Ctrl+Alt+N" close={close} onClick={actions.newFile} />
             <Mi label={t('m.newFolder')} close={close} onClick={actions.newFolder} />
             <Mi label={t('m.upload')} close={close} onClick={actions.upload} />
@@ -143,7 +144,7 @@ export default function Toolbar({
             <Mi label={t('m.aiFix')} disabled={!channelCount} close={close} onClick={onAiFix} />
           </Mb>
 
-          <Mb title={t('menu.insert')} open={open} setOpen={setOpen} width={220} disabled={!latexOk}>
+          <Mb title={t('menu.insert')} open={open} setOpen={setOpen} width={220} disabled={!latexOk} tour="menu-insert">
             <Mi icon="H1" label={t('m.section')} close={close} onClick={tool('tSec')} />
             <Mi icon="H2" label={t('m.subsection')} close={close} onClick={tool('tSub')} />
             <MSep />
@@ -188,7 +189,7 @@ export default function Toolbar({
             </MiSub>
           </Mb>
 
-          <Mb title="TeX" open={open} setOpen={setOpen} width={248}>
+          <Mb title="TeX" open={open} setOpen={setOpen} width={248} tour="menu-tex">
             {engineOk ? engines.map(en => (
               <Mi key={en} check={engine === en} label={engineLabel(en)} close={close} onClick={() => setEngine(en)} />
             )) : <div className="mi-note">{t('m.noEngine')}</div>}
@@ -200,7 +201,7 @@ export default function Toolbar({
             <div className="mi-note">{t('m.engineNote')}</div>
           </Mb>
 
-          <Mb title={'AI' + (channelCount ? '' : ' ·')} open={open} setOpen={setOpen} width={220}>
+          <Mb title={'AI' + (channelCount ? '' : ' ·')} open={open} setOpen={setOpen} width={220} tour="menu-ai">
             <Mi label={t('m.aiAssistant')} close={close} onClick={onOpenChat} />
             <Mi label={t('m.aiSettings')} close={close} onClick={onOpenSettings} />
             <MSep />
@@ -208,13 +209,14 @@ export default function Toolbar({
             {!channelCount && <div className="mi-note">{t('m.noChannel')}</div>}
           </Mb>
 
-          <Mb title={t('menu.help')} open={open} setOpen={setOpen} width={200}>
+          <Mb title={t('menu.help')} open={open} setOpen={setOpen} width={214} tour="menu-help">
+            <Mi label={t('m.tour')} close={close} onClick={() => onHelp('tour')} />
             <Mi label={t('m.keys')} close={close} onClick={() => onHelp('keys')} />
             <Mi label={t('m.about')} close={close} onClick={() => onHelp('about')} />
           </Mb>
         </nav>
 
-        <div className="mb-right">
+        <div className="mb-right" data-tour="rightbar">
           <LangSwitch lang={lang} setLang={setLang} />
           <div className="view-switch" title={t('vm.tip')}>
             {[['edit', '✎', t('vm.edit')], ['split', '▤▤', t('vm.split')], ['preview', '▢', t('vm.preview')]].map(([m, ic, ti]) => (

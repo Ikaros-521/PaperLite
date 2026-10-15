@@ -14,6 +14,9 @@ import OutlinePanel from './components/OutlinePanel.jsx';
 import DiagnosticsPanel from './components/DiagnosticsPanel.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import SettingsDialog from './components/SettingsDialog.jsx';
+import TourWelcome from './components/TourWelcome.jsx';
+import TourGuide from './components/TourGuide.jsx';
+import { TOUR_STEPS, shouldWelcome, dismissWelcome, markTourDone } from './tour.js';
 import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
@@ -118,6 +121,7 @@ export default function App() {
   const [activeChannelId, setActiveChannelId] = useState(() => (llm.loadChannels()[0] || {}).id || '');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(null); // 'keys' | 'about' | null
+  const [tourStage, setTourStage] = useState(null); // 'welcome' | 'tour' | null
   const [chatMessages, setChatMessages] = useState([]);
   const [aiBusy, setAiBusy] = useState(false);
 
@@ -156,6 +160,14 @@ export default function App() {
 
   // ---- 皮肤：切换即涂 <html data-theme> 并落盘 ----
   useEffect(() => { applyTheme(theme); }, [theme]);
+
+  // ---- 首次访问弹欢迎页（勾过「不再自动弹出」或走过教程就不再打扰）----
+  useEffect(() => { if (shouldWelcome()) setTourStage('welcome'); }, []);
+
+  const openHelp = useCallback((key) => {
+    if (key === 'tour') { setHelpOpen(null); setTourStage('tour'); return; }
+    setHelpOpen(key);
+  }, []);
 
   // ---- 恢复文件夹 & 检测 TeX 引擎 ----
   useEffect(() => {
@@ -907,7 +919,7 @@ export default function App() {
         onAiFix={aiFix}
         syncScroll={syncScroll} setSyncScroll={setSyncScroll}
         zoom={zoom} onZoom={setZoomClamped}
-        onHelp={setHelpOpen}
+        onHelp={openHelp}
         lang={lang} setLang={setLang}
         theme={theme} setTheme={setTheme}
       />
@@ -1154,6 +1166,18 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {tourStage === 'welcome' && (
+        <TourWelcome
+          stepCount={TOUR_STEPS.length}
+          onStart={() => setTourStage('tour')}
+          onClose={noAuto => { dismissWelcome(noAuto); setTourStage(null); }}
+        />
+      )}
+
+      {tourStage === 'tour' && (
+        <TourGuide steps={TOUR_STEPS} onClose={() => { markTourDone(); setTourStage(null); }} />
       )}
     </LangContext.Provider>
   );

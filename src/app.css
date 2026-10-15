@@ -931,3 +931,60 @@ figure.float .diagram { display: block; }
   border: 1px solid var(--line);
   background: linear-gradient(90deg, var(--t-desk) 0 34%, var(--t-paper) 34% 67%, var(--t-accent) 67% 84%, var(--t-seal) 84% 100%);
 }
+
+/* ---------- 使用教程：首次访问欢迎弹窗 ---------- */
+/* 全部走 var() token，六套皮肤不用各自调色 */
+.tour-welcome { width: min(520px, 94vw); }
+.tw-hero { display: flex; align-items: center; gap: 12px; padding: 18px 20px 10px; }
+.tw-hero .brand-seal { width: 34px; height: 34px; border-radius: 6px; font-size: 19px; }
+.tw-title { font-family: var(--serif); font-weight: 700; font-size: 18px; color: var(--ink); }
+.tw-slogan { font-size: 12.5px; color: var(--ink-soft); margin-top: 3px; line-height: 1.6; }
+.tw-list { list-style: none; margin: 0; padding: 12px 20px 4px; display: flex; flex-direction: column; gap: 9px; }
+.tw-item { display: flex; gap: 9px; align-items: flex-start; font-size: 12.8px; line-height: 1.65; color: var(--ink-soft); }
+.tw-ico {
+  flex: none; width: 21px; height: 21px; border-radius: 6px; display: grid; place-items: center;
+  background: rgba(var(--accent-rgb), .12); color: var(--accent-deep); font-size: 12px;
+}
+.tw-note { padding: 12px 20px 14px; font-size: 12px; line-height: 1.6; color: var(--ink-faint); }
+.tw-foot {
+  display: flex; align-items: center; gap: 8px; padding: 11px 20px; flex: none;
+  border-top: 1px solid var(--line-soft); background: var(--chrome);
+}
+.tw-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-soft); cursor: pointer; }
+.tw-sp { flex: 1; }
+
+/* ---------- 使用教程：分步聚光灯导览 ---------- */
+/* 压暗来自高亮框的超大 box-shadow（挖洞），所以 .tour-root 本身保持透明 */
+.tour-root { position: fixed; inset: 0; z-index: 1000; }
+.tour-root.plain { background: var(--backdrop); } /* 锚点不在当前视图时没有挖洞，整屏压暗 */
+.tour-spot {
+  position: fixed; border-radius: 9px; pointer-events: none;
+  box-shadow: 0 0 0 100vmax var(--backdrop); /* 压暗沿用弹窗遮罩的 token，六套皮肤都不会反色 */
+  outline: 2px solid var(--accent);
+}
+.tour-card {
+  position: fixed; width: min(380px, calc(100vw - 24px)); max-height: min(72vh, 440px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 11px;
+  box-shadow: 0 20px 52px rgba(var(--shadow-rgb), .34);
+}
+.tour-card.center { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.tour-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; background: var(--chrome); border-bottom: 1px solid var(--line-soft); }
+.tour-ch {
+  font-size: 11px; letter-spacing: .03em; padding: 2px 8px; border-radius: 999px;
+  background: rgba(var(--accent-rgb), .12); color: var(--accent-deep);
+}
+.tour-n { margin-left: auto; font-size: 11.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.tour-x { padding: 1px 7px; font-size: 12px; }
+.tour-prog { flex: none; height: 2px; background: var(--line-soft); }
+.tour-prog i { display: block; height: 100%; background: var(--accent); transition: width .18s ease; }
+.tour-b { padding: 13px 14px 6px; overflow: auto; }
+.tour-t { font-family: var(--serif); font-weight: 700; font-size: 15px; line-height: 1.45; color: var(--ink); margin-bottom: 7px; }
+.tour-p { margin: 0; font-size: 12.8px; line-height: 1.78; color: var(--ink-soft); }
+.tour-f {
+  flex: none; display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 10px 14px;
+  border-top: 1px solid var(--line-soft);
+}
+.tour-sp { flex: 1; }
+.tour-skip { border-color: transparent; background: transparent; color: var(--ink-faint); }
+.tour-skip:hover { border-color: var(--line); background: var(--hover); color: var(--ink-soft); }
