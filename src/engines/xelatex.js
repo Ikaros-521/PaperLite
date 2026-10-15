@@ -35,7 +35,13 @@ let warmCompile = null; // 定向预热占用 Worker 期间的 promise，正式�
 let warmPromise = null;
 let pendingWarmSource = null;
 let resourcesWarmed = false;
+let generation = 0;
+let loadAbort = null;
 const listeners = new Set();
+
+function checkGeneration(expected) {
+  if (generation !== expected) throw new Error('cancelled');
+}
 
 function setStatus(s) {
   status = s;
@@ -50,8 +56,8 @@ export function onEngineStatus(fn) {
   return () => listeners.delete(fn);
 }
 
-async function fetchResource(url) {
-  const response = await fetch(url, { cache: 'force-cache' });
+async function fetchResource(url, signal) {
+  const response = await fetch(url, { cache: 'force-cache', signal });
   // 托管服务常把未知路径兜底成 200 的 index.html，预取会把 HTML 当 TeX 资源缓存住
   if (!response.ok || /text\/html/i.test(response.headers.get('content-type') || '')) {
     throw new Error('HTTP ' + response.status);
@@ -59,9 +65,9 @@ async function fetchResource(url) {
   return response.arrayBuffer();
 }
 
-async function warmFileList() {
+async function warmFileList(signal) {
   try {
-    const response = await fetch(WARM_URL, { cache: 'no-cache' });
+    const response = await fetch(WARM_URL, { cache: 'no-cache', signal });
     const data = response.ok ? await response.json() : null;
     if (data && data.version === 1 && Array.isArray(data.files)) {
       return data;
@@ -74,7 +80,9 @@ async function warmFileList() {
 // 只给实际使用该文件的 Worker 一份，避免把大格式文件和字体无差别复制两遍。
 async function prefetchResources() {
   if (resourcesWarmed) return;
-  const list = await warmFileList();
+  const expected = generation, signal = loadAbort?.signal;
+  const list = await warmFileList(signal);
+  checkGeneration(expected);
   const workers = [texWorker, pdfWorker];
   const cached = await Promise.all(workers.map(w => call(w, 'TeX cache inventory',
     () => w.postMessage({ cmd: 'gettexlivecache' }), d => d.cmd === 'gettexlivecache')));
@@ -90,15 +98,17 @@ async function prefetchResources() {
         && (usage ? usage[i].has(key) : (i === 0 || key !== FMT_KEY)));
       if (!targets.length) continue;
       try {
-        const bytes = await fetchResource(repoUrl(key));
+        const bytes = await fetchResource(repoUrl(key), signal);
+        checkGeneration(expected);
         await Promise.all(targets.map(w => call(w, 'TeX cache upload',
           () => w.postMessage({ cmd: 'cachetexlivefile', key, src: bytes }),
           d => d.cmd === 'cachetexlivefile' && d.key === key).then(result => {
           if (result.result !== 'ok') throw new Error(result.error || 'TeX cache upload failed');
         })));
-      } catch (e) { failed = true; /* 单个文件失败时保留按需下载兜底，后续允许重试 */ }
+      } catch (e) { checkGeneration(expected); failed = true; /* 单个文件失败时保留按需下载兜底，后续允许重试 */ }
     }
   }));
+  checkGeneration(expected);
   resourcesWarmed = !failed && !list.incomplete;
 }
 
@@ -112,7 +122,9 @@ async function prefetchResources() {
 export function warmEngine(source) {
   pendingWarmSource = String(source || '');
   if (warmPromise) return warmPromise;
+  const expected = generation;
   warmPromise = preloadEngine().then(async () => {
+    checkGeneration(expected);
     warming = true;
     try {
       do {
@@ -120,23 +132,28 @@ export function warmEngine(source) {
         if (status === 'busy') await new Promise(resolve => {
           const off = onEngineStatus(s => { if (s !== 'busy') { off(); resolve(); } });
         });
+        checkGeneration(expected);
         setStatus('warming');
         const text = pendingWarmSource;
         pendingWarmSource = null;
         if (/\\documentclass/.test(text)) await warmUpDocument(text);
+        checkGeneration(expected);
         await prefetchResources();
       } while (pendingWarmSource !== null);
     } finally {
-      warming = false;
-      if (status === 'warming') setStatus('ready');
+      if (generation === expected) {
+        warming = false;
+        if (status === 'warming') setStatus('ready');
+      }
     }
-  }).finally(() => { warmPromise = null; });
+  }).finally(() => { if (generation === expected) warmPromise = null; });
   return warmPromise;
 }
 
 // 两个 Worker 各自持有资源缓存。必须走到 PDF 阶段，才能预热映射表和嵌入字体；
 // 仅预取 HTTP 缓存无法覆盖 no-store 或开发者工具禁用缓存的情况。
 async function warmUpDocument(source) {
+  const expected = generation;
   warmCompile = (async () => {
     // /work 的辅助文件属于上一篇文档；/tex 的资源缓存由两个引擎继续复用。
     texWorker.postMessage({ cmd: 'flushcache' });
@@ -144,28 +161,21 @@ async function warmUpDocument(source) {
     texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
     texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
     const result = await call(texWorker, 'XeTeX warm-up', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+    checkGeneration(expected);
     if (result.result !== 'ok' || result.status !== 0 || !result.pdf) return;
     pdfWorker.postMessage({ cmd: 'writefile', url: 'main.xdv', src: new Uint8Array(result.pdf) });
     pdfWorker.postMessage({ cmd: 'setmainfile', url: 'main.xdv' });
     await call(pdfWorker, 'dvipdfmx warm-up', () => pdfWorker.postMessage({ cmd: 'compilepdf' }), d => d.cmd === 'compile');
   })();
   try { await warmCompile; } catch (e) { /* 预热编译报错不影响，文件已经拉到了 */ }
-  warmCompile = null;
+  if (generation === expected) warmCompile = null;
 }
 
 // Worker 装载完成时胶水会 postMessage({result:'ok'})
 function waitReady(w, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error(label + ' engine load timeout')); }, 120000);
-    function onmsg(ev) {
-      const d = ev.data || {};
-      if (d.result === 'ok') { cleanup(); resolve(); }
-      else if (d.result === 'failed') { cleanup(); reject(new Error(label + ' engine failed to init')); }
-    }
-    function onerr(e) { cleanup(); reject(new Error(label + ' engine error: ' + (e.message || 'load failed'))); }
-    function cleanup() { clearTimeout(timer); w.removeEventListener('message', onmsg); w.removeEventListener('error', onerr); }
-    w.addEventListener('message', onmsg);
-    w.addEventListener('error', onerr);
+  return call(w, label + ' engine load', () => {},
+    d => !d.cmd && (d.result === 'ok' || d.result === 'failed'), 120000).then(d => {
+    if (d.result !== 'ok') throw new Error(label + ' engine failed to init');
   });
 }
 
@@ -173,23 +183,26 @@ function waitReady(w, label) {
 export function preloadEngine() {
   if (loadPromise) return loadPromise;
   if (typeof Worker === 'undefined') { setStatus('error'); return Promise.reject(new Error('no Worker support')); }
+  const expected = generation;
+  const abort = loadAbort = new AbortController();
   setStatus('loading');
   loadPromise = (async () => {
     try {
       texWorker = new Worker(BASE + 'tex-worker.js');
       pdfWorker = new Worker(BASE + 'pdf-worker.js');
-      const watch = w => { w.onerror = () => setStatus('error'); };
+      const watch = w => { w.onerror = () => { if (generation === expected) setStatus('error'); }; };
       watch(texWorker); watch(pdfWorker);
       const [, , manifest] = await Promise.all([
         waitReady(texWorker, 'XeTeX'),
         waitReady(pdfWorker, 'dvipdfmx'),
-        fetch(REPO_URL + 'manifest.json', { cache: 'no-cache' }).then(async response => {
+        fetch(REPO_URL + 'manifest.json', { cache: 'no-cache', signal: abort.signal }).then(async response => {
           if (!response.ok) throw new Error('TeX resource manifest load failed: HTTP ' + response.status);
           const data = await response.json();
           if (data.version !== 1 || !Array.isArray(data.files)) throw new Error('Invalid TeX resource manifest');
           return data;
         }),
       ]);
+      checkGeneration(expected);
       // 默认端点是上游已失效的服务，改指同源静态镜像
       texWorker.postMessage({ cmd: 'settexliveurl', url: REPO_URL });
       pdfWorker.postMessage({ cmd: 'settexliveurl', url: REPO_URL });
@@ -198,6 +211,8 @@ export function preloadEngine() {
       pdfWorker.postMessage({ cmd: 'settexlivemanifest', files: manifest.files });
       setStatus('ready');
     } catch (e) {
+      checkGeneration(expected);
+      abort.abort();
       setStatus('error');
       loadPromise = null;
       try { texWorker && texWorker.terminate(); } catch (e2) { /* noop */ }
@@ -211,7 +226,7 @@ export function preloadEngine() {
 }
 
 // 调一次命令并等待特定回执（协议见胶水 onmessage）
-// 在途的 reject 记进 inFlight，用户点「取消」时统一拒绝并拆掉 Worker
+// 所有等待（包括初始化）共享取消和清理机制。
 const inFlight = new Set();
 function call(w, label, send, match, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -223,25 +238,28 @@ function call(w, label, send, match, timeoutMs) {
       resolve(d);
     }
     function onerr(e) { cleanup(); reject(new Error(label + ' crashed: ' + (e.message || 'worker error'))); }
-    function cleanup() { clearTimeout(timer); inFlight.delete(reject); w.removeEventListener('message', onmsg); w.removeEventListener('error', onerr); }
-    inFlight.add(reject);
+    function cancel() { cleanup(); reject(new Error('cancelled')); }
+    function cleanup() { clearTimeout(timer); inFlight.delete(cancel); w.removeEventListener('message', onmsg); w.removeEventListener('error', onerr); }
+    inFlight.add(cancel);
     w.addEventListener('message', onmsg);
     w.addEventListener('error', onerr);
-    send();
+    try { send(); } catch (e) { cleanup(); reject(e); }
   });
 }
 
 /** 取消进行中的编译/预热：拒绝所有在途调用并销毁 Worker，下次编译重新装载（资源走 HTTP 缓存，秒级） */
 export function cancelCompile() {
-  const rejects = [...inFlight];
-  inFlight.clear();
-  rejects.forEach(rej => { try { rej(new Error('cancelled')); } catch (e) { /* noop */ } });
+  generation++;
+  loadAbort?.abort();
+  loadAbort = null;
+  [...inFlight].forEach(cancel => cancel());
   try { texWorker && texWorker.terminate(); } catch (e) { /* noop */ }
   try { pdfWorker && pdfWorker.terminate(); } catch (e) { /* noop */ }
   texWorker = pdfWorker = null;
   loadPromise = null;
   warmCompile = null;
   warmPromise = null;
+  pendingWarmSource = null;
   warming = false;
   resourcesWarmed = false;
   setStatus('idle');
@@ -273,8 +291,10 @@ function cancelled(e) {
 }
 
 export async function compileXeLaTeX(source, files = []) {
+  const expected = generation;
   try {
     await preloadEngine();
+    checkGeneration(expected);
   } catch (e) {
     const c = cancelled(e);
     if (c) return c;
@@ -282,10 +302,12 @@ export async function compileXeLaTeX(source, files = []) {
   }
   // 定向预热正在用 Worker：等它跑完再发自己的命令，否则会错拿它的回执
   if (warmCompile) { try { await warmCompile; } catch (e) { /* 交给下面的正式编译 */ } }
-  setStatus('busy');
   try {
+    checkGeneration(expected);
+    setStatus('busy');
     source = prepareXeLaTeXSource(source);
     ({ source, files } = await prepareCompileGraphics(source, files));
+    checkGeneration(expected);
     // 两遍编译：目录/交叉引用（与 server.mjs 行为一致）
     texWorker.postMessage({ cmd: 'flushcache' });
     pdfWorker.postMessage({ cmd: 'flushcache' });
@@ -293,6 +315,7 @@ export async function compileXeLaTeX(source, files = []) {
     for (const worker of [texWorker, pdfWorker]) {
       const uploaded = await call(worker, 'Project upload',
         () => worker.postMessage({ cmd: 'writeproject', files }), d => d.cmd === 'writeproject');
+      checkGeneration(expected);
       if (uploaded.result !== 'ok') throw new Error(uploaded.error || 'Project upload failed');
     }
     texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: source });
@@ -300,6 +323,7 @@ export async function compileXeLaTeX(source, files = []) {
     let r1;
     try {
       r1 = await call(texWorker, 'XeTeX pass 1', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+      checkGeneration(expected);
     } catch (e) {
       return cancelled(e) || { ok: false, log: '', errors: [{ line: null, msg: e.message || String(e) }], engine: 'builtin' };
     }
@@ -310,6 +334,7 @@ export async function compileXeLaTeX(source, files = []) {
     let r2 = r1;
     try {
       r2 = await call(texWorker, 'XeTeX pass 2', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+      checkGeneration(expected);
     } catch (e) {
       const c = cancelled(e);
       if (c) return c;
@@ -325,6 +350,7 @@ export async function compileXeLaTeX(source, files = []) {
       try {
         r2 = await call(texWorker, 'XeTeX pass 3',
           () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+        checkGeneration(expected);
       } catch (error) {
         return cancelled(error) || { ok: false, log: r2.log || '',
           errors: [{ line: null, msg: error.message || String(error) }], engine: 'builtin' };
@@ -341,6 +367,7 @@ export async function compileXeLaTeX(source, files = []) {
     let r3;
     try {
       r3 = await call(pdfWorker, 'dvipdfmx', () => pdfWorker.postMessage({ cmd: 'compilepdf' }), d => d.cmd === 'compile');
+      checkGeneration(expected);
     } catch (e) {
       const c = cancelled(e);
       if (c) return c;
@@ -351,7 +378,11 @@ export async function compileXeLaTeX(source, files = []) {
       return { ok: false, log, errors: parseLog(log).concat([{ line: null, msg: 'dvipdfmx failed' }]), engine: 'builtin' };
     }
     return { ok: true, pdfBytes: new Uint8Array(r3.pdf), log: r2.log || '', errors: [], engine: 'builtin' };
+  } catch (e) {
+    const c = cancelled(e);
+    if (c) return c;
+    throw e;
   } finally {
-    setStatus(loadPromise ? (warming ? 'warming' : 'ready') : 'idle');
+    if (generation === expected) setStatus(loadPromise ? (warming ? 'warming' : 'ready') : 'idle');
   }
 }

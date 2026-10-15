@@ -35,8 +35,11 @@ export default function PreviewPane({
       return assetTabs.find(tab => tab.name === name)?.uploadedFile || null;
     };
     for (const img of images) {
-      const original = img.getAttribute('src') || '';
+      // src becomes a Blob/data URL after resolution. Retain the project path
+      // across effect restarts so a revoked URL is never mistaken for the input.
+      const original = img.getAttribute('data-graphics-source') || img.getAttribute('src') || '';
       if (/^(?:[a-z]+:|\/\/)/i.test(original)) continue;
+      img.setAttribute('data-graphics-source', original);
       (async () => {
         let file;
         const names = /\.[a-z\d]+$/i.test(original) ? [original]

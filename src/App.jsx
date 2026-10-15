@@ -134,6 +134,7 @@ export default function App() {
   const [compileResult, setCompileResult] = useState(null);
   const [dismissedIssues, setDismissedIssues] = useState(null);
   const compileContextRef = useRef(null);
+  const compileAbortRef = useRef(null);
   const [previewMode, setPreviewMode] = useState('rich');
   const [logFull, setLogFull] = useState(false);
   const pdfUrlRef = useRef(null);
@@ -358,9 +359,9 @@ export default function App() {
     return () => clearTimeout(t);
   }, [activeValue, tabs.length, flash]);
 
-  // 磁盘文件标签有未保存改动时拦住刷新/关页：草稿在浏览器里，文件内容不在
+  // 草稿写入失败或尚在防抖等待期间，也必须防止刷新丢稿。
   useEffect(() => {
-    if (!tabs.some(x => x.dirty && x.kind !== 'draft')) return;
+    if (!tabs.some(x => x.kind === 'draft' ? x.doc && x.doc.getValue() !== x.saved : x.dirty)) return;
     const onUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
@@ -552,7 +553,7 @@ export default function App() {
       try {
         const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ name: x.name, text: x.doc.getValue() }));
         localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
-      } catch (e) { flash(tr(getLang(), 'app.draftSaveFailed')); }
+      } catch (e) { flash(tr(getLang(), 'app.draftSaveFailed')); return; }
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
       flash(tr(getLang(), 'app.draftSaved'));
       return;
@@ -687,6 +688,8 @@ export default function App() {
       return;
     }
     setCompiling(true);
+    const abort = new AbortController();
+    compileAbortRef.current = abort;
     const context = compileContextRef.current;
     const source = activeTab.doc.getValue();
     const tabId = activeTab.id;
@@ -695,6 +698,7 @@ export default function App() {
       let ok, pdfBytes, log, errors, errText, wasCancelled = false;
       if (engine === 'builtin') {
         const files = await collectCompileFiles(activeTab, tabsRef.current);
+        if (abort.signal.aborted) { flash(t('app.compileCancelled')); return; }
         const r = await compileXeLaTeX(source, files);
         ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
         wasCancelled = !!r.cancelled;
@@ -702,6 +706,7 @@ export default function App() {
       } else {
         const r = await fetch('/api/compile', {
           method: 'POST',
+          signal: abort.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ engine, source })
         });
@@ -729,13 +734,13 @@ export default function App() {
       }
     } catch (e) {
       if (compileContextRef.current !== context) return;
-      if (String(e && e.message || e) === 'cancelled') { flash(t('app.compileCancelled')); return; }
+      if (abort.signal.aborted || String(e && e.message || e) === 'cancelled') { flash(t('app.compileCancelled')); return; }
       alert(t('app.compileReqFailed', { msg: e.message || e }));
-    } finally { setCompiling(false); }
+    } finally { compileAbortRef.current = null; setCompiling(false); }
   };
 
   // 编译中按钮变「取消」：拆掉 Worker 立刻归还界面，长任务不该只能干等
-  const doCancelCompile = () => { cancelCompile(); };
+  const doCancelCompile = () => { compileAbortRef.current?.abort(); cancelCompile(); };
 
   // ---- 预览渲染 ----
   const deferred = useDeferredValue(activeValue);
@@ -1408,13 +1413,13 @@ export default function App() {
 }
 
 /* 恢复草稿：优先读新的多草稿键，退回旧版单篇键，都没有则给示例论文。
- * 上限 12 篇、单篇按 localStorage 现实尺寸约束，避免整组写入必然失败。 */
+ * 恢复全部已保存的草稿，不能在读取时截断后再由自动保存覆盖原始数据。 */
 function readDrafts() {
   const nameOf = n => String(n || '').slice(0, 80);
   try {
     const arr = JSON.parse(localStorage.getItem(LS_DRAFTS) || 'null');
     if (Array.isArray(arr)) {
-      const list = arr.filter(d => d && typeof d.text === 'string').slice(0, 12).map(d => ({ name: nameOf(d.name), text: d.text }));
+      const list = arr.filter(d => d && typeof d.text === 'string').map(d => ({ name: nameOf(d.name), text: d.text }));
       if (list.length) return list;
     }
   } catch (e) { /* 落盘格式坏了，退回旧键 */ }
