@@ -62,10 +62,22 @@ export function preloadEngine() {
       pdfWorker = new Worker(BASE + 'swiftlatexdvipdfm.js');
       const watch = w => { w.onerror = () => setStatus('error'); };
       watch(texWorker); watch(pdfWorker);
-      await Promise.all([waitReady(texWorker, 'XeTeX'), waitReady(pdfWorker, 'dvipdfmx')]);
+      const [, , manifest] = await Promise.all([
+        waitReady(texWorker, 'XeTeX'),
+        waitReady(pdfWorker, 'dvipdfmx'),
+        fetch(REPO_URL + 'manifest.json', { cache: 'no-cache' }).then(async response => {
+          if (!response.ok) throw new Error('TeX resource manifest load failed: HTTP ' + response.status);
+          const data = await response.json();
+          if (data.version !== 1 || !Array.isArray(data.files)) throw new Error('Invalid TeX resource manifest');
+          return data;
+        }),
+      ]);
       // 默认端点是上游已失效的服务，改指同源静态镜像
       texWorker.postMessage({ cmd: 'settexliveurl', url: REPO_URL });
       pdfWorker.postMessage({ cmd: 'settexliveurl', url: REPO_URL });
+      // kpathsea 会探测许多可选文件；清单中不存在的资源直接返回未找到，避免无效 HTTP 404。
+      texWorker.postMessage({ cmd: 'settexlivemanifest', files: manifest.files });
+      pdfWorker.postMessage({ cmd: 'settexlivemanifest', files: manifest.files });
       setStatus('ready');
       // 空闲预热顺带预取 LaTeX 格式文件（31MB，最大头）：进 HTTP 缓存后，
       // 引擎首次编译时的同步 XHR 直接命中缓存，慢链路也能显著提速

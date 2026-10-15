@@ -5,20 +5,39 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { samples } from '../src/engines/samples.js';
 
 const engineDir = fileURLToPath(new URL('../public/xelatex/', import.meta.url));
+const manifest = JSON.parse(fs.readFileSync(path.join(engineDir, 'repo/manifest.json'), 'utf8'));
+const requests = new Set();
+const missingRequests = [];
 
 async function loadEngine(name) {
   let reply;
   let ready;
   const initialized = new Promise(resolve => { ready = resolve; });
   const context = vm.createContext({
-    require: createRequire(import.meta.url), process,
+    require: createRequire(import.meta.url), process: { ...process, on() {} },
     __dirname: engineDir, setTimeout, clearTimeout,
     TextDecoder, TextEncoder, Uint8Array, ArrayBuffer,
     Module: { wasmBinary: fs.readFileSync(path.join(engineDir, name + '.wasm')) },
     console: { log() {}, error() {}, warn() {} },
     texlive_localrepo: path.join(engineDir, 'repo') + '/',
+    // Route the actual synchronous XHR code through the static mirror. Any
+    // missing HTTP resource fails, including optional kpathsea probes.
+    XMLHttpRequest: class {
+      open(method, url) { this.url = url; }
+      send() {
+        const key = new URL(this.url).pathname.split('/repo/xetex/')[1];
+        if (!key || !manifest.files.includes(key)) missingRequests.push(this.url);
+        assert.ok(key && manifest.files.includes(key), `Unexpected HTTP request: ${this.url}`);
+        requests.add(key);
+        const bytes = fs.readFileSync(path.join(engineDir, 'repo/xetex', key));
+        this.status = 200;
+        this.response = Uint8Array.from(bytes).buffer;
+      }
+      getResponseHeader() { return null; }
+    },
     postMessage(data) {
       if (!data.cmd && data.result === 'ok') ready();
       else reply = data;
@@ -27,6 +46,12 @@ async function loadEngine(name) {
   context.self = context;
   vm.runInContext(fs.readFileSync(path.join(engineDir, name + '.js'), 'utf8'), context);
   await initialized;
+  // Keep Emscripten's Node bootstrap, then exercise its browser resource path.
+  context.process = new Proxy(process, {
+    get(target, key) { return key === 'versions' ? {} : Reflect.get(target, key); },
+  });
+  context.onmessage({ data: { cmd: 'settexliveurl', url: 'https://paperlite.test/xelatex/repo/' } });
+  context.onmessage({ data: { cmd: 'settexlivemanifest', files: manifest.files } });
   return (cmd, payload = {}) => {
     reply = undefined;
     context.onmessage({ data: { cmd, ...payload } });
@@ -73,3 +98,86 @@ assert.equal(result?.result, 'ok', result?.log);
 assert.ok(result.pdf, 'PDF produced');
 assert.equal(Buffer.from(result.pdf).subarray(0, 5).toString(), '%PDF-');
 console.log('XeLaTeX regression passed: Chinese fonts + booktabs → XDV → PDF');
+
+const fixtures = {
+  ...samples,
+  mathematics: String.raw`\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm,mathrsfs,cancel,siunitx}
+\newtheorem{theorem}{Theorem}
+\begin{document}
+\textbf{Bold} \textit{Italic} \texttt{Monospace} {\sffamily Sans}
+\begin{align}
+\bm{x} &\in \mathbb{R}^{3}, &\mathscr{F}(x)&=\int_0^\infty e^{-x^2}\,dx\\
+A&=\begin{pmatrix}1&2\\3&4\end{pmatrix}, &f(x)&=\cancel{x}+\dfrac{1}{2}
+\end{align}
+\begin{theorem}For every $x$, $x=x$.\end{theorem}
+\qty{1.23}{\metre\per\second}
+\end{document}`,
+  packages: String.raw`\documentclass{ctexrep}
+\usepackage{geometry,graphicx,xcolor,hyperref,bookmark,cleveref}
+\usepackage{booktabs,longtable,tabularx,multirow,makecell,colortbl,threeparttable}
+\usepackage{enumitem,fancyhdr,setspace,caption,subcaption,float,listings,ulem}
+\usepackage{adjustbox,csquotes,natbib,parskip,wrapfig}
+\geometry{margin=25mm}
+\begin{document}
+\chapter{宏包组合验证}\label{chap:test}
+\href{https://example.com}{超链接} \cref{chap:test} \enquote{quoted}
+\begin{enumerate}[label=\arabic*.]\item 中文列表\end{enumerate}
+\begin{tabularx}{\linewidth}{lX}\toprule
+\makecell{第一行\\第二行} & \textcolor{red}{测试}\\\bottomrule
+\end{tabularx}
+\begin{longtable}{ll}\toprule A&B\\\midrule C&D\\\bottomrule\end{longtable}
+\begin{lstlisting}[language=Python]
+print(42)
+\end{lstlisting}
+\rotatebox{15}{\fbox{Graphic transform}}
+\end{document}`,
+  plots: String.raw`\documentclass{article}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows.meta,calc,decorations.pathmorphing,shapes.geometric}
+\begin{document}
+\begin{tikzpicture}\begin{axis}[xlabel=$x$,ylabel=$y$]
+\addplot[blue,domain=0:2]{x^2};
+\end{axis}\end{tikzpicture}
+\end{document}`,
+  unicodeMath: String.raw`\documentclass{ctexbook}
+\usepackage{unicode-math}
+\setmathfont{latinmodern-math.otf}
+\begin{document}
+\chapter{Unicode 数学}
+\[\symbf{x}\in\mathbb{R},\quad\int_0^1 x^2\,dx=\frac13\]
+\end{document}`,
+  additionalPackages: String.raw`\documentclass{article}
+\usepackage{physics,stmaryrd,wasysym,xltxtra,fvextra,microtype}
+\usepackage{algorithm,algorithmic,titlesec,titling,footmisc,threeparttable}
+\usepackage{environ,newunicodechar,xurl}
+\begin{document}
+\[\dv{f}{x}=\braket{a}{b},\quad\llbracket x\rrbracket\]
+\smiley
+\begin{algorithm}\caption{Example}
+\begin{algorithmic}\STATE $x\gets 1$\end{algorithmic}\end{algorithm}
+\end{document}`,
+};
+for (const [name, source] of Object.entries(fixtures)) {
+  tex('flushcache');
+  tex('writefile', { url: 'main.tex', src: source });
+  for (let pass = 1; pass <= 2; pass++) {
+    result = tex('compilelatex');
+    assert.equal(result?.result, 'ok', `${name} pass ${pass}:\n${result?.log}`);
+  }
+  pdf('flushcache');
+  pdf('writefile', { url: 'main.xdv', src: new Uint8Array(result.pdf) });
+  result = pdf('compilepdf');
+  assert.equal(result?.result, 'ok', `${name} PDF:\n${result?.log}`);
+  assert.equal(Buffer.from(result.pdf).subarray(0, 5).toString(), '%PDF-');
+  console.log(`Template ${name}: XeTeX → PDF passed`);
+}
+tex('flushcache');
+tex('writefile', { url: 'main.tex', src: String.raw`\documentclass{article}
+\usepackage{paperlite-deliberately-missing}\begin{document}Test\end{document}` });
+result = tex('compilelatex');
+assert.equal(result.result, 'failed', 'A genuinely missing package must still fail');
+assert.match(result.log, /paperlite-deliberately-missing\.sty/);
+assert.deepEqual(missingRequests, [], 'No HTTP requests for absent resources, including optional probes');
+console.log(`${requests.size} distinct HTTP resources loaded; zero missing-resource requests`);

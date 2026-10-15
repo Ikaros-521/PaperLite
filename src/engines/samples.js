@@ -3,8 +3,12 @@
 
 var DEMO = [
 '\\documentclass[12pt]{ctexart}',
-'\\usepackage{booktabs,amsmath,graphicx}',
+'\\usepackage{booktabs,amsmath,amssymb,graphicx}',
+'\\usepackage{fancyvrb}',
+'% Mermaid 在网页预览中渲染为图；XeLaTeX 中保留源码。',
+'\\DefineVerbatimEnvironment{mermaid}{Verbatim}{fontsize=\\small}',
 '\\usepackage{tikz}',
+'\\usetikzlibrary{shapes.geometric,positioning,arrows}',
 '\\tikzset{',
 '  block/.style={rectangle, rounded corners=6pt, fill=blue!12, draw=blue!60!black, minimum height=1.1cm, align=center},',
 '  proc/.style={block, fill=teal!12, draw=teal!70!black},',
@@ -153,6 +157,7 @@ var DEMO = [
 var FLOW = [
 '\\documentclass{ctexart}',
 '\\usepackage{tikz}',
+'\\usetikzlibrary{shapes.geometric,positioning,arrows}',
 '\\tikzset{',
 '  startstop/.style={rectangle, rounded corners=12pt, fill=red!15, draw=red!70!black, minimum width=2.6cm, minimum height=1cm, align=center},',
 '  process/.style={rectangle, rounded corners=3pt, fill=blue!12, draw=blue!60!black, text width=3cm, align=center},',

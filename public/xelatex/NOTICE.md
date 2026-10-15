@@ -30,3 +30,33 @@
 Fandol 的六个 `.fontspec` 文件为 PaperLite 提供的空配置，仅结束输入，
 用于满足 fontspec 的可选配置探测，避免静态托管下的 404；字体和排版特性仍由
 ctex/xeCJK 设置，对应的 `.otf` 字体位于 `repo/xetex/47/`。
+
+## 宏包镜像维护与验证
+
+镜像已扩展为论文常用宏包及其依赖，包括 AMS、graphics、TikZ/PGF、
+PGFPlots、hyperref、geometry、caption、listings、siunitx、unicode-math 等。
+完整包名、TL2022 revision、许可和来源归档的 SHA-256 记录于 `packages.json`。
+这是面向浏览器的精选运行时镜像，不是完整 TeX Live，也不提供外部程序（如 biber）。
+
+维护流程（Python 3 标准库 + Node，无需本机安装 TeX）：
+
+```sh
+python scripts/sync-texlive.py
+npm run tex:manifest
+npm run test:xelatex
+```
+
+同步脚本递归解析 TeX Live 的包依赖，保留已自举的内核/格式文件，导入运行时宏包、
+字体度量、字体、编码及映射，并根据包的 updmap 声明重建 `pdftex.map`。
+包入口列表还包含运行验证发现的隐式依赖（TL 包数据库并未声明全部依赖）。
+扩大支持范围时，在脚本中添加包，并增加使用其功能的编译夹具。
+
+`repo/manifest.json` 列出实际存在的资源。主线程在引擎就绪前将清单传给两个 Worker：
+不存在的可选文件直接返回未找到，不发送必然失败的 HTTP 请求；省略 `.tex` 的
+输入按清单解析到实际文件。真正缺少必需宏包时仍报告 LaTeX 错误。
+构建和 CI 检查清单是否与镜像一致，防止新增文件漏登记。
+
+回归测试运行发行版 WASM 的 XeTeX → XDV → dvipdfmx → PDF 完整管线，
+通过同步 XHR 路径从静态镜像读取资源，覆盖全部内置模板及数学、表格、超链接、
+绘图等组合，并断言没有缺失资源请求。内置 demo 的 Mermaid 在网页中渲染为图，
+XeLaTeX 输出保留源码；TikZ 图则正常参与 PDF 排版。
