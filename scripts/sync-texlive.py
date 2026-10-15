@@ -24,11 +24,14 @@ newunicodechar environ standalone preview pgfplots colortbl threeparttable
 xurl infwarerr siunitx physics cancel jknapltx rsfs stmaryrd wasysym wasy wasy-type1
 upquote xunicode xltxtra tipa kvoptions etex-pkg everysel everyshi filehook
 hopatch ifoddpage lineno multido newfloat bigfoot ragged2e realscripts svn-prov
-translations translator varwidth zref algorithms ntheorem unicode-math lm-math latex-fonts cm'''.split()
+translations translator varwidth zref algorithms ntheorem unicode-math lm-math latex-fonts cm
+abstract hologo appendix biblatex tex-gyre'''.split()
 # These bundles support other engines too. Import their XeTeX runtime files,
 # without pulling platform binaries or the entire pTeX/LuaTeX font ecosystem.
 BUNDLES = ['latex', 'ctex', 'xecjk', 'fontspec', 'l3kernel', 'l3packages', 'lm']
 SKIP = {'luatex', 'pdftex', 'xetex', 'tex', 'texlive.infra', 'latex-bin'}
+ELEGANT_REV = '041a986646c74ed71f920d62532e6924cdb5c0ff'  # v0.10, matching the documentation fixture
+ELEGANT_BASE = 'https://raw.githubusercontent.com/ElegantLaTeX/ElegantPaper/' + ELEGANT_REV + '/'
 
 
 def download(relative):
@@ -130,6 +133,23 @@ def main():
     (ROOT / 'repo/xetex/11/pdftex.map').write_text(
         '\n'.join(line.rstrip() for line in '\n'.join(combined).splitlines()) + '\n',
         encoding='utf-8', newline='\n')
+    # ElegantPaper is not present in the TL2022 database. Vendor the original
+    # upstream class and license at an immutable revision, with its own record.
+    external = []
+    for name, destination in [('elegantpaper.cls', ROOT / 'repo/xetex/26/elegantpaper.cls'),
+                              ('License', ROOT / 'licenses/ElegantPaper.txt')]:
+        cached = CACHE / ('elegantpaper-' + ELEGANT_REV + '-' + name)
+        if not cached.exists():
+            with urllib.request.urlopen(ELEGANT_BASE + name, timeout=90) as response:
+                cached.write_bytes(response.read())
+        data = cached.read_bytes()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        external.append({'url': ELEGANT_BASE + name,
+                         'file': destination.relative_to(ROOT).as_posix(),
+                         'sha256': hashlib.sha256(data).hexdigest(), 'license': 'LPPL-1.3c'})
+    (ROOT / 'external-packages.json').write_text(
+        json.dumps(external, indent=2) + '\n', encoding='utf-8', newline='\n')
     print('Added', added, 'runtime files; preserved existing kernel and format.')
 
 

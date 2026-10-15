@@ -1,0 +1,14 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/ElegantLaTeX/ElegantPaper/041a986646c74ed71f920d62532e6924cdb5c0ff/elegantpaper.cls",
+    "file": "repo/xetex/26/elegantpaper.cls",
+    "sha256": "9d90e536bdf6c58d4bb7b42a7020d1853213b7340b8883e3e6f12f880a50be5f",
+    "license": "LPPL-1.3c"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/ElegantLaTeX/ElegantPaper/041a986646c74ed71f920d62532e6924cdb5c0ff/License",
+    "file": "licenses/ElegantPaper.txt",
+    "sha256": "5f05fcf6ef25a6c31bccd2df7c0c46b23107bbeb2ce5cdba74efb5cc357f4dbb",
+    "license": "LPPL-1.3c"
+  }
+]

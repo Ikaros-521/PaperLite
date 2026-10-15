@@ -1,5 +1,12 @@
 [
   {
+    "name": "abstract",
+    "revision": "15878",
+    "license": "lppl",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/abstract.tar.xz",
+    "sha256": "88925c4b683f9618da5a69c977faef963f9543cfffefd7bdc096c1e353147b52"
+  },
+  {
     "name": "adjustbox",
     "revision": "64967",
     "license": "lppl1.3",
@@ -35,6 +42,13 @@
     "sha256": "c71a0e72073156ba8a897b49f69a3bc89b3db078b2d0fc4db9dbc78b85f4ad87"
   },
   {
+    "name": "appendix",
+    "revision": "53718",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/appendix.tar.xz",
+    "sha256": "5d597d3f0b327dd9bf173bbe19340b3c97abb794b672e60114d6819fdb8ac57b"
+  },
+  {
     "name": "atbegshi",
     "revision": "53051",
     "license": "lppl1.3",
@@ -54,6 +68,13 @@
     "license": "lppl1.3",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/auxhook.tar.xz",
     "sha256": "cd19817b3db127424c727c9b29a9647daa22b4d8ff56a63c94cdbd2163a09690"
+  },
+  {
+    "name": "biblatex",
+    "revision": "66405",
+    "license": "lppl1.3",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/biblatex.tar.xz",
+    "sha256": "8ce1f8b9083554daa01ef126efe54e0ee414aeae810e2e2552f4973cc0a673c2"
   },
   {
     "name": "bigfoot",
@@ -308,6 +329,13 @@
     "sha256": "d9ea778c6b4c5e44e005d75b69912d9fa3eb9775d81ddbcea9e73b0d875327af"
   },
   {
+    "name": "hologo",
+    "revision": "61719",
+    "license": "lppl1.3c",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/hologo.tar.xz",
+    "sha256": "b3bc5b4fe89dbf64a54b7ba71420d2a3474b61c4803f75fe1d85c9e36945e215"
+  },
+  {
     "name": "hopatch",
     "revision": "65491",
     "license": "lppl1.3",
@@ -446,6 +474,13 @@
     "license": "gfl",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/lm-math.tar.xz",
     "sha256": "325f0dcf6f303f642bf0bc0a53a757c6dd0ff0e42c20395203f7f6140a64794f"
+  },
+  {
+    "name": "logreq",
+    "revision": "53003",
+    "license": "lppl1.3",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/logreq.tar.xz",
+    "sha256": "c59a8bcd1e2cd79da0b0e37a96b1b3cc92ac4bef71ca8e3ca452c677b0987d0e"
   },
   {
     "name": "ltxcmds",
@@ -663,6 +698,13 @@
     "license": "lppl",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/svn-prov.tar.xz",
     "sha256": "07f880060df7764f3934e8f86d788b0a974949b19039ab640c9906f1600f559c"
+  },
+  {
+    "name": "tex-gyre",
+    "revision": "48058",
+    "license": "gfl",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/tex-gyre.tar.xz",
+    "sha256": "908ad4e86e5a4e838440aaafb4e8b12ca01208ec47ee2f27974f10e078691e35"
   },
   {
     "name": "threeparttable",

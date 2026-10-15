@@ -102,6 +102,7 @@ console.log('XeLaTeX regression passed: Chinese fonts + booktabs → XDV → PDF
 
 const fixtures = {
   ...samples,
+  elegantpaper: fs.readFileSync(new URL('./fixtures/elegantpaper-demo.tex', import.meta.url), 'utf8'),
   // Reproduce documents already saved before the template dependencies were
   // fixed; replacing samples alone does not update these browser documents.
   legacyDemo: samples.demo
@@ -166,6 +167,7 @@ print(42)
 \begin{algorithmic}\STATE $x\gets 1$\end{algorithmic}\end{algorithm}
 \end{document}`,
 };
+if (process.argv[2]) fixtures.userDocument = fs.readFileSync(process.argv[2], 'utf8');
 for (const [name, source] of Object.entries(fixtures)) {
   tex('flushcache');
   const prepared = prepareXeLaTeXSource(source);
@@ -182,6 +184,9 @@ for (const [name, source] of Object.entries(fixtures)) {
   result = pdf('compilepdf');
   assert.equal(result?.result, 'ok', `${name} PDF:\n${result?.log}`);
   assert.equal(Buffer.from(result.pdf).subarray(0, 5).toString(), '%PDF-');
+  if (name === 'userDocument' && process.argv[3]) {
+    fs.writeFileSync(process.argv[3], Buffer.from(result.pdf));
+  }
   console.log(`Template ${name}: XeTeX → PDF passed`);
 }
 tex('flushcache');

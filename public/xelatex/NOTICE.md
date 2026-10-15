@@ -64,3 +64,18 @@ XeLaTeX 输出保留源码；TikZ 图则正常参与 PDF 排版。
 浏览器中已保存的早期 PaperLite 示例也由编译入口兼容：临时补齐 TikZ 形状库、
 AMS 符号及 Mermaid 源码环境，不覆盖用户保存的正文，且保持错误行号不变。
 回归测试同时编译旧版和当前模板，避免仅更新新模板而遗漏已有文档。
+
+ElegantPaper v0.10 文档类取自官方仓库的固定提交
+`041a986646c74ed71f920d62532e6924cdb5c0ff`（与测试文档版本一致），
+原始类文件未修改，LPPL 1.3c 许可证保存在 `licenses/ElegantPaper.txt`，
+来源与 SHA-256 记录于 `external-packages.json`。其 XeLaTeX 默认配置所需的
+TeX Gyre 字体、abstract、hologo、appendix、biblatex 及依赖一并收录。
+测试夹具 `test/fixtures/elegantpaper-demo.tex` 保留实际报错文档的完整源码。
+这份文档没有有效引用键及配套 `.bib` 文件，能生成 PDF，但不会生成参考文献条目；
+需要完整 biblatex/biber 文献处理时，仍须使用提供 Biber 的编译环境。
+
+也可用同一测试管线编译本地文件，第二个参数可选，用于保存生成的 PDF：
+
+```sh
+npm run test:xelatex -- "path/to/document.tex" "path/to/output.pdf"
+```
