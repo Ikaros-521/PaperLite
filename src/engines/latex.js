@@ -1,5 +1,6 @@
 import katex from 'katex';
 import * as TIKZ from './tikz.js';
+import { t, getLang } from '../i18n.js';
 
 /* PaperLite · LaTeX → HTML 渲染器（论文常用子集）
  *
@@ -174,7 +175,7 @@ function renderMath(tex, display, ctx, macrosForKatex) {
     });
   } catch (e) {
     html = '<span class="math-error" title="' + esc(e.message || '') + '">' + esc(tex) + '</span>';
-    ctx.warn('公式渲染失败: ' + String(e.message || '').slice(0, 80));
+    ctx.warn(t('render.mathError', { msg: String(e.message || '').slice(0, 80) }));
   }
   return html;
 }
@@ -240,12 +241,12 @@ function renderLatex(srcRaw, opts) {
   // ---- 回填 ----
   html = html.replace(/@@R:([^@]*)@@/g, function (_, key) {
     if (ctx.labels[key] !== undefined) return esc(ctx.labels[key]);
-    ctx.warn('未定义的引用: ' + key);
+    ctx.warn(t('render.undefinedRef', { key }));
     return '<span class="bad-ref">?</span>';
   });
   html = html.replace(/@@C:([^@]*)@@/g, function (_, key) {
     if (ctx.cites[key] !== undefined) return String(ctx.cites[key]);
-    return '<span class="bad-ref" title="未在参考文献中找到">?</span>';
+    return '<span class="bad-ref" title="' + esc(t('render.missingCite')) + '">?</span>';
   });
   html = html.replace(/@@TOC@@/g, function () { return buildToc(ctx); });
   if (ctx.footnotes.length) html += '<section class="footnotes"><hr/><ol>' + ctx.footnotes.map(function (f) { return '<li id="fn' + f.n + '">' + f.html + '</li>'; }).join('') + '</ol></section>';
@@ -386,7 +387,7 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
       var cmdM = str.slice(i).match(/^\\([A-Za-z]+)\*?/);
       if (cmdM) {
         var r = handleCommand(cmdM[1], str, i, ctx, base, tokens, flushP);
-        if (r === null) { ctx.warn('不支持的命令 \\' + cmdM[1]); inlineBuf += esc(cmdM[0]); i += cmdM[0].length; continue; }
+        if (r === null) { ctx.warn(t('render.unsupportedCommand', { name: cmdM[1] })); inlineBuf += esc(cmdM[0]); i += cmdM[0].length; continue; }
         if (typeof r === 'number') { i = r; continue; }
         i = r.next; if (r.html !== undefined) { if (r.block) { flushP(); tokens.push({ block: true, html: r.html }); } else inlineBuf += r.html; }
         continue;
@@ -493,11 +494,11 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       return { next: g1.end + 1, block: true, html: '<' + tag + ' id="' + hid + '" class="' + cls + '">' + (num ? '<span class="secnum">' + num + '</span> ' : '') + inner + '</' + tag + '>' };
     }
     case 'maketitle': {
-      var t = '<header class="titleblock">' +
-        '<h1 class="doc-title">' + (ctx.meta.title ? renderFlow(ctx.meta.title, ctx, 0, false, true) : '无标题文档') + '</h1>' +
+      var titleHtml = '<header class="titleblock">' +
+        '<h1 class="doc-title">' + (ctx.meta.title ? renderFlow(ctx.meta.title, ctx, 0, false, true) : esc(t('render.untitled'))) + '</h1>' +
         (ctx.meta.author ? '<div class="doc-author">' + renderFlow(ctx.meta.author, ctx, 0, false, true) + '</div>' : '') +
         '<div class="doc-date">' + (ctx.meta.date ? renderFlow(ctx.meta.date, ctx, 0, false, true) : '') + '</div></header>';
-      return { next: afterName, block: true, html: t };
+      return { next: afterName, block: true, html: titleHtml };
     }
     case 'tableofcontents': return { next: afterName, block: true, html: '@@TOC@@' };
     case 'today': return { next: afterName, html: zhToday() };
@@ -526,10 +527,10 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'ref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '@@R:' + g1.text.trim() + '@@' };
     case 'autoref': case 'cref': case 'Cref': {
       g1 = G(afterName); if (!g1) return null;
-      var pre2 = name === 'Cref' ? '图 ' : '';
+      var pre2 = name === 'Cref' ? esc(t('render.figure')) + ' ' : '';
       return { next: g1.end + 1, html: pre2 + '@@R:' + g1.text.trim() + '@@' };
     }
-    case 'eqref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '式&nbsp;(@@R:' + g1.text.trim() + '@@)' };
+    case 'eqref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: esc(t('render.equation')) + '&nbsp;(@@R:' + g1.text.trim() + '@@)' };
     case 'cite': case 'citep': case 'citet': {
       o1 = readOpt(str, afterName);
       var pos = o1 ? o1.closeIdx + 1 : afterName;
@@ -596,6 +597,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
 function stripTags(s) { return String(s).replace(/<[^>]*>/g, ''); }
 function zhToday() {
   var d = new Date();
+  if (getLang() === 'en') return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   return d.getFullYear() + ' 年 ' + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日';
 }
 
@@ -606,7 +608,7 @@ function renderEnv(env, ctx, absInnerStart) {
     case 'document': return renderFlow(inner, ctx, base, true);
 
     case 'abstract':
-      return '<div class="abstract"><h4>' + (ctx.meta.ctex ? '摘要' : 'Abstract') + '</h4>' + renderFlow(inner, ctx, base, false) + '</div>';
+      return '<div class="abstract"><h4>' + esc(t('render.abstract')) + '</h4>' + renderFlow(inner, ctx, base, false) + '</div>';
 
     case 'center':
       return '<div class="center">' + renderFlow(inner, ctx, base, false) + '</div>';
@@ -680,9 +682,9 @@ function renderEnv(env, ctx, absInnerStart) {
       var capHtml = cap !== null ? renderFlow(cap, ctx, base, false, true) : '';
       // content 相对 inner 截去了前导 [..]，base 需同步平移，否则子环境（tikzpicture）的源码偏移会错位
       var contentHtml = renderFlow(content, ctx, base + (inner.length - content.length), false);
-      var capName = isFig ? '图' : '表';
+      var capName = esc(t(isFig ? 'render.figure' : 'render.table'));
       return '<figure class="float ' + (isFig ? 'fig' : 'tab') + '">' + contentHtml +
-        (cap !== null ? '<figcaption>' + capName + '&nbsp;' + n2 + '：' + capHtml + '</figcaption>' : '') + '</figure>';
+        (cap !== null ? '<figcaption>' + capName + '&nbsp;' + n2 + esc(t('render.captionSeparator')) + capHtml + '</figcaption>' : '') + '</figure>';
     }
 
     case 'tikzpicture': return renderTikzEnv(env, ctx, absInnerStart);
@@ -711,7 +713,7 @@ function renderEnv(env, ctx, absInnerStart) {
         if (kEnd < 0) continue;
         bibMatches.push({ key: inner.slice(m2.index + m2[0].length, kEnd), bodyStart: kEnd + 1, cmdStart: m2.index });
       }
-      var out2 = '<section class="bibliography"><h2 class="sec1">参考文献</h2><ol class="bib-list">';
+      var out2 = '<section class="bibliography"><h2 class="sec1">' + esc(t('render.references')) + '</h2><ol class="bib-list">';
       bibMatches.forEach(function (bm, ix) {
         var bodyEnd = ix + 1 < bibMatches.length ? bibMatches[ix + 1].cmdStart : inner.length;
         ctx.counters.bib++;
@@ -732,7 +734,7 @@ function renderEnv(env, ctx, absInnerStart) {
       return '<div class="equation">' + renderMath('\\begin{' + env.name + '}' + inner + '\\end{' + env.name + '}', true, ctx, katexMacrosOf(ctx)) + '</div>';
 
     default: {
-      ctx.warn('环境 ' + env.name + ' 按普通内容处理');
+      ctx.warn(t('render.environmentFallback', { name: env.name }));
       return '<div class="env-unknown" data-env="' + esc(env.name) + '">' + renderFlow(inner, ctx, base, false) + '</div>';
     }
   }
@@ -884,7 +886,7 @@ function parseColspec(spec) {
 
 // ---------------- TikZ 环境接线 ----------------
 function renderTikzEnv(env, ctx, absInnerStart) {
-  if (!TIKZ) return '<div class="render-error">TikZ 引擎未加载</div>';
+  if (!TIKZ) return '<div class="render-error">' + esc(t('render.tikzMissing')) + '</div>';
   // tikzpicture 的 [opts] 紧跟 \begin{tikzpicture} 之后 —— 我们的 findEnv 已把 opts 含进 inner
   var inner = env.inner;
   var optStr = '';
@@ -899,20 +901,20 @@ function renderTikzEnv(env, ctx, absInnerStart) {
     var did = ctx.diagrams.length;
     var w = '<div class="diagram tikz-block" data-did="' + did + '">';
     if (res.svg) w += res.svg;
-    else w += '<div class="render-error">流程图渲染失败：' + esc((res.warnings || []).join('；')) + '</div>';
+    else w += '<div class="render-error">' + esc(t('render.diagramError', { msg: (res.warnings || []).join('; ') })) + '</div>';
     w += '</div>';
     ctx.diagrams.push({ id: did, svg: res.svg, nodes: res.nodes, tikzsetRanges: ctx.tikzsetRanges, warnings: res.warnings || [] });
     return w;
   } catch (e) {
-    ctx.warn('TikZ 渲染异常: ' + (e.message || e));
-    return '<div class="render-error">TikZ 渲染异常: ' + esc(String(e.message || e)) + '</div>';
+    ctx.warn(t('render.tikzError', { msg: e.message || e }));
+    return '<div class="render-error">' + esc(t('render.tikzError', { msg: String(e.message || e) })) + '</div>';
   }
 }
 
 // ---------------- TOC ----------------
 function buildToc(ctx) {
   if (!ctx.headings.length) return '';
-  var out = '<nav class="toc"><h4>目录</h4><ul>';
+  var out = '<nav class="toc"><h4>' + esc(t('render.contents')) + '</h4><ul>';
   ctx.headings.forEach(function (h) {
     out += '<li class="toc-l' + h.level + '"><a href="#' + h.id + '">' + (h.num ? h.num + '&nbsp;&nbsp;' : '') + esc(h.text) + '</a></li>';
   });

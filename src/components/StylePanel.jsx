@@ -353,7 +353,7 @@ function RecordForm({ record, cm }) {
       <label className="sp-row">
         <span className="sp-lb">{t('style.shape')}</span>
         <select name="shape" defaultValue={p.shape || 'rectangle'}>
-          {SHAPES.map(s => <option key={s} value={s}>{SHAPE_NAMES[s]}</option>)}
+          {SHAPES.map(s => <option key={s} value={s}>{t(SHAPE_NAMES[s])}</option>)}
         </select>
       </label>
       <label className="sp-row">
@@ -370,24 +370,24 @@ function RecordForm({ record, cm }) {
       )}
       {record.kind === 'node' && (
         <>
-          <div className="sp-geo-h">布局</div>
+          <div className="sp-geo-h">{t('style.layout')}</div>
           <div className="sp-geo-grid">
             <label className="sp-row">
-              <span className="sp-lb">位置 X</span>
+              <span className="sp-lb">{t('style.positionX')}</span>
               <input type="number" name="posX" step="0.1" defaultValue={p.posX} />
               <span className="sp-unit">cm</span>
             </label>
             <label className="sp-row">
-              <span className="sp-lb">位置 Y</span>
+              <span className="sp-lb">{t('style.positionY')}</span>
               <input type="number" name="posY" step="0.1" defaultValue={p.posY} />
               <span className="sp-unit">cm</span>
             </label>
           </div>
-          <SliderRow label="宽度" numName="wcm" min={0} max={8} step={0.1} init={p.wcm} unit="cm" />
-          <SliderRow label="高度" numName="hcm" min={0} max={8} step={0.1} init={p.hcm} unit="cm" />
+          <SliderRow label={t('style.width')} numName="wcm" min={0} max={8} step={0.1} init={p.wcm} unit="cm" />
+          <SliderRow label={t('style.height')} numName="hcm" min={0} max={8} step={0.1} init={p.hcm} unit="cm" />
           <div className="sp-hint">
-            {p.placed ? '该节点原本相对定位，应用位置后会改写为绝对坐标。' : ''}
-            宽高为最小尺寸（文字更宽时以文字为准），拉到最左(0)恢复自动。
+            {p.placed ? t('style.absoluteHint') : ''}
+            {t('style.sizeHint')}
           </div>
         </>
       )}
@@ -470,61 +470,58 @@ function MermaidForm({ record, cm }) {
   const isNode = record.kind === 'mermaidNode';
   return (
     <div className="sp-form" ref={formElRef}>
-      <div className="sp-form-h">{isNode ? 'Mermaid 节点 ' + record.id : 'Mermaid 全局样式'}</div>
+      <div className="sp-form-h">{isNode ? t('style.mmNode', { name: record.id }) : t('style.mmTheme')}</div>
       {isNode ? (
         <>
-          {colorRow('填充色', 'fillOn', 'fill', !!p.fill, p.fill || '#ffffff')}
-          {colorRow('边框色', 'strokeOn', 'stroke', !!p.stroke, p.stroke || '#333333')}
-          {colorRow('文字色', 'colorOn', 'color', !!p.color, p.color || '#333333')}
-          <div className="sp-geo-h">布局</div>
+          {colorRow(t('style.fill'), 'fillOn', 'fill', !!p.fill, p.fill || '#ffffff')}
+          {colorRow(t('style.border'), 'strokeOn', 'stroke', !!p.stroke, p.stroke || '#333333')}
+          {colorRow(t('style.text'), 'colorOn', 'color', !!p.color, p.color || '#333333')}
+          <div className="sp-geo-h">{t('style.layout')}</div>
           <div className="sp-geo-grid">
             <label className="sp-row">
-              <span className="sp-lb">位置 X</span>
-              <input type="number" name="gx" step="1" defaultValue={p.gx != null ? p.gx : ''} placeholder="自动" />
+              <span className="sp-lb">{t('style.positionX')}</span>
+              <input type="number" name="gx" step="1" defaultValue={p.gx != null ? p.gx : ''} placeholder={t('style.auto')} />
               <span className="sp-unit">px</span>
             </label>
             <label className="sp-row">
-              <span className="sp-lb">位置 Y</span>
-              <input type="number" name="gy" step="1" defaultValue={p.gy != null ? p.gy : ''} placeholder="自动" />
+              <span className="sp-lb">{t('style.positionY')}</span>
+              <input type="number" name="gy" step="1" defaultValue={p.gy != null ? p.gy : ''} placeholder={t('style.auto')} />
               <span className="sp-unit">px</span>
             </label>
           </div>
-          <SliderRow label="缩放" numName="gs" min={0.5} max={2} step={0.1} init={p.gs != null ? p.gs : 1} unit="×" />
-          <SliderRow label="宽度" numName="gw" min={20} max={400} step={4} init={p.gw} unit="px" />
-          <SliderRow label="高度" numName="gh" min={16} max={300} step={4} init={p.gh} unit="px" />
-          <div className="sp-hint">取消勾选颜色项即回到主题默认；位置/大小清空恢复自动布局。覆盖值写为源码注释行（%% pl … %%），导出不受影响。</div>
+          <SliderRow label={t('style.scale')} numName="gs" min={0.5} max={2} step={0.1} init={p.gs != null ? p.gs : 1} unit="×" />
+          <SliderRow label={t('style.width')} numName="gw" min={20} max={400} step={4} init={p.gw} unit="px" />
+          <SliderRow label={t('style.height')} numName="gh" min={16} max={300} step={4} init={p.gh} unit="px" />
+          <div className="sp-hint">{t('style.mmNodeHint')}</div>
         </>
       ) : (
         <>
           <label className="sp-row">
-            <span className="sp-lb">方向</span>
+            <span className="sp-lb">{t('style.direction')}</span>
             <select name="dir" defaultValue={p.dir || 'TB'}>
-              <option value="TB">竖排 ↓（TB）</option>
-              <option value="LR">横排 →（LR）</option>
-              <option value="RL">横排 ←（RL）</option>
-              <option value="BT">竖排 ↑（BT）</option>
+              {['TB', 'LR', 'RL', 'BT'].map(dir => <option key={dir} value={dir}>{t('style.dir.' + dir)}</option>)}
             </select>
           </label>
           <label className="sp-row">
-            <span className="sp-lb">节点间距</span>
+            <span className="sp-lb">{t('style.nodeSpacing')}</span>
             <input type="number" name="nodeSpacing" min="4" step="2" style={{ width: 70 }} defaultValue={p.nodeSpacing} />
             <span className="sp-unit">px</span>
           </label>
           <label className="sp-row">
-            <span className="sp-lb">层级间距</span>
+            <span className="sp-lb">{t('style.rankSpacing')}</span>
             <input type="number" name="rankSpacing" min="4" step="2" style={{ width: 70 }} defaultValue={p.rankSpacing} />
             <span className="sp-unit">px</span>
           </label>
-          <div className="sp-geo-h">主题色</div>
-          {colorRow('节点填充', 'pOn', 'primary', true, p.primary || '#ececff')}
-          {colorRow('节点边框', 'bOn', 'border', true, p.border || '#9370db')}
-          {colorRow('文字', 'tOn', 'text', true, p.text || '#333333')}
-          {colorRow('连线', 'lOn', 'line', true, p.line || '#333333')}
-          <div className="sp-hint">写回为代码块头部的 {'%%{init: …}%%'} 配置；点击图中空白处进入这里。</div>
+          <div className="sp-geo-h">{t('style.themeColors')}</div>
+          {colorRow(t('style.nodeFill'), 'pOn', 'primary', true, p.primary || '#ececff')}
+          {colorRow(t('style.nodeBorder'), 'bOn', 'border', true, p.border || '#9370db')}
+          {colorRow(t('style.text'), 'tOn', 'text', true, p.text || '#333333')}
+          {colorRow(t('style.line'), 'lOn', 'line', true, p.line || '#333333')}
+          <div className="sp-hint">{t('style.mmThemeHint')}</div>
         </>
       )}
       <div className="sp-apply-row">
-        <button className="sp-apply" onClick={apply}>✓ {t('style.apply')}</button>
+        <button className="sp-apply" onClick={apply}>{t('style.apply')}</button>
         <button className="sp-undo" title={t('style.undoTip')} onClick={() => { cm.undo(); cm.focus(); }}>↶ {t('style.undo')}</button>
       </div>
     </div>

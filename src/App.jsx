@@ -748,7 +748,7 @@ export default function App() {
     lastRenderMs = performance.now() - t0;
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deferred, isTexLike]);
+  }, [deferred, isTexLike, lang]);
 
   const mdResult = useMemo(() => {
     if (!isMd) return null;

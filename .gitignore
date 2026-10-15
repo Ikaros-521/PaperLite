@@ -4,3 +4,5 @@ dist/
 *.log
 .DS_Store
 .zcode/design-review/
+*.bin
+spark-output/

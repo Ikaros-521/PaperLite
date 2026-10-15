@@ -7,7 +7,7 @@ import { collectIssues, currentCompileErrors } from '../src/diagnostics.js';
 import * as TIKZ from '../src/engines/tikz.js';
 import { samples } from '../src/engines/samples.js';
 import * as C from '../src/context.js';
-import { DICT } from '../src/i18n.js';
+import { DICT, setLang } from '../src/i18n.js';
 import { THEME_IDS, DEFAULT_THEME, detectTheme } from '../src/theme.js';
 
 const PICK_TO_TOKEN = { '--t-desk': '--desk', '--t-paper': '--paper', '--t-accent': '--accent', '--t-seal': '--seal' };
@@ -234,6 +234,34 @@ ok(C.splitForCompact(new Array(9).fill({ role: 'assistant', kind: 'summary', con
 ok(C.summaryBudget({ chatModel: 'claude-sonnet-4-5' }) <= 2000 && C.summaryBudget({ chatModel: 'glm-4.5-flash' }) >= 600, '摘要预算夹在 600~2000，避免摘要请求打满窗口');
 ok(C.rawUsage({ system: 'sys', history: hist }).total > built.usage.history, 'rawUsage 不裁剪，可显示超出预算');
 ok(C.historyToText([{ role: 'user', content: 'u' }, { role: 'assistant', kind: 'summary', content: 's' }], { user: 'U', assistant: 'A', summary: 'S' }).split('\n')[1].startsWith('S:'), '摘要历史再次压缩时保留标记');
+
+console.log('== 预览国际化 ==');
+const bilingualSource = String.raw`\documentclass{ctexart}
+\begin{document}
+\maketitle\today
+\begin{abstract}Author content stays unchanged.\end{abstract}
+\tableofcontents\section{Author heading}
+\begin{figure}Image\caption{Author caption}\label{fig:a}\end{figure}
+\begin{table}Data\caption{Author table}\end{table}
+\Cref{fig:a}\eqref{eq:a}\cite{missing}
+\begin{thebibliography}{9}\bibitem{a}Author reference\end{thebibliography}
+\end{document}`;
+setLang('en');
+const englishPreview = renderLatex(bilingualSource);
+for (const text of ['Abstract', 'Contents', 'References', 'Figure&nbsp;1: ', 'Table&nbsp;1: ', 'Untitled document', 'Not found in references', 'Eq.&nbsp;', 'Figure 1']) {
+  ok(englishPreview.html.includes(text), '英文预览包含 ' + text);
+}
+ok(!/[\u4e00-\u9fff]/.test(englishPreview.html), 'ctex 文档的英文预览无内置中文文案');
+ok(englishPreview.warnings.some(w => w.includes('Undefined reference')), '英文引用诊断');
+setLang('zh');
+const chinesePreview = renderLatex(bilingualSource);
+for (const text of ['摘要', '目录', '参考文献', '图&nbsp;1：', '表&nbsp;1：', '无标题文档']) {
+  ok(chinesePreview.html.includes(text), '切回中文预览包含 ' + text);
+}
+ok(chinesePreview.html.includes('Author content stays unchanged.'), '切语言保留作者正文');
+for (const key of Object.keys(DICT.zh).filter(k => k.startsWith('style.') || k.startsWith('render.'))) {
+  ok(typeof DICT.en[key] === 'string' && !/[\u4e00-\u9fff]/.test(DICT.en[key]), '英文翻译完整: ' + key);
+}
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);
