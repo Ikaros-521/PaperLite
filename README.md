@@ -127,6 +127,17 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 | **中英双语** | 菜单栏右侧「中 / EN」一键切换全部界面文案（菜单/面板/对话框/诊断提示），随浏览器语言自动选择，localStorage 记忆；文档内容语言不受影响 |
 | **其他** | 三线表（booktabs + multicolumn）、参考文献自动编号、`\newcommand` 宏展开、ctexart 中文排版、双栏预览、同步滚动、字数统计、警告面板 |
 
+## 移动端（`#/m`）
+
+窄屏界面走独立入口：桌面顶栏「手机版」↔ 移动端设置「切换到桌面版」（切换会 `reload()`，好让脏标签的离开确认照常触发），也可以直接访问 `…/#/m`。
+
+- **不是第二套实现**：文稿、编辑器、近似排版、版本历史、编译、PDF、AI 渠道全部复用桌面同一份代码（`src/workspace/useWorkspace.js` / `useCompile.js` / `chatContext.js` 与 `src/components/` 下的组件），移动端只负责窄屏编排与触控交互
+- **三个 Tab**：文稿（列表 / 新建草稿 / 导入）、AI（对话面板嵌入窄屏模式）、设置（皮肤、界面语言、正文字号、引擎与渠道）；工作区、编译、历史是全屏页
+- **草稿按浏览器隔离**：手机上写的草稿只在该浏览器里（localStorage），不与电脑同步，清站点数据或 iOS 长期未访问会被系统回收——列表页与恢复横幅都会说明这点
+- **不自动预热**：桌面空闲时会预拉约 98 MB TeX 资源，移动端刻意不预拉（可能在蜂窝网络下），只在用户真点「开始编译」时下载，弱网先弹流量确认
+- **手机浏览器没有 File System Access API**，因此「打开本地文件夹」在移动端不可用，改用顶栏「导入」上传文件
+- 中英双语与六套皮肤在两端一致；正文字号三档（13 / 15 / 17.5px）持久化在本地，纸面预览与编辑区同步
+
 ## 架构
 
 ```
@@ -175,7 +186,7 @@ npm run electron:build
 
 项目内置 GitHub Actions 工作流（[`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)），**推送到 `main` 分支即自动构建并发布到 GitHub Pages**（也可在 Actions 页面手动触发 Run workflow）。
 
-流水线步骤：安装依赖 → 冒烟测试（48 项）→ `vite build` → 部署 `dist/` 到 Pages。
+流水线步骤：安装依赖 → `npm test`（8 个测试文件、800+ 断言）→ `npm run test:xelatex`（真实引擎编译回归）→ `vite build` → 部署 `dist/` 到 Pages。
 
 首次启用只需在仓库设置一次：
 
@@ -183,7 +194,13 @@ npm run electron:build
 
 之后每次 push 到 `main`，约 2 分钟后即可在 `https://<用户名>.github.io/<仓库名>/` 访问线上版本。构建产物为相对路径（`base: './'`），子路径部署无需任何改动。
 
-> 注意：GitHub Pages 是纯静态托管，TeX 真实编译与 LLM Mock API（`node server.mjs`）仅在本地可用；线上版本使用浏览器打印导出 PDF、AI 需自配可直连的 API 渠道。
+### 线上（Pages）与本机服务分别用哪个引擎
+
+Pages 是纯静态托管，`fetch('/api/health')` 会 404，应用据此把引擎列表收为 `['builtin']` —— 也就是**真实 TeX 编译在线上照常可用**，走的是浏览器内 WebAssembly 的 XeTeX → XDV → dvipdfmx，宏包/字体来自随站点一起部署的 `public/xelatex/`（不是外部 CDN，`force-cache` + 引擎自带缓存，只有首次要拉约 98 MB）。手机直接打开 Pages 地址也能出真 PDF，代价同样只是首次那一下下载（移动端会先弹流量确认）。
+
+`node server.mjs` 不是「能不能编译」的前提，它的价值是把编译交给**本机完整 TeX 发行版**：任意宏包、`bibtex`、复杂 TikZ 与精确双栏，且没有 98 MB 预热。要手机用本机引擎，需要 `server.mjs` 监听局域网地址（当前写死 `127.0.0.1`）并与手机处于同一网络，属于可选优化。
+
+线上唯一确实需要自备的是 AI 渠道：LLM Mock 接口只在 `server.mjs` 上，Pages 版要在 AI 设置里填一个浏览器可直连（允许 CORS）的 API 渠道。
 
 ## 支持的 LaTeX 子集
 

@@ -264,8 +264,11 @@ for (const text of ['摘要', '目录', '参考文献', '图&nbsp;1：', '表&nb
   ok(chinesePreview.html.includes(text), '切回中文预览包含 ' + text);
 }
 ok(chinesePreview.html.includes('Author content stays unchanged.'), '切语言保留作者正文');
-for (const key of Object.keys(DICT.zh).filter(k => k.startsWith('style.') || k.startsWith('render.'))) {
-  ok(typeof DICT.en[key] === 'string' && !/[\u4e00-\u9fff]/.test(DICT.en[key]), '英文翻译完整: ' + key);
+// 英文完整性：这些命名空间是界面文案，缺 en 或夹了汉字都会在英文界面上露出中文
+// （mb.* 是移动端各 flow 的文案，见 src/flows/mobile/i18n/）
+for (const key of Object.keys(DICT.zh).filter(k => k.startsWith('style.') || k.startsWith('render.') || k.startsWith('mb.'))) {
+  ok(typeof DICT.en[key] === 'string' && DICT.en[key].length > 0, '英文文案存在: ' + key);
+  ok(!/[\u4e00-\u9fff]/.test(DICT.en[key]), '英文翻译完整: ' + key);
 }
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
