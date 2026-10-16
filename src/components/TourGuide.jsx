@@ -14,6 +14,7 @@ function rectOf(step) {
   const el = document.querySelector(step.target);
   if (!el) return null;
   const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
   // 裁到视口内：纸面这类几千像素高的锚点若不裁剪，压暗与卡片定位会一起失效
   const top = Math.max(0, r.top - PAD), left = Math.max(0, r.left - PAD);
   const bottom = Math.min(window.innerHeight, r.bottom + PAD), right = Math.min(window.innerWidth, r.right + PAD);
@@ -55,8 +56,14 @@ export default function TourGuide({ steps, onClose }) {
   const [spot, setSpot] = useState(null);
   const [pos, setPos] = useState(null);
   const cardRef = useRef(null);
-  const step = steps[i];
-  const last = i === steps.length - 1;
+  const index = Math.min(i, steps.length - 1);
+  const step = steps[index];
+  const last = index === steps.length - 1;
+  useEffect(() => {
+    const previous = document.activeElement;
+    cardRef.current?.querySelector('.tour-f .primary')?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
 
   const update = useCallback(() => {
     const s = rectOf(step);
@@ -83,8 +90,14 @@ export default function TourGuide({ steps, onClose }) {
     window.addEventListener('scroll', on, true);
     const key = (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); if (!last) setI(i + 1); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); if (i > 0) setI(i - 1); }
+      else if (e.key === 'Tab') {
+        const buttons = [...cardRef.current.querySelectorAll('button:not(:disabled)')];
+        const at = buttons.indexOf(document.activeElement);
+        e.preventDefault();
+        buttons[(at + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length]?.focus();
+      }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); if (!last) setI(index + 1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); if (index > 0) setI(index - 1); }
     };
     document.addEventListener('keydown', key, true);
     return () => {
@@ -92,7 +105,7 @@ export default function TourGuide({ steps, onClose }) {
       window.removeEventListener('scroll', on, true);
       document.removeEventListener('keydown', key, true);
     };
-  }, [i, last, onClose, update]);
+  }, [index, last, onClose, update]);
 
   return (
     <div className={'tour-root' + (spot ? '' : ' plain')} role="dialog" aria-modal="true" aria-label={t('tour.aria')}>
@@ -104,10 +117,10 @@ export default function TourGuide({ steps, onClose }) {
       >
         <div className="tour-h">
           <span className="tour-ch">{t(step.chapter)}</span>
-          <span className="tour-n">{t('tour.stepOf', { n: i + 1, total: steps.length })}</span>
+          <span className="tour-n">{t('tour.stepOf', { n: index + 1, total: steps.length })}</span>
           <button className="btn sm tour-x" aria-label={t('tour.close')} onClick={onClose}>✕</button>
         </div>
-        <div className="tour-prog"><i style={{ width: ((i + 1) / steps.length * 100) + '%' }}></i></div>
+        <div className="tour-prog"><i style={{ width: ((index + 1) / steps.length * 100) + '%' }}></i></div>
         <div className="tour-b">
           <div className="tour-t">{t('tour.' + step.key + '.title')}</div>
           <p className="tour-p">{t('tour.' + step.key + '.body')}</p>
@@ -115,8 +128,8 @@ export default function TourGuide({ steps, onClose }) {
         <div className="tour-f">
           <button className="btn sm tour-skip" onClick={onClose}>{t('tour.skip')}</button>
           <span className="tour-sp"></span>
-          {i > 0 && <button className="btn sm" onClick={() => setI(i - 1)}>{t('tour.prev')}</button>}
-          <button className="btn sm primary" autoFocus onClick={() => (last ? onClose() : setI(i + 1))}>
+          {index > 0 && <button className="btn sm" onClick={() => setI(index - 1)}>{t('tour.prev')}</button>}
+          <button className="btn sm primary" autoFocus onClick={() => (last ? onClose() : setI(index + 1))}>
             {last ? t('tour.finish') : t('tour.next')}
           </button>
         </div>

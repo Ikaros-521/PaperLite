@@ -20,7 +20,7 @@ import ChatPanel from './components/ChatPanel.jsx';
 import SettingsDialog from './components/SettingsDialog.jsx';
 import TourWelcome from './components/TourWelcome.jsx';
 import TourGuide from './components/TourGuide.jsx';
-import { TOUR_STEPS, shouldWelcome, dismissWelcome, markTourDone } from './tour.js';
+import { tourStepsFor, shouldWelcome, dismissWelcome, markTourDone } from './tour.js';
 import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
@@ -34,6 +34,7 @@ import * as llm from './llm.js';
 import * as ctxBudget from './context.js';
 import { LS_LANG, detectLang, getLang, setLang as setModuleLang, tr } from './i18n.js';
 import { detectTheme, applyTheme } from './theme.js';
+import { saveState } from './saveState.js';
 import { LangContext } from './useI18n.js';
 
 const LS_KEY = 'paperlite.doc.v2';
@@ -212,6 +213,7 @@ export default function App() {
   useEffect(() => { if (shouldWelcome()) setTourStage('welcome'); }, []);
 
   const openHelp = useCallback((key) => {
+    if (key === 'welcome') { setHelpOpen(null); setTourStage('welcome'); return; }
     if (key === 'tour') { setHelpOpen(null); setTourStage('tour'); return; }
     setHelpOpen(key);
   }, []);
@@ -358,6 +360,7 @@ export default function App() {
 
   // 草稿自动保存：整组草稿标签各存一份。写失败必须让人看见——静默 catch 等于静默丢稿
   const draftsWarnedRef = useRef(false);
+  const draftMembership = tabs.filter(tab => tab.kind === 'draft').map(tab => tab.id).join(',');
   useEffect(() => {
     const t = setTimeout(() => {
       const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue() }));
@@ -369,19 +372,20 @@ export default function App() {
           const next = ts.map(x => {
             if (x.kind !== 'draft' || !x.doc) return x;
             const v = x.doc.getValue();
-            if (x.saved === v) return x;
+            if (x.saved === v && x.browserStored && !x.saveError) return x;
             // 只推进 saved，不动 dirty：● 仍表示「没落到磁盘文件」，关标签照旧要确认
             changed = true;
-            return { ...x, saved: v };
+            return { ...x, saved: v, browserStored: true, saveError: '' };
           });
           return changed ? next : ts;
         });
       } catch (e) {
+        setTabs(ts => ts.map(x => x.kind === 'draft' ? { ...x, saveError: tr(getLang(), 'app.draftSaveFailed') } : x));
         if (!draftsWarnedRef.current) { draftsWarnedRef.current = true; flash(tr(getLang(), 'app.draftSaveFailed')); }
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [activeValue, tabs.length, flash]);
+  }, [activeValue, tabs.length, draftMembership, flash]);
 
   // 草稿写入失败或尚在防抖等待期间，也必须防止刷新丢稿。
   useEffect(() => {
@@ -536,27 +540,30 @@ export default function App() {
       } catch (e) { /* 不存在，直接创建 */ }
       try {
         const h = await fs.createFile(rootDir, tab.name);
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
         await fs.writeFileText(h, value);
         const nextKey = JSON.stringify([rootDir.name, tab.name]);
         const copied = copyHistory(tab.historyKey, nextKey);
         if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: x.doc.getValue() !== value } : x));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, kind: x.kind === 'draft' ? infoFor(tab.name).kind : x.kind, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
         setTreeKey(k => k + 1);
         flash(t('app.savedToFolder', { name: tab.name }));
         return true;
-      } catch (e) { alert(t('app.saveFailed', { msg: e.message || e })); return false; }
+      } catch (e) { setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: false, saveError: String(e.message || e) } : x)); alert(t('app.saveFailed', { msg: e.message || e })); return false; }
     }
     if (typeof window.showSaveFilePicker === 'function') {
       try {
         const h = await window.showSaveFilePicker({ suggestedName: tab.name });
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
         await fs.writeFileText(h, value);
         const nextKey = JSON.stringify(['', h.name]);
         const copied = copyHistory(tab.historyKey, nextKey);
         if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, name: h.name, handle: h, path: h.name, saved: value, dirty: x.doc.getValue() !== value } : x));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, kind: x.kind === 'draft' ? infoFor(h.name).kind : x.kind, name: h.name, handle: h, path: h.name, saved: value, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
         flash(t('app.saved', { name: h.name }));
         return true;
       } catch (e) {
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: false, ...(e?.name !== 'AbortError' ? { saveError: String(e.message || e) } : {}) } : x));
         if (e && e.name !== 'AbortError') alert(t('app.saveFailed', { msg: e.message || e }));
         return false;
       }
@@ -569,7 +576,7 @@ export default function App() {
   // ---- 保存 ----
   const saveActive = useCallback(async () => {
     const t = tabsRef.current.filter(x => x.id === activeId)[0];
-    if (!t?.doc) return;
+    if (!t?.doc || t.saving) return;
     const recorded = recordVersion(t.historyKey, t.doc.getValue(), { reason: 'save' });
     setHistoryError(recorded.ok ? '' : tr(getLang(), 'hist.storageError'));
     setHistoryTick(n => n + 1);
@@ -577,18 +584,20 @@ export default function App() {
       try {
         const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue() }));
         localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
-      } catch (e) { flash(tr(getLang(), 'app.draftSaveFailed')); return; }
-      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
+      } catch (e) { setTabs(ts => ts.map(x => x.kind === 'draft' ? { ...x, saveError: tr(getLang(), 'app.draftSaveFailed') } : x)); flash(tr(getLang(), 'app.draftSaveFailed')); return; }
+      setTabs(ts => ts.map(x => x.kind === 'draft' && x.doc ? { ...x, saved: x.doc.getValue(), browserStored: true, saveError: '', dirty: x.id === t.id ? false : x.dirty } : x));
       flash(tr(getLang(), 'app.draftSaved'));
       return;
     }
     if (!t.handle) { await saveTabAs(t); return; }
     try {
       const value = t.doc.getValue();
+      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saving: true } : x));
       await fs.writeFileText(t.handle, value);
-      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: value, dirty: x.doc.getValue() !== value } : x));
+      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: value, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
       flash(tr(getLang(), 'app.saved', { name: t.name }));
     } catch (e) {
+      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saving: false, saveError: String(e.message || e) } : x));
       // 权限失效是最高频的一种（句柄跨会话/文件夹被移动）：给出口，别抛浏览器英文原文
       if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) alert(tr(getLang(), 'app.savePermission', { name: t.name }));
       else alert(tr(getLang(), 'app.saveFailed', { msg: e.message || e }));
@@ -854,7 +863,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key === 's') { e.preventDefault(); saveActive(); }
+      if (mod && e.key === 's') { e.preventDefault(); if (!e.target.closest?.('.CodeMirror')) saveActive(); }
       if (mod && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
       // 编译与导出走键盘：写作时不该为了出稿去菜单里找
       if (mod && e.key === 'Enter') { e.preventDefault(); doCompile(); }
@@ -1041,6 +1050,8 @@ export default function App() {
   const issueCount = visibleIssues.length;
   const hasEditor = !!activeTab?.doc;
   const channelCount = channels.length;
+  const currentSaveState = saveState(activeTab);
+  const tourSteps = useMemo(() => tourStepsFor({ compact, viewMode, hasEditor, richPreview: !!previewResult && previewMode === 'rich', texDocument: isTexLike }), [compact, viewMode, hasEditor, previewResult, previewMode, isTexLike]);
 
   return (
     <LangContext.Provider value={lang}>
@@ -1305,6 +1316,12 @@ export default function App() {
 
       <footer id="statusbar">
         <span className="st-path">{activeTab ? (activeTab.kind === 'draft' ? t('app.draftPath') : (activeTab.path || activeTab.name)) : ''}</span>
+        {currentSaveState && <div className={'save-status ' + currentSaveState}>
+          <span role="status" title={activeTab.saveError || t('save.' + currentSaveState + '.tip')}>{t('save.' + currentSaveState)}</span>
+          {currentSaveState !== 'diskSaved' && <button className="btn sm" disabled={activeTab.saving} onClick={() => currentSaveState === 'failed' ? saveActive() : activeTab.kind === 'draft' ? saveTabAs(activeTab) : saveActive()}>
+            {t(currentSaveState === 'failed' ? 'save.retry' : activeTab.kind === 'draft' || !activeTab.handle ? 'save.toFile' : 'm.save')}
+          </button>}
+        </div>}
         {isPristineDemo && <span className="st-chip" title={t('st.sampleTip')}>{t('st.sample')}</span>}
         <span className="sep">·</span>
         <span className="st-detail">{wordText}</span>
@@ -1319,7 +1336,7 @@ export default function App() {
         <span className={'st-engine' + (engine === 'builtin' && builtinStatus === 'error' ? ' bad' : '')} title={t('st.engineTip')}>
           {t('st.engine')} {engineStatusText}
         </span>
-        {flashMsg && <span className="st-flash">{flashMsg}</span>}
+        {flashMsg && <span className={'st-flash' + (currentSaveState === 'failed' ? ' bad' : '')}>{flashMsg}</span>}
         <span className="hint">{t('st.hint')}</span>
       </footer>
 
@@ -1457,14 +1474,24 @@ export default function App() {
 
       {tourStage === 'welcome' && (
         <TourWelcome
-          stepCount={TOUR_STEPS.length}
-          onStart={() => setTourStage('tour')}
+          folderSupported={fs.supported()}
+          onStart={() => { dismissWelcome(true); setTourStage('tour'); }}
+          onNewDraft={() => {
+            let n = 1;
+            let name = t('app.newFileDefault', { n: '' });
+            while (tabsRef.current.some(tab => tab.name === name)) name = t('app.newFileDefault', { n: ++n });
+            const text = samples.blank;
+            const tab = makeTab({ name, kind: 'draft', text, modeSpec: 'stex', saved: text });
+            setTabs(ts => ts.concat(tab)); setActiveId(tab.id); setActiveValue(text);
+            dismissWelcome(true); setTourStage(null); setViewMode(compact ? 'edit' : 'split');
+          }}
+          onOpenFolder={() => { dismissWelcome(true); setTourStage(null); openFolder(); }}
           onClose={noAuto => { dismissWelcome(noAuto); setTourStage(null); }}
         />
       )}
 
       {tourStage === 'tour' && (
-        <TourGuide steps={TOUR_STEPS} onClose={() => { markTourDone(); setTourStage(null); }} />
+        <TourGuide steps={tourSteps} onClose={() => { markTourDone(); setTourStage(null); }} />
       )}
     </LangContext.Provider>
   );

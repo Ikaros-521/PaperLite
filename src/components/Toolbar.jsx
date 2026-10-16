@@ -215,6 +215,7 @@ export default function Toolbar({
           </Mb>
 
           <Mb title={t('menu.help')} open={open} setOpen={setOpen} width={214} tour="menu-help">
+            <Mi label={t('welcome.reopen')} close={close} onClick={() => onHelp('welcome')} />
             <Mi label={t('m.tour')} close={close} onClick={() => onHelp('tour')} />
             <Mi label={t('m.keys')} close={close} onClick={() => onHelp('keys')} />
             <Mi label={t('m.feedback')} close={close} onClick={() => onHelp('feedback')} />

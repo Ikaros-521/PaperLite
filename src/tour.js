@@ -1,7 +1,6 @@
-/* 使用教程：步骤表 + 首次访问标记
- * 步骤只声明「锚点选择器 + 摆放方向 + 文案键」，文案全在 i18n 的 tour.* 里；
- * 锚点在当前视图下不存在时（如仅预览模式没有编辑区），TourGuide 会降级成居中卡片，
- * 所以这里不需要为视图模式写分支逻辑。 */
+/* 使用教程：步骤表 + 首次访问标记。
+ * tourStepsFor 根据当前视图筛选步骤，并将窄窗口锚点映射到可见入口。
+ * 文案位于 i18n 的 tour.*；无法定位的锚点仍可退化为居中卡片。 */
 
 export const LS_TOUR = 'paperlite.tour.v1';
 export const TOUR_VERSION = 1;
@@ -24,6 +23,19 @@ export const TOUR_STEPS = [
   { key: 'end', target: null, place: 'center', chapter: 'tour.ch.help' }
 ];
 
+// Keep the tutorial anchored to controls that exist in the current workspace.
+export function tourStepsFor({ compact, viewMode, hasEditor, richPreview, texDocument }) {
+  const mobileTargets = { menus: '#compactMenuToggle', sidebar: '#sidebarToggle', insert: '#tFormat', tex: '.mb-right', ai: '#tAi', help: '#compactMenuToggle' };
+  return TOUR_STEPS.filter(step => {
+    if (['editor', 'tabs'].includes(step.key)) return hasEditor && viewMode !== 'preview';
+    if (['quicktools', 'insert'].includes(step.key)) return hasEditor && (richPreview || texDocument);
+    if (['paper', 'previewbar'].includes(step.key)) return richPreview && viewMode !== 'edit';
+    if (step.key === 'sidebar') return compact || viewMode !== 'preview';
+    if (step.key === 'tex') return texDocument;
+    return true;
+  }).map(step => compact && mobileTargets[step.key] ? { ...step, target: step.key === 'ai' && !richPreview && !texDocument ? '#compactMenuToggle' : mobileTargets[step.key] } : step);
+}
+
 function read() {
   try {
     const raw = JSON.parse(localStorage.getItem(LS_TOUR) || '{}');
@@ -37,13 +49,13 @@ function write(patch) {
   return next;
 }
 
-// 欢迎页只在「没勾过不再弹出、且从没走完/跳过过导览」时自动出现
+// 沿用旧版 noAuto/done 偏好；起稿、继续和关闭欢迎页均视为明确选择。
 export function shouldWelcome() {
   const s = read();
   return !s.noAuto && !s.done;
 }
 
-// 直接关掉欢迎页不算表态：只有勾了「不再自动弹出」才压下去
+// 调用方传 true 记住已处理欢迎页；保留 false 以兼容旧版调用。
 export function dismissWelcome(noAuto) {
   return noAuto ? write({ noAuto: true }) : read();
 }

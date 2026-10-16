@@ -839,6 +839,17 @@ figure.float .diagram { display: block; }
 #statusbar .grow { flex: 1; }
 #statusbar .hint { color: var(--ink-faint); }
 .st-warn { border: 0; padding: 0; background: none; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
+.save-status { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.save-status > span { color: var(--ink-soft); }
+.save-status.diskSaved > span, .save-status.browserSaved > span { color: var(--ok); }
+.save-status.failed > span { color: var(--seal-deep); font-weight: 600; }
+.st-flash.bad { color: var(--seal-deep); }
+.save-status .btn { font: inherit; padding: 1px 6px; }
+@media screen and (min-width: 901px) and (max-width: 1250px) {
+  #statusbar > .hint, #statusbar .st-detail, #statusbar .sep { display: none; }
+  #statusbar .st-path { max-width: 20%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #statusbar .st-engine { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
 .st-warn.has { color: var(--seal-deep); cursor: pointer; font-weight: 600; }
 #statusbar .st-chip { font-size: 11px; background: var(--chip-bg); color: var(--chip-ink); border-radius: 4px; padding: 1px 6px; margin-left: 6px; cursor: help; }
 #statusbar .st-engine { color: var(--ink-faint); cursor: help; white-space: nowrap; }
@@ -871,6 +882,10 @@ figure.float .diagram { display: block; }
   #statusbar .st-detail, #statusbar .sep, #statusbar .st-chip, #statusbar > .hint { display: none; }
   #statusbar .st-path { min-width: 0; max-width: 25%; overflow: hidden; text-overflow: ellipsis; }
   #statusbar .st-engine { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #statusbar:has(.save-status) .st-path, #statusbar:has(.save-status) .st-engine { display: none; }
+  #statusbar:has(.save-status) .grow { display: none; }
+  #statusbar .save-status { flex: 1; min-width: 0; }
+  #statusbar .save-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #statusbar .st-flash { position: absolute; inset: 0; display: flex; align-items: center; padding: 4px 12px; white-space: normal; background: var(--chrome); }
 }
 
@@ -1031,7 +1046,18 @@ figure.float .diagram { display: block; }
 
 /* ---------- 使用教程：首次访问欢迎弹窗 ---------- */
 /* 全部走 var() token，六套皮肤不用各自调色 */
-.tour-welcome { width: min(520px, 94vw); }
+.tour-welcome { width: min(560px, calc(100vw - 24px)); padding: 0; max-height: calc(100dvh - 24px); color: var(--ink); }
+.tour-welcome::backdrop { background: var(--backdrop); }
+.tour-welcome .tw-title { margin: 0; }
+.tour-welcome .tw-slogan { margin-bottom: 0; }
+.tw-close { margin-left: auto; align-self: flex-start; }
+.tw-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px 20px 0; }
+.tw-choice { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 7px; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.tw-choice:hover:not(:disabled) { border-color: var(--accent); background: var(--hover); }
+.tw-choice strong { font: 600 14px/1.5 var(--serif); }
+.tw-choice span { font: 12.5px/1.7 "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--ink-soft); }
+.tw-choice:disabled { opacity: .6; cursor: not-allowed; }
+@media screen and (max-width: 480px) { .tw-choices { grid-template-columns: 1fr; } .tw-foot { flex-wrap: wrap; } }
 .tw-hero { display: flex; align-items: center; gap: 12px; padding: 18px 20px 10px; }
 .tw-hero .brand-seal { width: 34px; height: 34px; border-radius: 6px; font-size: 19px; }
 .tw-title { font-family: var(--serif); font-weight: 700; font-size: 18px; color: var(--ink); }

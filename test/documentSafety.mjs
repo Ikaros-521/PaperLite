@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
+import { saveState } from '../src/saveState.js';
+import { infoFor } from '../src/fileTypes.js';
+import { tourStepsFor, shouldWelcome, dismissWelcome } from '../src/tour.js';
 
 const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
 const extract = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start)));
@@ -12,7 +15,7 @@ const common = {
   useCallback: fn => fn, activeId: 1, rootDir: null, flash() {},
   tabsRef: { get current() { return tabs; } }, setTabs: fn => { tabs = fn(tabs); },
   recordVersion: () => ({ ok: true }), setHistoryError() {}, setHistoryTick() {},
-  getLang: () => 'zh', tr: (_, key) => key, t: key => key, alert() {},
+  getLang: () => 'zh', tr: (_, key) => key, t: key => key, alert() {}, infoFor,
 };
 const writeFileText = async (_, text) => {
   await new Promise(resolve => { finish = resolve; });
@@ -22,18 +25,19 @@ const writeFileText = async (_, text) => {
 const save = vm.runInNewContext(extract('  const saveActive = useCallback(', '\n  // ---- 关闭标签') + '\nsaveActive', {
   ...common, fs: { writeFileText },
 });
-let pending = save(); value = 'B'; finish(); await pending;
+let pending = save(); assert.equal(saveState(tabs[0]), 'saving'); value = 'B'; finish(); await pending;
 assert.equal(disk, 'A'); assert.equal(tabs[0].saved, 'A'); assert.equal(tabs[0].dirty, true);
 pending = save(); finish(); await pending;
 assert.equal(disk, 'B'); assert.equal(tabs[0].saved, 'B'); assert.equal(tabs[0].dirty, false);
 value = 'C'; tabs[0].dirty = true; fail = true;
 pending = save(); finish(); await pending;
 assert.equal(tabs[0].saved, 'B'); assert.equal(tabs[0].dirty, true); fail = false;
+assert.equal(saveState(tabs[0]), 'failed');
 
 // Both Save As paths must preserve changes typed while the picker/write waits.
-for (const inFolder of [true, false]) {
+for (const kind of ['tex', 'draft']) for (const inFolder of [true, false]) {
   value = 'save-as A';
-  tabs[0] = { ...tabs[0], handle: null, saved: '', dirty: true };
+  tabs[0] = { ...tabs[0], kind, handle: null, saved: '', dirty: true };
   const saveAs = vm.runInNewContext(extract('  const saveTabAs = async', '\n  // ---- 保存') + '\nsaveTabAs', {
     ...common, rootDir: inFolder ? { name: 'project', getFileHandle: async () => { throw new Error('missing'); } } : null,
     window: { showSaveFilePicker: async () => ({ name: 'paper.tex' }) },
@@ -44,6 +48,8 @@ for (const inFolder of [true, false]) {
   await new Promise(resolve => setImmediate(resolve));
   value = 'save-as B'; finish(); await pending;
   assert.equal(disk, 'save-as A'); assert.equal(tabs[0].saved, 'save-as A'); assert.equal(tabs[0].dirty, true);
+  assert.equal(tabs[0].kind, 'tex', 'Saving a browser draft to disk turns it into a file-backed tab');
+  assert.equal(saveState(tabs[0]), 'diskUnsaved');
 }
 
 const template = vm.runInNewContext(extract('  const loadTemplate = async', '\n  // ---- 编译') + '\nloadTemplate', {
@@ -97,3 +103,39 @@ for (const [source, current, tabId, confirm, expected] of [
   assert.equal(confirmations, source !== current && tabId === 1 ? 1 : 0);
 }
 console.log('PDF exports: matching source, stale rejection/acceptance and document isolation passed.');
+
+// Autosave failure remains visible, retries clear it, and disk saves leave the draft set.
+const autoBegin = app.indexOf('  useEffect(() => {', app.indexOf('  const draftMembership'));
+const autoEndMarker = '  }, [activeValue, tabs.length, draftMembership, flash]);';
+const autoSource = app.slice(autoBegin, app.indexOf(autoEndMarker, autoBegin) + autoEndMarker.length);
+let autosave, rejectAuto = false, storedDrafts;
+value = 'browser draft';
+tabs = [{ id: 1, kind: 'draft', saved: '', doc: { getValue: () => value } }];
+vm.runInNewContext(autoSource, {
+  ...common, tabs, activeValue: value, draftMembership: '1', draftsWarnedRef: { current: false }, LS_DRAFTS: 'drafts',
+  useEffect: fn => fn(), setTimeout: fn => { autosave = fn; return 1; }, clearTimeout() {},
+  localStorage: { setItem: (_, text) => { if (rejectAuto) throw new Error('quota'); storedDrafts = JSON.parse(text); } },
+});
+assert.equal(saveState(tabs[0]), 'browserPending');
+autosave(); assert.equal(saveState(tabs[0]), 'browserSaved');
+value = 'new text'; assert.equal(saveState(tabs[0]), 'browserPending');
+rejectAuto = true; autosave(); assert.equal(saveState(tabs[0]), 'failed');
+rejectAuto = false; autosave(); assert.equal(saveState(tabs[0]), 'browserSaved');
+tabs[0] = { ...tabs[0], kind: 'tex', handle: {} }; autosave(); assert.deepEqual(storedDrafts, []);
+assert.equal(saveState(tabs[0]), 'diskSaved');
+assert.equal(saveState({ ...tabs[0], handle: null }), 'unsaved');
+assert.equal(saveState({ kind: 'image' }), null);
+
+const mobileTour = tourStepsFor({ compact: true, viewMode: 'edit', hasEditor: true, richPreview: true, texDocument: true });
+assert.equal(mobileTour.find(step => step.key === 'menus').target, '#compactMenuToggle');
+assert.equal(mobileTour.find(step => step.key === 'sidebar').target, '#sidebarToggle');
+assert.equal(mobileTour.some(step => ['paper', 'previewbar'].includes(step.key)), false);
+const pdfTour = tourStepsFor({ compact: false, viewMode: 'preview', hasEditor: true, richPreview: false, texDocument: true });
+assert.equal(pdfTour.some(step => ['editor', 'tabs', 'sidebar', 'paper', 'previewbar'].includes(step.key)), false);
+const codeTour = tourStepsFor({ compact: true, viewMode: 'edit', hasEditor: true, richPreview: false, texDocument: false });
+assert.equal(codeTour.some(step => ['quicktools', 'insert', 'tex'].includes(step.key)), false);
+const tourStorage = new Map();
+globalThis.localStorage = { getItem: key => tourStorage.get(key), setItem: (key, text) => tourStorage.set(key, text) };
+assert.equal(shouldWelcome(), true); dismissWelcome(true); assert.equal(shouldWelcome(), false);
+delete globalThis.localStorage;
+console.log('Onboarding and save status: persistent autosave errors/retry, draft-to-file transition, context-aware tours and welcome dismissal passed.');
