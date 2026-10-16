@@ -1,6 +1,8 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from 'codemirror';
 import FileDialog from './components/FileDialog.jsx';
+import DialogHost from './components/MessageDialog.jsx';
+import { showAlert as alert, showConfirm, showPrompt } from './dialogs.js';
 import { validName, wordCount, readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage, downloadSourceZip } from './fileActions.js';
 import HistoryDialog from './components/HistoryDialog.jsx';
 import Toolbar from './components/Toolbar.jsx';
@@ -143,7 +145,7 @@ export default function App() {
   const [channels, setChannels] = useState(() => llm.loadChannels());
   const [activeChannelId, setActiveChannelId] = useState(() => (llm.loadChannels()[0] || {}).id || '');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(null); // 'keys' | 'about' | null
+  const [helpOpen, setHelpOpen] = useState(null); // 'keys' | 'feedback' | 'about' | null
   const [tourStage, setTourStage] = useState(null); // 'welcome' | 'tour' | null
   const [chatMessages, setChatMessages] = useState([]);
   const [aiBusy, setAiBusy] = useState(false);
@@ -393,12 +395,12 @@ export default function App() {
   }, []);
 
   // ---- 新建文件（未保存标签；Ctrl+S 时另存到已开文件夹，或弹出系统另存为）----
-  const newFile = () => {
+  const newFile = async () => {
     let n = 1;
     const base = t('app.newFileDefault', { n: '' });
     const existNames = new Set(tabsRef.current.map(t => t.name));
     while (existNames.has(base.replace('.tex', (n > 1 ? n : '') + '.tex'))) n++;
-    const input = window.prompt(t('app.newFilePrompt'), base.replace('.tex', (n > 1 ? n : '') + '.tex'));
+    const input = await showPrompt(t('app.newFilePrompt'), base.replace('.tex', (n > 1 ? n : '') + '.tex'));
     if (!input) return;
     const name = input.trim();
     if (!name || /[\\/:*?"<>|]/.test(name)) { alert(t('app.badFileName')); return; }
@@ -413,7 +415,7 @@ export default function App() {
       const dir = rootDir || await fs.pickDirectory();
       if (!rootDir) { setRootDir(dir); setRestorePrompt(null); await fs.saveRootHandle(dir); }
       setSideTab('files');
-      const name = window.prompt(t('ft.newDirPrompt'))?.trim();
+      const name = (await showPrompt(t('ft.newDirPrompt')))?.trim();
       if (!name) return;
       if (!validName(name)) { alert(t('app.badFileName')); return; }
       for await (const [existing] of dir.entries()) if (existing === name) { alert(t('file.exists', { name })); return; }
@@ -434,7 +436,7 @@ export default function App() {
             let exists = false;
             try { await rootDir.getFileHandle(file.name); exists = true; } catch (e) { if (e.name !== 'NotFoundError') throw e; }
             const opened = tabsRef.current.find(tab => tab.handle && tab.path === file.name);
-            if ((exists || opened) && !window.confirm(t('app.overwriteConfirm', { name: file.name }))) continue;
+            if ((exists || opened) && !await showConfirm(t('app.overwriteConfirm', { name: file.name }))) continue;
             const handle = await fs.createFile(rootDir, file.name);
             const writable = await handle.createWritable();
             await writable.write(file); await writable.close();
@@ -512,7 +514,7 @@ export default function App() {
     if (rootDir) {
       try {
         await rootDir.getFileHandle(tab.name);
-        if (!window.confirm(t('app.overwriteConfirm', { name: tab.name }))) return false;
+        if (!await showConfirm(t('app.overwriteConfirm', { name: tab.name }))) return false;
       } catch (e) { /* 不存在，直接创建 */ }
       try {
         const h = await fs.createFile(rootDir, tab.name);
@@ -575,9 +577,9 @@ export default function App() {
   }, [activeId, rootDir, flash]);
 
   // ---- 关闭标签 ----
-  const closeTab = useCallback((id) => {
+  const closeTab = useCallback(async (id) => {
     const t = tabsRef.current.filter(x => x.id === id)[0];
-    if (t && t.dirty && !window.confirm(tr(getLang(), 'app.dirtyClose', { name: t.name }))) return;
+    if (t && t.dirty && !await showConfirm(tr(getLang(), 'app.dirtyClose', { name: t.name }))) return;
     if (t && t.imageUrl) URL.revokeObjectURL(t.imageUrl);
     setTabs(ts => {
       const rest = ts.filter(x => x.id !== id);
@@ -668,10 +670,10 @@ export default function App() {
     } catch (e) { if (e && e.name !== 'AbortError') alert(t('app.openFailed', { msg: e.message || e })); }
   };
 
-  const loadTemplate = (key) => {
+  const loadTemplate = async (key) => {
     const t = tabsRef.current.filter(x => x.id === activeId)[0];
     const useDraft = t && (t.kind === 'draft' || t.kind === 'tex');
-    if (!window.confirm(useDraft ? tr(getLang(), 'app.tplReplace') : tr(getLang(), 'app.tplNewTab'))) return;
+    if (!await showConfirm(useDraft ? tr(getLang(), 'app.tplReplace') : tr(getLang(), 'app.tplNewTab'))) return;
     const text = samples[key] || '';
     if (useDraft && t.doc) {
       t.doc.setValue(text);
@@ -1308,6 +1310,7 @@ export default function App() {
         setMessages={setChatMessages}
       />
 
+      <DialogHost />
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1374,6 +1377,25 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {helpOpen === 'feedback' && (
+        <div className="modal-mask" onClick={e => { if (e.target === e.currentTarget) setHelpOpen(null); }}>
+          <div className="modal help-modal" role="dialog" aria-modal="true" aria-label={t('help.feedback')} onClick={e => e.stopPropagation()}>
+            <div className="modal-h">{t('help.feedback')} <button className="btn sm" onClick={() => setHelpOpen(null)}>✕</button></div>
+            <div className="modal-body">
+              <div className="feedback-intro">{t('help.fbIntro')}</div>
+              <ul className="about-list feedback-list">
+                <li>{t('help.fbTip1')}</li>
+                <li>{t('help.fbTip2')}</li>
+                <li>{t('help.fbTip3')}</li>
+              </ul>
+              <div className="about-repo">
+                <a href="https://github.com/Ikaros-521/PaperLite/issues" target="_blank" rel="noopener noreferrer">{t('help.fbLink')}</a>
+              </div>
             </div>
           </div>
         </div>

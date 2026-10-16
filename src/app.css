@@ -121,6 +121,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .about-repo a { color: var(--accent); text-decoration: none; }
 .about-repo a:hover { text-decoration: underline; }
 .about-stack { color: var(--ink-faint); font-size: 12px; }
+.feedback-intro { color: var(--ink); font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
+.feedback-list { max-width: none; margin-left: 0; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
 .tb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
@@ -525,6 +527,9 @@ body.cp-dragging::before {
 .ft-icon { flex: none; font-size: 12px; color: var(--ink-soft); }
 .ft-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .ft-acts { display: none; gap: 2px; }
+.ft-acts.ft-head-acts { display: flex; align-items: center; flex-shrink: 0; }
+.ft-acts .ft-refresh { display: inline-flex; align-items: center; gap: 3px; padding: 3px 5px; border: 1px solid var(--line-soft); }
+.ft-row:focus-within .ft-acts { display: flex; }
 .ft-row:hover .ft-acts { display: flex; }
 .ft-acts button {
   border: 0; background: none; cursor: pointer; font-size: 10px; padding: 1px 2px; border-radius: 3px;
@@ -880,6 +885,16 @@ figure.float .diagram { display: block; }
 .mi-sub:focus-within > .mb-menu.sub { display: block; }
 .file-dialog { padding: 0; width: min(580px, calc(100vw - 32px)); max-height: 80vh; color: var(--ink); }
 .file-dialog::backdrop { background: var(--backdrop); }
+.message-dialog { padding: 0; width: min(420px, calc(100vw - 32px)); color: var(--ink); }
+.message-dialog:not([open]) { display: none; }
+.message-dialog::backdrop { background: var(--backdrop); }
+.message-dialog form { min-height: 0; overflow: auto; }
+.message-dialog .modal-body { padding: 20px; }
+.message-dialog p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.message-dialog input { box-sizing: border-box; width: 100%; margin-top: 16px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; }
+.message-dialog input:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.message-dialog .modal-f { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; }
+.message-dialog .btn.danger { background: var(--seal-deep); border-color: var(--seal-deep); color: white; }
 .file-dialog .modal-body { max-height: 65vh; }
 .file-doc-name { font-weight: 600; overflow-wrap: anywhere; }
 .file-counts { margin: 20px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

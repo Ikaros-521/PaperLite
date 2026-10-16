@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { listDir, removeEntry, renameEntry, canRename, createFile, createDirectory } from '../fs.js';
 import { infoFor } from '../fileTypes.js';
 import { useLang, useT } from '../useI18n.js';
+import { showAlert as alert, showConfirm, showPrompt } from '../dialogs.js';
 
 /* 文件树：懒加载展开；文件点击打开；悬停操作（新建/重命名/删除） */
 export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }) {
@@ -90,7 +91,7 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
   const doNewFile = async (dirPath) => {
     const dir = parentHandle(dirPath);
     if (!dir) return;
-    const name = prompt(t('ft.newFilePrompt'));
+    const name = await showPrompt(t('ft.newFilePrompt'));
     if (!name) return;
     try {
       await createFile(dir, name);
@@ -103,14 +104,14 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
   const doNewDir = async (dirPath) => {
     const dir = parentHandle(dirPath);
     if (!dir) return;
-    const name = prompt(t('ft.newDirPrompt'));
+    const name = await showPrompt(t('ft.newDirPrompt'));
     if (!name) return;
     try { await createDirectory(dir, name); refresh(dirPath); }
     catch (e) { alert(t('ft.createFailed', { msg: e.message || e })); }
   };
 
   const doRename = async (entry) => {
-    const name = prompt(t('ft.renamePrompt'), entry.name);
+    const name = await showPrompt(t('ft.renamePrompt'), entry.name);
     if (!name || name === entry.name) return;
     try {
       await renameEntry(entry.handle, name);
@@ -123,7 +124,8 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
     const parent = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : '';
     const dir = parentHandle(parent);
     if (!dir) return;
-    if (!window.confirm(t('ft.delConfirm', { name: entry.name, extra: entry.kind === 'directory' ? t('ft.delDirExtra') : '' }))) return;
+    if (!await showConfirm(t('ft.delConfirm', { name: entry.name, extra: entry.kind === 'directory' ? t('ft.delDirExtra') : '' }),
+      { danger: true, confirmLabel: t('ft.del') })) return;
     try {
       await removeEntry(dir, entry.name, entry.kind === 'directory');
       refresh(parent);
@@ -148,6 +150,8 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
           <span className="ft-name" title={entry.path}>{entry.name}</span>
           <span className="ft-acts">
             {isDir && <>
+              <button title={t('ft.refresh')} aria-label={t('ft.refresh') + ' ' + entry.name} disabled={!!loading[entry.path]}
+                onClick={e => { e.stopPropagation(); refresh(entry.path); }}>⟳</button>
               <button title={t('ft.newFileHere')} onClick={e => { e.stopPropagation(); doNewFile(entry.path); }}>{lang === 'zh' ? '＋文' : '＋f'}</button>
               <button title={t('ft.newDirHere')} onClick={e => { e.stopPropagation(); doNewDir(entry.path); }}>{lang === 'zh' ? '＋夹' : '＋d'}</button>
             </>}
@@ -174,7 +178,8 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
         <span className="ft-acts ft-head-acts">
           <button title={t('ft.rootNewFile')} onClick={() => doNewFile('')}>{lang === 'zh' ? '＋文' : '＋f'}</button>
           <button title={t('ft.rootNewDir')} onClick={() => doNewDir('')}>{lang === 'zh' ? '＋夹' : '＋d'}</button>
-          <button title={t('ft.refresh')} onClick={refreshTree}>⟳</button>
+          <button className="ft-refresh" title={t('ft.refresh')} aria-label={t('ft.refresh')} disabled={Object.values(loading).some(Boolean)}
+            onClick={refreshTree}>⟳ <span>{t(Object.values(loading).some(Boolean) ? 'ft.refreshing' : 'ft.refresh')}</span></button>
           <button title={t('ft.closeFolder')} onClick={onCloseFolder}>✕</button>
         </span>
       </div>

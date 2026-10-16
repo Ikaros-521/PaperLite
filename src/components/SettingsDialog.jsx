@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
 import { testConnection, fetchModels, newChannel, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
 import { resolveWindow, inputBudget, formatTokens } from '../context.js';
+import { showConfirm } from '../dialogs.js';
 
 /* AI 设置弹窗：多渠道管理（内置平台预设 / OpenAI 兼容与 Anthropic 协议 /
  * 模型列表拉取 + 搜索下拉 / 测试连接 / 上下文窗口（默认按模型自动推断） */
@@ -140,7 +141,7 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                       <button disabled={testing && testing.id === ch.id && !testing.result} onClick={e => { e.stopPropagation(); doTest(ch); }}>
                         {testing && testing.id === ch.id && !testing.result ? t('set.testing') : t('set.test')}
                       </button>
-                      <button onClick={e => { e.stopPropagation(); if (window.confirm(t('set.delConfirm', { name: ch.name }))) setChannels(list => list.filter(c => c.id !== ch.id)); }}>{t('set.del')}</button>
+                      <button onClick={async e => { e.stopPropagation(); if (await showConfirm(t('set.delConfirm', { name: ch.name }), { danger: true, confirmLabel: t('set.del') })) setChannels(list => list.filter(c => c.id !== ch.id)); }}>{t('set.del')}</button>
                     </span>
                   </div>
                   {testing && testing.id === ch.id && testing.result && (

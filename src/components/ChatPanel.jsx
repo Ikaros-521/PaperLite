@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
 import * as ctx from '../context.js';
+import { showAlert as alert, showConfirm } from '../dialogs.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
  * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复）、
@@ -226,17 +227,17 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     }
   };
 
-  const applyBlock = (code, mode) => {
+  const applyBlock = async (code, mode) => {
     const cm = buildContext.cm && buildContext.cm();
     if (!cm) return;
     // 撤销栈一被冲掉就回不来了：整篇/整段替换前先存一份版本（取消则不留）
     if (mode === 'replaceDoc') {
-      if (!window.confirm(t('chat.replaceDocConfirm'))) return;
+      if (!await showConfirm(t('chat.replaceDocConfirm'))) return;
       if (onBeforeApply) onBeforeApply();
       cm.setValue(code);
     } else if (mode === 'replaceSel') {
       if (onBeforeApply) onBeforeApply();
-      if (!cm.getSelection()) { alert(t('chat.noSelInsert')); cm.replaceSelection(code); }
+      if (!cm.getSelection()) { await alert(t('chat.noSelInsert')); cm.replaceSelection(code); }
       else cm.replaceSelection(code);
     } else {
       cm.replaceSelection(code);

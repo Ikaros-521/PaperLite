@@ -1,5 +1,6 @@
 /* PaperLite · 导出模块（ESM）：打印 PDF / .tex / HTML / SVG / PNG */
 import { t } from './i18n.js';
+import { showAlert as alert } from './dialogs.js';
 
 export function downloadFile(name, content, mime) {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime || 'text/plain;charset=utf-8' });

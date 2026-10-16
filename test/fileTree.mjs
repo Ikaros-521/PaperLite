@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { listDir } from '../src/fs.js';
 import { extOf, infoFor, isTextEditable } from '../src/fileTypes.js';
+import { showAlert, showConfirm, showPrompt, currentDialog, finishDialog, subscribeDialogs } from '../src/dialogs.js';
 
 // Execute the component's hooks and handlers against an in-memory filesystem.
 const source = readFileSync(new URL('../src/components/FileTree.jsx', import.meta.url), 'utf8');
@@ -34,7 +35,7 @@ const FileTree = vm.runInNewContext(component, {
   listDir: async handle => { reads.push(handle.name); return listDir(handle); },
   createFile: (dir, name) => dir.getFileHandle(name, { create: true }),
   createDirectory: (dir, name) => dir.getDirectoryHandle(name, { create: true }),
-  prompt: () => promptValue, alert: message => { throw new Error(message); },
+  showPrompt: async () => promptValue, alert: message => { throw new Error(message); },
 });
 function directory(name) {
   const items = new Map();
@@ -72,6 +73,11 @@ assert.equal(reads.at(-1), 'nested', 'New files refresh their actual parent');
 promptValue = 'assets';
 await current.doNewDir('figures/nested'); await settle();
 assert.ok(current.children['figures/nested'].some(entry => entry.name === 'assets'));
+const itemCount = nested.items.size;
+promptValue = null;
+await current.doNewFile('figures/nested');
+await current.doNewDir('figures/nested');
+assert.equal(nested.items.size, itemCount, 'Canceling a name dialog must not create an entry');
 
 await nested.getFileHandle('external.svg', { create: true });
 refreshKey++; render(); await settle();
@@ -112,4 +118,25 @@ for (const text of [svg, svg.replace('图 #1', '已修改')]) {
   assert.equal(decodeURIComponent(url.split(',')[1]), text);
   assert.ok(url.startsWith('data:image/svg+xml;'));
 }
-console.log('File tree: nested creation, refresh state, manual refresh, root switch races; SVG live source preview passed.');
+// Dialogs queue concurrent calls; cancel resolves without permitting mutations.
+let notifications = 0;
+const unsubscribe = subscribeDialogs(() => notifications++);
+const confirmation = showConfirm('Delete file?');
+const confirmRequest = currentDialog();
+const prompt = showPrompt('File name', 'main.tex');
+assert.equal(currentDialog(), confirmRequest, 'A second request does not replace an active confirmation');
+finishDialog(confirmRequest, false);
+assert.equal(await confirmation, false);
+const promptRequest = currentDialog();
+assert.equal(promptRequest.value, 'main.tex');
+finishDialog(confirmRequest, true);
+assert.equal(currentDialog(), promptRequest, 'Repeated dismissal cannot close the next dialog');
+finishDialog(promptRequest, null);
+assert.equal(await prompt, null);
+const notice = showAlert('Could not open folder');
+finishDialog(currentDialog(), true);
+await notice;
+assert.equal(currentDialog(), null);
+assert.equal(notifications, 6);
+unsubscribe();
+console.log('File tree: nested creation/cancel, refresh state, root switch races; SVG live preview; dialog queue/cancel passed.');
