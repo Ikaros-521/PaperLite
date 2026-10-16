@@ -5,7 +5,9 @@
 // =============================================
 
 import { type ReactNode, type RefObject, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Dialog, Input, Popup, Toast } from 'antd-mobile'
+import { Button, ConfigProvider, Dialog, Input, Popup, Toast } from 'antd-mobile'
+import zhCN from 'antd-mobile/es/locales/zh-CN'
+import enUS from 'antd-mobile/es/locales/en-US'
 import { useWorkspace } from '../../workspace/useWorkspace.js'
 import { useCompile } from '../../workspace/useCompile.js'
 import { buildLLMContext } from '../../workspace/chatContext.js'
@@ -133,8 +135,8 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
   const ws = useWorkspace({
     t,
     flash: (msg: string) => Toast.show({ content: msg }),
-    alertBox: (msg: string) => { Dialog.alert({ title: '提示', content: msg, confirmText: '知道了' }) },
-    confirm: (msg: string) => Dialog.confirm({ title: '确认', content: msg, confirmText: '确定', cancelText: '取消' }),
+    alertBox: (msg: string) => { Dialog.alert({ title: t('dialog.alert'), content: msg, confirmText: t('mb.sh.gotIt') }) },
+    confirm: (msg: string) => Dialog.confirm({ title: t('mb.sh.confirmTitle'), content: msg, confirmText: t('dialog.ok'), cancelText: t('dialog.cancel') }),
     prompt,
     onTreeChanged: () => setTreeTick(n => n + 1),
     onSideTab: () => {},
@@ -144,7 +146,7 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
   const activeTab = (ws.tabs as MobileTab[]).filter(x => x.id === ws.activeId)[0] || null
   const isTexLike = activeTab?.kind === 'tex' || activeTab?.kind === 'draft'
   const compileLayer = useCompile(
-    { t, flash: (msg: string) => Toast.show({ content: msg }), alertBox: (msg: string) => { Dialog.alert({ title: '提示', content: msg, confirmText: '知道了' }) } },
+    { t, flash: (msg: string) => Toast.show({ content: msg }), alertBox: (msg: string) => { Dialog.alert({ title: t('dialog.alert'), content: msg, confirmText: t('mb.sh.gotIt') }) } },
     { tabsRef: ws.tabsRef, activeTab, isTexLike, autoWarm: false },
   )
 
@@ -249,33 +251,37 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
   }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chatInject, buildContext, beforeAiApply, sendChatInject, settingsOpen])
 
   return (
-    <LangContext.Provider value={lang}>
-      <MobileCtx.Provider value={value}>
-        {children}
+    // antd-mobile 自带文案（下拉刷新 / 没有更多了 / 搜索框、蒙层等 aria-label）默认是 zh-CN，
+    // 只有这里换 locale，英文界面才不会漏出库内文案
+    <ConfigProvider locale={lang === 'zh' ? zhCN : enUS}>
+      <LangContext.Provider value={lang}>
+        <MobileCtx.Provider value={value}>
+          {children}
 
-        {promptState && (
-          <Popup visible position="bottom" closeOnSwipe onClose={() => settlePrompt(null)}
-            bodyStyle={{ borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
-            <div className="pl-sheet">
-              <div className="pl-sheet-head">
-                <span>{promptState.message}</span>
-                <Button fill="none" size="small" onClick={() => settlePrompt(null)}>取消</Button>
+          {promptState && (
+            <Popup visible position="bottom" closeOnSwipe onClose={() => settlePrompt(null)}
+              bodyStyle={{ borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
+              <div className="pl-sheet">
+                <div className="pl-sheet-head">
+                  <span>{promptState.message}</span>
+                  <Button fill="none" size="small" onClick={() => settlePrompt(null)}>{t('dialog.cancel')}</Button>
+                </div>
+                <div style={{ padding: '12px 16px' }}>
+                  <Input
+                    autoFocus
+                    value={promptState.value}
+                    onChange={v => setPromptState(s => (s ? { ...s, value: v } : s))}
+                    enterKeyHint="done"
+                  />
+                </div>
+                <div className="pl-sheet-foot">
+                  <Button block color="primary" onClick={() => settlePrompt(promptState.value)}>{t('dialog.ok')}</Button>
+                </div>
               </div>
-              <div style={{ padding: '12px 16px' }}>
-                <Input
-                  autoFocus
-                  value={promptState.value}
-                  onChange={v => setPromptState(s => (s ? { ...s, value: v } : s))}
-                  enterKeyHint="done"
-                />
-              </div>
-              <div className="pl-sheet-foot">
-                <Button block color="primary" onClick={() => settlePrompt(promptState.value)}>确定</Button>
-              </div>
-            </div>
-          </Popup>
-        )}
-      </MobileCtx.Provider>
-    </LangContext.Provider>
+            </Popup>
+          )}
+        </MobileCtx.Provider>
+      </LangContext.Provider>
+    </ConfigProvider>
   )
 }

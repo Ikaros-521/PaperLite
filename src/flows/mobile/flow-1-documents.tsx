@@ -44,6 +44,7 @@ import { formatRelative, formatWords, wait } from './shared/format'
 import { DOC_KIND_LABEL, SAVE_STATE } from './shared/labels'
 import { useLongPress } from './shared/hooks'
 import { useMobileWorkspace, type MobileTab } from './mobileWorkspace'
+import { useT } from '../../useI18n.js'
 import { samples } from '../../engines/samples.js'
 import { wordCount } from '../../fileActions.js'
 
@@ -60,11 +61,11 @@ const KIND_ICON: Record<string, ReactNode> = {
   asset: <FileOutline />,
 }
 
-/** 起始内容：直接取桌面同一份内置模板 */
+/** 起始内容：直接取桌面同一份内置模板（语言是运行时切的，这里只存键名，渲染时再翻译） */
 const TEMPLATES = [
-  { id: 'demo', name: '论文示例', note: 'ctexart + BiLSTM-Att，含图与表', text: samples.demo },
-  { id: 'flow', name: '流程图示例', note: 'TikZ 决策框 + Mermaid 块', text: samples.flow },
-  { id: 'blank', name: '空白文档', note: '仅导言区', text: samples.blank },
+  { id: 'demo', nameKey: 'mb.doc.tplDemoName', noteKey: 'mb.doc.tplDemoNote', text: samples.demo },
+  { id: 'flow', nameKey: 'mb.doc.tplFlowName', noteKey: 'mb.doc.tplFlowNote', text: samples.flow },
+  { id: 'blank', nameKey: 'mb.doc.tplBlankName', noteKey: 'mb.doc.tplBlankNote', text: samples.blank },
 ]
 
 /**
@@ -85,6 +86,7 @@ function DocRow({
 }) {
   const { handlers, consumeClick } = useLongPress(() => onLongPress(tab))
   const ws = useMobileWorkspace()
+  const t = useT()
   const state = ws.saveStateOf(tab)
   const meta = SAVE_STATE[state]
   const value = tab.doc?.getValue() || ''
@@ -93,14 +95,14 @@ function DocRow({
     <SwipeAction
       closeOnAction
       rightActions={[
-        { key: 'history', text: '历史', color: 'primary', onClick: () => onHistory(tab) },
-        { key: 'delete', text: '删除', color: 'danger', onClick: () => onDelete(tab) },
+        { key: 'history', text: t('mb.doc.history'), color: 'primary', onClick: () => onHistory(tab) },
+        { key: 'delete', text: t('mb.doc.delete'), color: 'danger', onClick: () => onDelete(tab) },
       ]}
     >
       <button
         type="button"
         className="pl-doc-row"
-        aria-label={`${tab.name}，${meta.text}`}
+        aria-label={t('mb.doc.rowAria', { name: tab.name, state: t(meta.textKey) })}
         {...handlers}
         onClick={() => {
           // 长按已弹 ActionSheet，吞掉手指抬起补发的 click
@@ -113,11 +115,11 @@ function DocRow({
           <span className="pl-doc-name">{tab.name}</span>
           <span className="pl-doc-meta pl-num">
             <span>{formatRelative(tab.updatedAt || Date.now())}</span>
-            <span>{tab.doc ? formatWords(wordCount(value).total) : (DOC_KIND_LABEL as Record<string, string>)[tab.kind] || '资源'}</span>
+            <span>{tab.doc ? formatWords(wordCount(value).total) : t((DOC_KIND_LABEL as Record<string, string>)[tab.kind] || 'mb.doc.resource')}</span>
           </span>
         </span>
         <Tag color={meta.color} fill="outline">
-          {meta.text}
+          {t(meta.textKey)}
         </Tag>
       </button>
     </SwipeAction>
@@ -137,6 +139,7 @@ function DocRow({
 export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
   const navigate = useNavigate()
   const ws = useMobileWorkspace()
+  const t = useT()
   const [query, setQuery] = useState('')
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [sheet, setSheet] = useState<'none' | 'new' | 'import'>('none')
@@ -161,8 +164,8 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
 
   const onRefresh = useCallback(async () => {
     await wait(500)
-    Toast.show({ content: ws.rootDir ? `已同步「${ws.rootDir.name}」` : '已读取本机草稿', icon: 'success' })
-  }, [ws.rootDir])
+    Toast.show({ content: ws.rootDir ? t('mb.doc.synced', { name: ws.rootDir.name }) : t('mb.doc.draftsRead'), icon: 'success' })
+  }, [ws.rootDir, t])
 
   const openDoc = (tab: MobileTab) => {
     ws.openTab(tab.id)
@@ -175,29 +178,29 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
     const text = tab.doc?.getValue() || ''
     await ws.closeTab(tab.id)
     if (tab.doc) setUndoDraft({ name: tab.name, text })
-    Toast.show({ content: `已删除「${tab.name}」` })
+    Toast.show({ content: t('mb.doc.deleted', { name: tab.name }) })
   }
 
   const askRename = (tab: MobileTab) => {
     setActionTab(null)
     let next = tab.name
     Dialog.show({
-      title: '重命名',
+      title: t('mb.doc.rename'),
       content: <RenameInput initial={tab.name} onChange={value => { next = value }} />,
       closeOnAction: true,
       actions: [
         [
-          { key: 'cancel', text: '取消' },
+          { key: 'cancel', text: t('dialog.cancel') },
           {
             key: 'ok',
-            text: '确定',
+            text: t('dialog.ok'),
             bold: true,
             onClick: () => {
               if (!ws.renameTab(tab.id, next)) {
-                Toast.show({ content: '名称不能为空' })
+                Toast.show({ content: t('mb.doc.nameEmpty') })
                 return
               }
-              Toast.show({ content: '已重命名', icon: 'success' })
+              Toast.show({ content: t('mb.doc.renamed'), icon: 'success' })
             },
           },
         ],
@@ -212,11 +215,11 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
         back={null}
         right={
           <Button fill="none" size="small" style={{ color: 'var(--accent)' }} onClick={() => setSheet('import')}>
-            <UploadOutline /> 导入
+            <UploadOutline /> {t('mb.doc.import')}
           </Button>
         }
       >
-        文稿
+        {t('mb.doc.title')}
       </NavBar>
 
       {banner}
@@ -224,7 +227,7 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
       {undoDraft && (
         <NoticeBar
           color="info"
-          content={`已删除「${undoDraft.name}」`}
+          content={t('mb.doc.deleted', { name: undoDraft.name })}
           extra={
             <Button
               fill="none"
@@ -232,10 +235,10 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
               onClick={() => {
                 ws.addDraft(undoDraft.name, undoDraft.text)
                 setUndoDraft(null)
-                Toast.show({ content: '已恢复为浏览器草稿', icon: 'success' })
+                Toast.show({ content: t('mb.doc.restored'), icon: 'success' })
               }}
             >
-              撤销
+              {t('mb.doc.undo')}
             </Button>
           }
         />
@@ -243,7 +246,7 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
 
       <div style={{ padding: '8px 12px', background: 'var(--chrome)' }}>
         <SearchBar
-          placeholder="按文件名搜索"
+          placeholder={t('mb.doc.searchPlaceholder')}
           value={query}
           onChange={setQuery}
           onSearch={setQuery}
@@ -254,10 +257,10 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
       <PullToRefresh onRefresh={onRefresh}>
         {pageRows.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '32px 16px' }}>
-            <Empty description={query ? `没有匹配「${query}」的文稿` : '这台浏览器还没有稿件'} />
+            <Empty description={query ? t('mb.doc.noMatch', { q: query }) : t('mb.doc.noDocs')} />
             <div style={{ marginTop: 16 }}>
               <Button color="primary" onClick={() => setSheet('new')}>
-                新建第一篇草稿
+                {t('mb.doc.createFirst')}
               </Button>
             </div>
           </div>
@@ -265,7 +268,7 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
           <>
             {drafts.length > 0 && (
               <>
-                <div className="pl-group-head">浏览器草稿 · 只存在这台设备</div>
+                <div className="pl-group-head">{t('mb.doc.groupDrafts')}</div>
                 {drafts.map(tab => (
                   <DocRow
                     key={tab.id}
@@ -282,7 +285,7 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
               <>
                 <div className="pl-group-head">
                   <FolderOutline />
-                  {ws.rootDir ? ws.rootDir.name : '已打开的文件与资源'}
+                  {ws.rootDir ? ws.rootDir.name : t('mb.doc.groupFiles')}
                 </div>
                 {assets.map(tab => (
                   <DocRow
@@ -302,7 +305,7 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
       </PullToRefresh>
 
       {/* FAB：antd-mobile 无 FloatButton，自实现；绝对定位于内容容器内 */}
-      <button type="button" className="pl-fab" aria-label="新建草稿" onClick={() => setSheet('new')}>
+      <button type="button" className="pl-fab" aria-label={t('mb.doc.newDraft')} onClick={() => setSheet('new')}>
         <AddOutline style={{ fontSize: 24 }} />
       </button>
 
@@ -329,7 +332,7 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
           navigate(`/m/history/${tab.id}`)
         }}
         onDelete={removeTab}
-        onMove={() => Toast.show({ content: '跨文件夹整理请在桌面端完成' })}
+        onMove={() => Toast.show({ content: t('mb.doc.moveNote') })}
       />
     </div>
   )
@@ -358,6 +361,7 @@ function NewDraftSheet({
   onCreated: (tab: MobileTab) => void
 }) {
   const ws = useMobileWorkspace()
+  const t = useT()
   const [name, setName] = useState('')
   const [template, setTemplate] = useState<string>('demo')
   const trimmed = name.trim()
@@ -380,9 +384,9 @@ function NewDraftSheet({
     >
       <div className="pl-sheet">
         <div className="pl-sheet-head">
-          <span>新建草稿</span>
+          <span>{t('mb.doc.newDraft')}</span>
           <Button color="primary" size="small" disabled={!trimmed} onClick={create}>
-            完成
+            {t('mb.doc.done')}
           </Button>
         </div>
 
@@ -391,7 +395,7 @@ function NewDraftSheet({
           {/* STATE: filled — 标题非空，可直接创建 */}
           {/* STATE: error — 名称为空时主按钮保持禁用，不静默改名 */}
           <Input
-            placeholder="文稿名，例如 第三章-方法.tex"
+            placeholder={t('mb.doc.namePlaceholder')}
             value={name}
             onChange={setName}
             clearable
@@ -402,22 +406,22 @@ function NewDraftSheet({
             }}
           />
 
-          <div style={{ margin: '16px 0 8px', color: 'var(--ink-soft)', fontSize: 12 }}>起始内容</div>
+          <div style={{ margin: '16px 0 8px', color: 'var(--ink-soft)', fontSize: 12 }}>{t('mb.doc.startContent')}</div>
           <Selector
             columns={1}
             value={[template]}
             onChange={v => setTemplate((v[0] as string) || 'demo')}
-            options={TEMPLATES.map(item => ({ label: `${item.name} · ${item.note}`, value: item.id }))}
+            options={TEMPLATES.map(item => ({ label: `${t(item.nameKey)} · ${t(item.noteKey)}`, value: item.id }))}
           />
 
           <div style={{ marginTop: 12, color: 'var(--ink-faint)', fontSize: 11 }}>
-            新草稿只存在这台浏览器；要落到自己的文件夹，需连上桌面端已授权的目录。
+            {t('mb.doc.draftNote')}
           </div>
         </div>
 
         <div className="pl-sheet-foot">
           <Button block fill="none" onClick={onClose}>
-            取消
+            {t('dialog.cancel')}
           </Button>
         </div>
       </div>
@@ -436,6 +440,7 @@ function NewDraftSheet({
    ================================================ */
 function ImportSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const ws = useMobileWorkspace()
+  const t = useT()
   const imported = ws.tabs.filter(tab => tab.uploadedFile).length
 
   return (
@@ -450,9 +455,9 @@ function ImportSheet({ visible, onClose }: { visible: boolean; onClose: () => vo
     >
       <div className="pl-sheet">
         <div className="pl-sheet-head">
-          <span>导入文稿</span>
+          <span>{t('mb.doc.importTitle')}</span>
           <span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
-            {imported ? `本次已导入 ${imported} 个文件` : '选择本机文件'}
+            {imported ? t('mb.doc.importedCount', { n: imported }) : t('mb.doc.pickFiles')}
           </span>
         </div>
 
@@ -461,8 +466,8 @@ function ImportSheet({ visible, onClose }: { visible: boolean; onClose: () => vo
           wrap
           content={
             ws.fsSupported
-              ? '这台浏览器支持直接授权文件夹；导入的副本改完仍需回桌面端写回原文件。'
-              : '这台浏览器不支持授权本机文件夹（没有 showDirectoryPicker），这里按文件上传副本；改完请导出备份。'
+              ? t('mb.doc.noticeFsOk')
+              : t('mb.doc.noticeNoFs')
           }
         />
 
@@ -475,7 +480,7 @@ function ImportSheet({ visible, onClose }: { visible: boolean; onClose: () => vo
               onClose()
             }}
           >
-            <UploadOutline /> 选择文件（可多选）
+            <UploadOutline /> {t('mb.doc.pickFilesMulti')}
           </Button>
           <Button
             className="pl-min-touch"
@@ -486,19 +491,19 @@ function ImportSheet({ visible, onClose }: { visible: boolean; onClose: () => vo
               onClose()
             }}
           >
-            <FolderOutline /> {ws.fsSupported ? '打开文件夹' : '打开文件夹（此浏览器不支持）'}
+            <FolderOutline /> {ws.fsSupported ? t('mb.doc.openFolder') : t('mb.doc.openFolderUnsupported')}
           </Button>
         </div>
 
         <div className="pl-sheet-body" style={{ padding: '0 16px 12px' }}>
           <div style={{ color: 'var(--ink-faint)', fontSize: 11, lineHeight: 1.7 }}>
-            上传的文件只在当前会话有效；关掉标签或清浏览器数据会丢，重要稿件请回桌面端保存到文件夹。
+            {t('mb.doc.uploadNote')}
           </div>
         </div>
 
         <div className="pl-sheet-foot">
           <Button block fill="none" onClick={onClose}>
-            完成
+            {t('mb.doc.done')}
           </Button>
         </div>
       </div>
@@ -531,19 +536,20 @@ function DocActionSheet({
   onMove: () => void
 }) {
   const ws = useMobileWorkspace()
+  const t = useT()
   const meta = tab ? SAVE_STATE[ws.saveStateOf(tab)] : null
 
   return (
     <ActionSheet
       visible={!!tab}
       onClose={onClose}
-      cancelText="取消"
+      cancelText={t('dialog.cancel')}
       extra={
         tab && meta ? (
           <div style={{ textAlign: 'center' }}>
             <div className="pl-doc-name">{tab.name}</div>
             <div className="pl-num" style={{ color: 'var(--ink-soft)', fontSize: 12 }}>
-              {meta.text} · {formatRelative(tab.updatedAt || Date.now())}
+              {t(meta.textKey)} · {formatRelative(tab.updatedAt || Date.now())}
             </div>
           </div>
         ) : null
@@ -551,10 +557,10 @@ function DocActionSheet({
       actions={
         tab
           ? [
-              { key: 'rename', text: <span><EditSOutline /> 重命名</span>, onClick: () => onRename(tab) },
-              { key: 'move', text: <span><FolderOutline /> 移入文件夹</span>, onClick: onMove },
-              { key: 'history', text: <span><ClockCircleOutline /> 版本历史</span>, onClick: () => onHistory(tab) },
-              { key: 'delete', text: <span><DeleteOutline /> 删除</span>, danger: true, onClick: () => onDelete(tab) },
+              { key: 'rename', text: <span><EditSOutline /> {t('mb.doc.rename')}</span>, onClick: () => onRename(tab) },
+              { key: 'move', text: <span><FolderOutline /> {t('mb.doc.moveToFolder')}</span>, onClick: onMove },
+              { key: 'history', text: <span><ClockCircleOutline /> {t('mb.doc.versionHistory')}</span>, onClick: () => onHistory(tab) },
+              { key: 'delete', text: <span><DeleteOutline /> {t('mb.doc.delete')}</span>, danger: true, onClick: () => onDelete(tab) },
             ]
           : []
       }
@@ -564,6 +570,7 @@ function DocActionSheet({
 
 /** Dialog.show 的内容脱离父组件渲染，需自带状态再把值回传给闭包 */
 function RenameInput({ initial, onChange }: { initial: string; onChange: (value: string) => void }) {
+  const t = useT()
   const [value, setValue] = useState(initial)
   return (
     <Input
@@ -572,7 +579,7 @@ function RenameInput({ initial, onChange }: { initial: string; onChange: (value:
         setValue(v)
         onChange(v)
       }}
-      placeholder="文稿名"
+      placeholder={t('mb.doc.nameShort')}
       clearable
     />
   )

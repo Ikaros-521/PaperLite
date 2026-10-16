@@ -47,32 +47,36 @@ import { lintLaTeX } from '../../engines/linter.js'
 import { aiFixIssuePrompt } from '../../workspace/chatContext.js'
 import { wordCount } from '../../fileActions.js'
 import { tr, getLang } from '../../i18n.js'
+import { useT } from '../../useI18n.js'
 import { formatWords } from './shared/format'
 import { SAVE_STATE, VIEW_LABEL } from './shared/labels'
 import { useKeyboardInset, useLongPress } from './shared/hooks'
 import { useMobileWorkspace, type MobileTab } from './mobileWorkspace'
 
-/** 桌面 #toolbelt 有 18 个按钮，390px 会换行成 113px 高；移动端留高频 11 项 */
+/** 桌面 #toolbelt 有 18 个按钮，390px 会换行成 113px 高；移动端留高频 11 项
+ *  语言运行时可切换，模块顶层不能取文案，这里只存键，渲染时再 t() */
 const TOOLS = [
-  { id: 'undo', label: '撤销', icon: <UndoOutline /> },
-  { id: 'redo', label: '重做', icon: <RedoOutline /> },
-  { id: 'bold', label: '加粗', icon: <b>B</b> },
-  { id: 'italic', label: '斜体', icon: <i>I</i> },
-  { id: 'math', label: '公式', icon: <span>$x$</span> },
-  { id: 'symbols', label: '符号', icon: <span>Ω</span> },
-  { id: 'ref', label: '引用', icon: <ContentOutline /> },
-  { id: 'table', label: '表格', icon: <span>▥</span> },
-  { id: 'figure', label: '图表', icon: <PictureOutline /> },
-  { id: 'outline', label: '大纲', icon: <UnorderedListOutline /> },
-  { id: 'compile', label: '编译', icon: <PlayOutline /> },
+  { id: 'undo', key: 'mb.ed.toolUndo', icon: <UndoOutline /> },
+  { id: 'redo', key: 'mb.ed.toolRedo', icon: <RedoOutline /> },
+  { id: 'bold', key: 'mb.ed.toolBold', icon: <b>B</b> },
+  { id: 'italic', key: 'mb.ed.toolItalic', icon: <i>I</i> },
+  { id: 'math', key: 'mb.ed.toolMath', icon: <span>$x$</span> },
+  { id: 'symbols', key: 'mb.ed.toolSymbols', icon: <span>Ω</span> },
+  { id: 'ref', key: 'mb.ed.toolRef', icon: <ContentOutline /> },
+  { id: 'table', key: 'mb.ed.toolTable', icon: <span>▥</span> },
+  { id: 'figure', key: 'mb.ed.toolFigure', icon: <PictureOutline /> },
+  { id: 'outline', key: 'mb.ed.toolOutline', icon: <UnorderedListOutline /> },
+  { id: 'compile', key: 'mb.ed.toolCompile', icon: <PlayOutline /> },
 ] as const
 
-/** 一键插入的片段；符号/表格/引用/图表走插入 Sheet 的多选路径 */
-const SNIPPETS: Record<string, string> = {
-  bold: '\\textbf{加粗文字}',
-  italic: '\\textit{斜体文字}',
+/** 一键插入的片段；符号/表格/引用/图表走插入 Sheet 的多选路径
+ *  片段要写进文档，示例文字随语言变化，所以只能在组件里按当前 t 生成；LaTeX 命令原样不动 */
+type Translate = (key: string, params?: Record<string, unknown>) => string
+const makeSnippets = (t: Translate): Record<string, string> => ({
+  bold: `\\textbf{${t('mb.ed.snBoldText')}}`,
+  italic: `\\textit{${t('mb.ed.snItalicText')}}`,
   math: '$\\alpha_i$',
-}
+})
 
 const SYMBOLS = ['α', 'β', 'γ', 'δ', 'ε', 'θ', 'λ', 'μ', 'π', 'σ', 'ω', '∑', '', '∫', '√', '≤', '≥', '≠', '≈', '∞', '∈', '⊂', '∀', '∃']
 
@@ -129,6 +133,7 @@ function Screen2_RichPreview({
   onLongPress: () => void
 }) {
   const { handlers, consumeClick } = useLongPress(onLongPress)
+  const t = useT()
 
   return (
     <div className="pl-preview-host" {...handlers} onClick={() => { consumeClick() }}>
@@ -139,7 +144,7 @@ function Screen2_RichPreview({
         <NoticeBar
           color="alert"
           wrap
-          content={`近似排版跳过了 ${result.warnings.length} 处，例如「${result.warnings[0]}」；以「编译」后的 PDF 为准。`}
+          content={t('mb.ed.approxSkipped', { n: result.warnings.length, example: result.warnings[0] })}
         />
       )}
       <PreviewPane
@@ -182,6 +187,8 @@ function OutlineSheet({
   onClose: () => void
   onJump: (offset: number) => void
 }) {
+  const t = useT()
+
   return (
     <Popup
       visible={visible}
@@ -194,14 +201,14 @@ function OutlineSheet({
     >
       <div className="pl-sheet">
         <div className="pl-sheet-head">
-          <span>大纲 · {headings.length} 节</span>
+          <span>{t('mb.ed.outlineTitle', { n: headings.length })}</span>
           <Button fill="none" size="small" onClick={onClose}>
-            收起
+            {t('mb.ed.outlineCollapse')}
           </Button>
         </div>
         <div className="pl-sheet-body">
           {headings.length === 0 ? (
-            <div style={{ padding: 16, color: 'var(--ink-faint)', fontSize: 12 }}>还没有 \\section，写了标题就能跳。</div>
+            <div style={{ padding: 16, color: 'var(--ink-faint)', fontSize: 12 }}>{t('mb.ed.outlineEmpty')}</div>
           ) : (
             <List>
               {headings.map((h, index) => (
@@ -247,6 +254,7 @@ function InsertSheet({
   const [category, setCategory] = useState(initialCategory)
   const [refKey, setRefKey] = useState('')
   const [grid, setGrid] = useState({ rows: 0, cols: 0 })
+  const t = useT()
 
   useEffect(() => {
     if (visible) setCategory(initialCategory)
@@ -262,14 +270,14 @@ function InsertSheet({
     '  \\centering',
     '  \\begin{tabular}{lrr}',
     '    \\toprule',
-    '    模型 & 准确率 & 提升 \\\\',
+    `    ${t('mb.ed.threeHead')} \\\\`,
     '    \\midrule',
     '  \\end{tabular}',
     '\\end{table}',
   ].join('\n')
 
   const tableSnippet = () => {
-    const head = Array.from({ length: grid.cols }, (_, i) => `列${i + 1}`).join(' & ')
+    const head = Array.from({ length: grid.cols }, (_, i) => t('sn.col', { n: i + 1 })).join(' & ')
     const body = Array.from({ length: grid.rows }, () => Array.from({ length: grid.cols }, () => '   ').join(' & ')).join(' \\\\\n    ')
     return `\\begin{tabular}{${'l'.repeat(grid.cols)}}\n    ${head} \\\\\n    ${body}\n\\end{tabular}`
   }
@@ -286,9 +294,9 @@ function InsertSheet({
     >
       <div className="pl-sheet">
         <div className="pl-sheet-head">
-          <span>插入到光标处</span>
+          <span>{t('mb.ed.insertTitle')}</span>
           <Button fill="none" size="small" onClick={onClose}>
-            取消
+            {t('dialog.cancel')}
           </Button>
         </div>
 
@@ -298,12 +306,12 @@ function InsertSheet({
             value={[category]}
             onChange={v => setCategory((v[0] as string) || 'format')}
             options={[
-              { label: '格式', value: 'format' },
-              { label: '公式', value: 'math' },
-              { label: '符号', value: 'symbols' },
-              { label: '引用', value: 'ref' },
-              { label: '表格', value: 'table' },
-              { label: '图表', value: 'figure' },
+              { label: t('mb.ed.catFormat'), value: 'format' },
+              { label: t('mb.ed.toolMath'), value: 'math' },
+              { label: t('mb.ed.toolSymbols'), value: 'symbols' },
+              { label: t('mb.ed.toolRef'), value: 'ref' },
+              { label: t('mb.ed.toolTable'), value: 'table' },
+              { label: t('mb.ed.toolFigure'), value: 'figure' },
             ]}
           />
         </div>
@@ -312,11 +320,11 @@ function InsertSheet({
           {category === 'format' && (
             <List>
               {[
-                { text: '一级标题 \\section', value: '\\section{标题}' },
-                { text: '二级标题 \\subsection', value: '\\subsection{标题}' },
-                { text: '三级标题 \\subsubsection', value: '\\subsubsection{标题}' },
-                { text: '下划线 \\underline', value: '\\underline{文字}' },
-                { text: '等宽 \\texttt', value: '\\texttt{code}' },
+                { text: t('mb.ed.insSection'), value: `\\section{${t('mb.ed.snTitle')}}` },
+                { text: t('mb.ed.insSubsection'), value: `\\subsection{${t('mb.ed.snTitle')}}` },
+                { text: t('mb.ed.insSubsubsection'), value: `\\subsubsection{${t('mb.ed.snTitle')}}` },
+                { text: t('mb.ed.insUnderline'), value: `\\underline{${t('mb.ed.snText')}}` },
+                { text: t('mb.ed.insMono'), value: '\\texttt{code}' },
               ].map(item => (
                 <List.Item key={item.value} clickable onClick={() => insert(item.value)}>
                   {item.text}
@@ -328,11 +336,11 @@ function InsertSheet({
           {category === 'math' && (
             <List>
               {[
-                { text: '行内公式 $…$', value: '$E=mc^2$' },
-                { text: '行间公式 equation', value: '\\begin{equation}\n  \n\\end{equation}' },
-                { text: '多行对齐 align', value: '\\begin{align}\n  a &= b \\\\\n  c &= d\n\\end{align}' },
-                { text: '分数 \\frac', value: '\\frac{a}{b}' },
-                { text: '根号 \\sqrt', value: '\\sqrt{x}' },
+                { text: t('mb.ed.insInlineMath'), value: '$E=mc^2$' },
+                { text: t('mb.ed.insEquation'), value: '\\begin{equation}\n  \n\\end{equation}' },
+                { text: t('mb.ed.insAlign'), value: '\\begin{align}\n  a &= b \\\\\n  c &= d\n\\end{align}' },
+                { text: t('mb.ed.insFrac'), value: '\\frac{a}{b}' },
+                { text: t('mb.ed.insSqrt'), value: '\\sqrt{x}' },
               ].map(item => (
                 <List.Item key={item.text} clickable onClick={() => insert(item.value)}>
                   {item.text}
@@ -348,7 +356,7 @@ function InsertSheet({
                   key={symbol}
                   type="button"
                   className="pl-sym"
-                  aria-label={`插入符号 ${symbol}`}
+                  aria-label={t('mb.ed.insertSymbol', { s: symbol })}
                   onClick={() => insert(`$${symbol}$`)}
                 >
                   {symbol}
@@ -360,24 +368,24 @@ function InsertSheet({
           {category === 'ref' && (
             <>
               <div style={{ margin: '8px 0' }}>
-                <Input placeholder="标签键，例如 sec:introduction" value={refKey} onChange={setRefKey} clearable enterKeyHint="done" />
+                <Input placeholder={t('mb.ed.refPlaceholder')} value={refKey} onChange={setRefKey} clearable enterKeyHint="done" />
               </div>
               <List>
                 {labels.length ? labels.map(label => (
                   <List.Item key={label} clickable onClick={() => insert(`\\ref{${label}}`)}>
-                    已有标签 · {label}
+                    {t('mb.ed.existingLabel', { label })}
                   </List.Item>
                 )) : (
-                  <List.Item>文档里还没有 \\label</List.Item>
+                  <List.Item>{t('mb.ed.noLabels')}</List.Item>
                 )}
               </List>
               {refKey.trim() && (
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                   <Button block fill="outline" size="small" onClick={() => insert(`\\label{${refKey.trim()}}`)}>
-                    插入 \label
+                    {t('mb.ed.insLabel')}
                   </Button>
                   <Button block color="primary" size="small" onClick={() => insert(`\\ref{${refKey.trim()}}`)}>
-                    插入 \ref
+                    {t('mb.ed.insRef')}
                   </Button>
                 </div>
               )}
@@ -387,7 +395,7 @@ function InsertSheet({
           {category === 'table' && (
             <>
               <div style={{ textAlign: 'center', color: 'var(--ink-soft)', fontSize: 12, margin: '8px 0' }}>
-                {grid.rows ? `${grid.rows} 行 × ${grid.cols} 列` : '点击格子选择行列数'}
+                {grid.rows ? t('q.tableSize', { rows: grid.rows, cols: grid.cols }) : t('mb.ed.pickCells')}
               </div>
               <div className="pl-cell-grid">
                 {Array.from({ length: 36 }, (_, index) => {
@@ -397,7 +405,7 @@ function InsertSheet({
                     <button
                       key={index}
                       type="button"
-                      aria-label={`${rows} 行 ${cols} 列`}
+                      aria-label={t('mb.ed.cellAria', { rows, cols })}
                       data-active={rows <= grid.rows && cols <= grid.cols}
                       onClick={() => setGrid({ rows, cols })}
                     />
@@ -406,10 +414,10 @@ function InsertSheet({
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 <Button block fill="outline" disabled={!grid.rows} onClick={() => insert(tableSnippet())}>
-                  插入普通表
+                  {t('mb.ed.insPlainTable')}
                 </Button>
                 <Button block color="primary" onClick={() => insert(booktabs)}>
-                  插入 booktabs 表
+                  {t('mb.ed.insBooktabs')}
                 </Button>
               </div>
             </>
@@ -418,11 +426,11 @@ function InsertSheet({
           {category === 'figure' && (
             <List>
               {[
-                { text: '插图 \\includegraphics', value: '\\includegraphics[width=0.9\\linewidth]{fig-arch.png}' },
-                { text: 'TikZ 流程图', value: '\\begin{tikzpicture}\n  \\node[block] (a) {开始};\n\\end{tikzpicture}' },
-                { text: 'Mermaid 图（仅网页预览）', value: '\\begin{mermaid}\nflowchart LR; A-->B;\n\\end{mermaid}' },
-                { text: '参考文献 \\cite', value: '\\cite{ref-key}' },
-                { text: '脚注 \\footnote', value: '\\footnote{说明}' },
+                { text: t('mb.ed.insFigure'), value: '\\includegraphics[width=0.9\\linewidth]{fig-arch.png}' },
+                { text: t('mb.ed.insTikz'), value: `\\begin{tikzpicture}\n  \\node[block] (a) {${t('sn.start')}};\n\\end{tikzpicture}` },
+                { text: t('mb.ed.insMermaid'), value: '\\begin{mermaid}\nflowchart LR; A-->B;\n\\end{mermaid}' },
+                { text: t('mb.ed.insCite'), value: '\\cite{ref-key}' },
+                { text: t('mb.ed.insFootnote'), value: `\\footnote{${t('mb.ed.snNote')}}` },
               ].map(item => (
                 <List.Item key={item.text} clickable onClick={() => insert(item.value)}>
                   {item.text}
@@ -444,6 +452,7 @@ export function Flow2_Workspace() {
   const { docId } = useParams()
   const ws = useMobileWorkspace()
   const keyboard = useKeyboardInset()
+  const t = useT()
 
   const [view, setView] = useState<'source' | 'rich'>('source')
   const [outlineOpen, setOutlineOpen] = useState(false)
@@ -516,20 +525,21 @@ export function Flow2_Workspace() {
   if (!tab || !tab.doc) {
     return (
       <div className="pl-screen">
-        <NavBar onBack={() => navigate('/m')}>工作区</NavBar>
+        <NavBar onBack={() => navigate('/m')}>{t('mb.ed.workspace')}</NavBar>
         <div className="pl-content" style={{ padding: 16, color: 'var(--ink-soft)' }}>
-          这篇稿件已经不在了，可能刚被关掉。回列表重新打开一篇。
+          {t('mb.ed.goneNote')}
         </div>
       </div>
     )
   }
 
-  const state = SAVE_STATE[ws.saveStateOf(tab)]
+  const saveState = ws.saveStateOf(tab)
+  const state = SAVE_STATE[saveState]
 
   const insertAtCaret = (text: string) => {
     const instance = cm()
     if (!instance) {
-      Toast.show({ content: '编辑器还没就绪', icon: 'fail' })
+      Toast.show({ content: t('mb.ed.editorNotReady'), icon: 'fail' })
       return
     }
     instance.replaceSelection(text, 'around')
@@ -550,12 +560,13 @@ export function Flow2_Workspace() {
   }
 
   const runTool = (id: string) => {
+    const snippets = makeSnippets(t)
     const instance = cm()
     if (id === 'undo') { instance?.undo(); return }
     if (id === 'redo') { instance?.redo(); return }
     if (id === 'outline') { setOutlineOpen(true); return }
     if (id === 'compile') { navigate(`/m/compile/${tab.id}`); return }
-    if (SNIPPETS[id]) { insertAtCaret(SNIPPETS[id]); return }
+    if (snippets[id]) { insertAtCaret(snippets[id]); return }
     setInsertCategory(id)
     setInsertOpen(true)
   }
@@ -567,10 +578,10 @@ export function Flow2_Workspace() {
         right={
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Button color="primary" size="mini" onClick={() => navigate(`/m/compile/${tab.id}`)}>
-              编译
+              {t('mb.ed.toolCompile')}
             </Button>
             {/* 桌面菜单栏在移动端整体降级为 ⋯ Action Sheet */}
-            <Button fill="none" size="mini" aria-label="更多操作" onClick={() => setMoreOpen(true)}>
+            <Button fill="none" size="mini" aria-label={t('mb.ed.moreActions')} onClick={() => setMoreOpen(true)}>
               <MoreOutline />
             </Button>
           </span>
@@ -579,7 +590,7 @@ export function Flow2_Workspace() {
         <span className="pl-nav-title">
           <span className="pl-nav-name">{tab.name}</span>
           <Tag color={state.color} fill="outline">
-            {state.text}
+            {t(state.textKey)}
           </Tag>
         </span>
       </NavBar>
@@ -588,8 +599,8 @@ export function Flow2_Workspace() {
         value={view}
         onChange={v => setView(v as 'source' | 'rich')}
         options={[
-          { label: VIEW_LABEL.source, value: 'source' },
-          { label: VIEW_LABEL.rich, value: 'rich' },
+          { label: t(VIEW_LABEL.source), value: 'source' },
+          { label: t(VIEW_LABEL.rich), value: 'rich' },
         ]}
         style={{ margin: '8px 12px', '--segmented-background': 'var(--chrome)' } as CSSProperties}
       />
@@ -598,7 +609,7 @@ export function Flow2_Workspace() {
         <NoticeBar
           color="alert"
           wrap
-          content={`${issues.filter(i => i.severity === 'error').length} 个错误会影响真实编译，可点「编译」查看逐错跳行。`}
+          content={t('mb.ed.errNotice', { n: issues.filter(i => i.severity === 'error').length })}
         />
       )}
 
@@ -609,9 +620,9 @@ export function Flow2_Workspace() {
       <div className="pl-toolbelt" data-keyboard={keyboard > 0}>
         <div className="pl-scroll-x">
           {TOOLS.map(tool => (
-            <button key={tool.id} type="button" className="pl-tool" aria-label={tool.label} onClick={() => runTool(tool.id)}>
+            <button key={tool.id} type="button" className="pl-tool" aria-label={t(tool.key)} onClick={() => runTool(tool.id)}>
               {tool.icon}
-              <span>{tool.label}</span>
+              <span>{t(tool.key)}</span>
             </button>
           ))}
         </div>
@@ -631,21 +642,21 @@ export function Flow2_Workspace() {
       <ActionSheet
         visible={previewMenu}
         onClose={() => setPreviewMenu(false)}
-        cancelText="取消"
+        cancelText={t('dialog.cancel')}
         extra={
           <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--ink-soft)' }} className="pl-num">
-            {value.split('\n').length} 行 · {formatWords(wordCount(value).total)}
+            {t('mb.ed.lineInfo', { n: value.split('\n').length, w: formatWords(wordCount(value).total) })}
           </div>
         }
         actions={[
           {
             key: 'edit',
-            text: <span><EditSOutline /> 回到源码继续改</span>,
+            text: <span><EditSOutline /> {t('mb.ed.backToSource')}</span>,
             onClick: () => { setPreviewMenu(false); setView('source') },
           },
           {
             key: 'outline',
-            text: <span><UnorderedListOutline /> 看大纲跳段</span>,
+            text: <span><UnorderedListOutline /> {t('mb.ed.viewOutlineJump')}</span>,
             onClick: () => { setPreviewMenu(false); setOutlineOpen(true) },
           },
         ]}
@@ -655,12 +666,12 @@ export function Flow2_Workspace() {
       <ActionSheet
         visible={moreOpen}
         onClose={() => setMoreOpen(false)}
-        cancelText="取消"
+        cancelText={t('dialog.cancel')}
         extra={<div style={{ textAlign: 'center' }}>{tab.name}</div>}
         actions={[
           {
             key: 'save',
-            text: <span><CheckOutline /> 保存</span>,
+            text: <span><CheckOutline /> {t('m.save')}</span>,
             onClick: () => {
               setMoreOpen(false)
               ws.saveActive()
@@ -668,7 +679,7 @@ export function Flow2_Workspace() {
           },
           {
             key: 'history',
-            text: <span><ClockCircleOutline /> 版本历史</span>,
+            text: <span><ClockCircleOutline /> {t('mb.ed.history')}</span>,
             onClick: () => {
               setMoreOpen(false)
               navigate(`/m/history/${tab.id}`)
@@ -676,7 +687,7 @@ export function Flow2_Workspace() {
           },
           {
             key: 'ai',
-            text: <span><MessageOutline /> AI 助手</span>,
+            text: <span><MessageOutline /> {t('m.aiAssistant')}</span>,
             onClick: () => {
               setMoreOpen(false)
               navigate('/m/chat')
@@ -686,7 +697,7 @@ export function Flow2_Workspace() {
           // 把同一份提示词（共享 chatContext）挂在这里，语法问题也能一键带去对话
           ...(issues.length ? [{
             key: 'aifix',
-            text: <span><ExclamationTriangleOutline /> AI 修 {issues.length} 处语法</span>,
+            text: <span><ExclamationTriangleOutline /> {t('mb.ed.aiFixCount', { n: issues.length })}</span>,
             onClick: () => {
               setMoreOpen(false)
               ws.sendChatInject(aiFixIssuePrompt({ issues: issues.slice(0, 20), lines: value.split('\n') }))
@@ -695,14 +706,14 @@ export function Flow2_Workspace() {
           }] : []),
           {
             key: 'export',
-            text: '导出源码备份',
+            text: t('mb.ed.exportBackup'),
             onClick: () => {
               setMoreOpen(false)
               Dialog.confirm({
-                title: '导出这篇稿件？',
-                content: '会下载当前源码为 .tex，避免浏览器数据被清时丢稿。',
-                confirmText: '导出',
-                cancelText: '取消',
+                title: t('mb.ed.exportTitle'),
+                content: t('mb.ed.exportContent'),
+                confirmText: t('mb.ed.export'),
+                cancelText: t('dialog.cancel'),
                 onConfirm: () => {
                   const blob = new Blob([value], { type: 'text/plain;charset=utf-8' })
                   const url = URL.createObjectURL(blob)

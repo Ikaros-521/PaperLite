@@ -27,10 +27,11 @@ import { wordCount } from '../../fileActions.js'
  * vite.config.js 是 base: './'（要支持 dist 双击打开与 Electron file://），
  * 且 server.mjs 只兜 API，没有 SPA fallback —— 真路径 /m/workspace/d1 刷新即 404。
  */
+// 标签文字存键名：语言运行时可切换，模块顶层不能调用 t()
 const TABS = [
-  { key: '/m', title: '文稿', icon: <FileOutline /> },
-  { key: '/m/chat', title: 'AI', icon: <MessageOutline /> },
-  { key: '/m/settings', title: '设置', icon: <SetOutline /> },
+  { key: '/m', titleKey: 'mb.sh.tabDocs', icon: <FileOutline /> },
+  { key: '/m/chat', titleKey: 'mb.sh.tabAi', icon: <MessageOutline /> },
+  { key: '/m/settings', titleKey: 'mb.sh.tabSettings', icon: <SetOutline /> },
 ]
 
 /** 全屏工作区不吃 TabBar：底部再挂 50px 会把工具带顶到键盘之上 */
@@ -85,13 +86,13 @@ function ChatTab() {
         <NavBar back={null}>{ws.t('chat.title')}</NavBar>
         <div className="pl-content" style={{ textAlign: 'center', padding: '32px 16px' }}>
           {/* Empty 不接受 children，CTA 放外层 div */}
-          <Empty description={recent ? '当前打开的那篇不是文字稿，切回一篇再聊' : '先建一篇稿子，再让 AI 改'} />
+          <Empty description={recent ? ws.t('mb.sh.notTextDoc') : ws.t('mb.sh.needDoc')} />
           <div style={{ marginTop: 16 }}>
             <Button
               color="primary"
               onClick={() => {
                 if (!recent) {
-                  const tab = ws.addDraft('对话草稿.tex')
+                  const tab = ws.addDraft(ws.t('mb.sh.chatDraftName'))
                   navigate(`/m/workspace/${tab.id}`)
                   return
                 }
@@ -99,7 +100,7 @@ function ChatTab() {
                 navigate(`/m/workspace/${recent.id}`)
               }}
             >
-              {recent ? '继续改最近那篇' : '新建一篇再改'}
+              {recent ? ws.t('mb.sh.continueRecent') : ws.t('mb.sh.newDraftFirst')}
             </Button>
           </div>
         </div>
@@ -137,13 +138,16 @@ function SettingsTab() {
   type Channel = { id: string; name?: string; chatModel?: string }
   const list = ws.channels as Channel[]
   const activeChannel = list.filter(c => c.id === ws.activeChannelId)[0] || list[0] || null
+  // labels.ts 存的是键名，渲染时才翻译
+  const engineName = ws.t(ENGINE_LABEL[ws.engine as keyof typeof ENGINE_LABEL] || 'mb.sh.engineUnknown')
+  const engineState = ws.t(ENGINE_STATUS_LABEL[ws.builtinStatus] || 'mb.sh.engineUnknown')
   return (
     <div className="pl-screen">
-      <NavBar back={null}>设置</NavBar>
+      <NavBar back={null}>{ws.t('mb.sh.tabSettings')}</NavBar>
       <div className="pl-content">
-        <List header="外观与语言">
+        <List header={ws.t('mb.sh.groupAppearance')}>
           <List.Item>
-            <div style={{ marginBottom: 8 }}>皮肤</div>
+            <div style={{ marginBottom: 8 }}>{ws.t('m.theme')}</div>
             <Selector
               columns={2}
               value={[theme]}
@@ -157,12 +161,12 @@ function SettingsTab() {
             />
           </List.Item>
           <List.Item>
-            <div style={{ marginBottom: 8 }}>界面语言</div>
+            <div style={{ marginBottom: 8 }}>{ws.t('mb.sh.langLabel')}</div>
             <Selector
               value={[ws.lang]}
               onChange={v => {
                 ws.setLang(String(v[0] || 'zh'))
-                Toast.show({ content: '界面文案已切换；引擎告警同步换语言', icon: 'success' })
+                Toast.show({ content: ws.t('mb.sh.langSwitched'), icon: 'success' })
               }}
               options={[
                 { label: '中文', value: 'zh' },
@@ -171,40 +175,38 @@ function SettingsTab() {
             />
           </List.Item>
         </List>
-        <List header="界面形态">
+        <List header={ws.t('mb.sh.groupUi')}>
           {/* 与桌面「手机版」对称：改 hash 后 reload，让 main.jsx 重新决定渲染哪棵树 */}
           <List.Item
             clickable
             arrowIcon
-            extra="回到三栏工作台"
+            extra={ws.t('mb.sh.toDesktopHint')}
             onClick={() => {
               window.location.hash = '#/'
               window.location.reload()
             }}
           >
-            切换到桌面版
+            {ws.t('mb.sh.toDesktop')}
           </List.Item>
         </List>
-        <List header="编译">
-          <List.Item clickable arrowIcon extra={ENGINE_LABEL[ws.engine as keyof typeof ENGINE_LABEL] || ws.engine} onClick={() => navigate('/m/offline')}>
-            默认引擎
+        <List header={ws.t('mb.sh.groupCompile')}>
+          <List.Item clickable arrowIcon extra={engineName} onClick={() => navigate('/m/offline')}>
+            {ws.t('mb.sh.defaultEngine')}
           </List.Item>
-          <List.Item extra={ENGINE_STATUS_LABEL[ws.builtinStatus] || ws.builtinStatus}>
-            内置引擎状态
-          </List.Item>
+          <List.Item extra={engineState}>{ws.t('mb.sh.engineState')}</List.Item>
           {/* 应用侧没有清理 wasm 资源的入口，只能如实说明首次编译的下载量 */}
-          <List.Item extra={<Tag fill="outline">首次编译约 98 MB</Tag>}>内置 TeX 资源</List.Item>
+          <List.Item extra={<Tag fill="outline">{ws.t('mb.sh.texAssetsSize')}</Tag>}>{ws.t('mb.sh.texAssets')}</List.Item>
         </List>
-        <List header="AI">
+        <List header={ws.t('mb.sh.groupAi')}>
           <List.Item
             clickable
             arrowIcon
-            extra={activeChannel ? `${activeChannel.name} · ${activeChannel.chatModel || ws.t('chat.noModel')}` : '未配置'}
+            extra={activeChannel ? `${activeChannel.name} · ${activeChannel.chatModel || ws.t('chat.noModel')}` : ws.t('mb.sh.notConfigured')}
             onClick={ws.openSettings}
           >
-            渠道与密钥
+            {ws.t('mb.sh.channels')}
           </List.Item>
-          <List.Item clickable arrowIcon extra={ws.activeTab?.doc ? '打开对话' : '先建一篇稿子'} onClick={() => navigate('/m/chat')}>
+          <List.Item clickable arrowIcon extra={ws.activeTab?.doc ? ws.t('mb.sh.openChat') : ws.t('mb.sh.needDoc')} onClick={() => navigate('/m/chat')}>
             {ws.t('chat.title')}
           </List.Item>
         </List>
@@ -245,7 +247,7 @@ function MobileShell() {
           <div style={{ flex: 'none', borderTop: '1px solid var(--line)' }}>
             <TabBar activeKey={activeKey} onChange={key => navigate(key)}>
               {TABS.map(tab => (
-                <TabBar.Item key={tab.key} icon={tab.icon} title={tab.title} />
+                <TabBar.Item key={tab.key} icon={tab.icon} title={ws.t(tab.titleKey)} />
               ))}
             </TabBar>
             <SafeArea position="bottom" />

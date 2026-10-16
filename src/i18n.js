@@ -2,11 +2,13 @@
  * 纯模块，不依赖 React —— 引擎（linter/llm）与 Node 测试可直接 import。
  * React 侧的 Context/Hook 见 useI18n.js。
  * 约定：DICT[lang][key] 缺失时回退 zh，再回退 key 本身；
- *       文案支持 {name} 占位插值。 */
+ *       文案支持 {name} 占位插值。
+ * 移动端各 flow 的文案在 flows/mobile/i18n 里分文件维护，启动时合并进 DICT。 */
+
+import { MOBILE_DICT } from './flows/mobile/i18n/index.js';
 
 export const LS_LANG = 'paperlite.lang';
 export const LANGS = ['zh', 'en'];
-
 export function detectLang() {
   try {
     const s = localStorage.getItem(LS_LANG);
@@ -865,6 +867,10 @@ export const DICT = {
     'diag.noLine': 'This error carries no source line — expand the full log to locate it', 'diag.jump': 'Click to jump to the line'
   }
 };
+
+// 移动端各 flow 的文案单独维护（见 flows/mobile/i18n），主词典不再继续膨胀
+Object.assign(DICT.zh, MOBILE_DICT.zh);
+Object.assign(DICT.en, MOBILE_DICT.en);
 
 // 取文案：en 缺失回退 zh，zh 也缺失回退 key；{x} 占位插值
 export function tr(lang, key, params) {

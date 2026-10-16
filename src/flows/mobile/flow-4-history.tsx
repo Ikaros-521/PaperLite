@@ -33,9 +33,10 @@ import {
   RightOutline,
 } from 'antd-mobile-icons'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useT } from '../../useI18n.js'
 import { formatBytes, formatRelative } from './shared/format'
 import { useLongPress, useNetworkState } from './shared/hooks'
-import { DIFF_LAYOUT_LABEL, ENGINE_LABEL, ENGINE_STATUS_LABEL, REASON_LABEL } from './shared/labels'
+import { DIFF_LAYOUT_LABEL, ENGINE_LABEL, ENGINE_STATUS_LABEL, reasonKey } from './shared/labels'
 import { readHistory, historyUsage, recordVersion, renameVersion, deleteHistory } from '../../historyStorage.js'
 import { compareVersions } from '../../historyDiff.js'
 import { useMobileWorkspace, type MobileTab } from './mobileWorkspace'
@@ -52,6 +53,7 @@ function VersionRow({
   onCompare: (id: string) => void
   onLongPress: (version: { id: string; date: number; label: string; reason: string }) => void
 }) {
+  const t = useT()
   const { handlers, consumeClick } = useLongPress(() => onLongPress(version))
 
   return (
@@ -64,10 +66,10 @@ function VersionRow({
       }}
     >
       <div className="pl-doc-main">
-        <div className="pl-doc-name">{version.label || REASON_LABEL[version.reason] || version.reason}</div>
+        <div className="pl-doc-name">{version.label || t(reasonKey(version.reason))}</div>
         <div className="pl-doc-meta pl-num">
           <span>{formatRelative(version.date)}</span>
-          {version.reason !== 'auto' && <Tag fill="outline">手动</Tag>}
+          {version.reason !== 'auto' && <Tag fill="outline">{t('mb.hist.manual')}</Tag>}
         </div>
       </div>
       <RightOutline style={{ color: 'var(--ink-faint)' }} />
@@ -97,6 +99,7 @@ function Screen1_HistorySheet({
   onCompare: (id: string) => void
   onVersionAction: (version: { id: string; date: number; text: string; label: string; reason: string }) => void
 }) {
+  const t = useT()
   const percent = usage.maxBytes ? Math.min(100, Math.round((usage.bytes / usage.maxBytes) * 100)) : 0
   const today = versions.filter(v => Date.now() - v.date < DAY)
   const earlier = versions.filter(v => Date.now() - v.date >= DAY)
@@ -111,16 +114,16 @@ function Screen1_HistorySheet({
     >
       <div className="pl-sheet">
         <div className="pl-sheet-head">
-          <span>版本历史 · {usage.fileVersions} 个快照</span>
+          <span>{t('mb.hist.sheetTitle', { n: usage.fileVersions })}</span>
           <Button fill="none" size="small" onClick={onBack}>
-            返回
+            {t('mb.hist.back')}
           </Button>
         </div>
 
         {/* 配额可见：单文件 20 个 / 全站 200 个 / 100 万字符，接近上限要提前说 */}
         <div style={{ padding: '12px 16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}>
-            <span style={{ color: 'var(--ink-soft)' }}>本机历史占用</span>
+            <span style={{ color: 'var(--ink-soft)' }}>{t('mb.hist.storageLocal')}</span>
             <span className="pl-num" style={{ color: 'var(--ink-soft)' }}>
               {formatBytes(usage.bytes)} / {formatBytes(usage.maxBytes)}
             </span>
@@ -128,7 +131,7 @@ function Screen1_HistorySheet({
           <ProgressBar percent={percent} />
           {percent > 60 && (
             <div style={{ marginTop: 8, fontSize: 11, color: 'var(--seal-deep)' }}>
-              已用 {percent}%，超出上限后较早的自动快照会被清理。重要节点建议手动命名留存。
+              {t('mb.hist.quotaWarn', { n: percent })}
             </div>
           )}
         </div>
@@ -136,15 +139,15 @@ function Screen1_HistorySheet({
         <div className="pl-sheet-body">
           {versions.length === 0 ? (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--ink-soft)', fontSize: 13 }}>
-              还没有快照。编辑满几秒会自动存一版，重要节点可在 ⋯ 里手动命名。
+              {t('mb.hist.emptySnapshots')}
             </div>
           ) : (
             <>
-              {today.length > 0 && <div className="pl-group-head">今天</div>}
+              {today.length > 0 && <div className="pl-group-head">{t('mb.hist.today')}</div>}
               {today.map(version => (
                 <VersionRow key={version.id} version={version} onCompare={onCompare} onLongPress={onVersionAction} />
               ))}
-              {earlier.length > 0 && <div className="pl-group-head">更早 · {earlier.length} 个</div>}
+              {earlier.length > 0 && <div className="pl-group-head">{t('mb.hist.earlier', { n: earlier.length })}</div>}
               {earlier.map(version => (
                 <VersionRow key={version.id} version={version} onCompare={onCompare} onLongPress={onVersionAction} />
               ))}
@@ -183,13 +186,14 @@ function Screen2_Diff({
   onBack: () => void
   onRestore: () => void
 }) {
+  const t = useT()
   // 与桌面 HistoryDialog 同一份 diff 计算（diff 包的 diffLines + 阈值保护）
   const diff = compareVersions(version.text, current)
 
   return (
     <div className="pl-screen">
       <NavBar onBack={onBack}>
-        <span className="pl-nav-name">对比 {formatRelative(version.date)}</span>
+        <span className="pl-nav-name">{t('mb.hist.compareNav', { time: formatRelative(version.date) })}</span>
       </NavBar>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--chrome)' }}>
@@ -197,8 +201,8 @@ function Screen2_Diff({
           value={layout}
           onChange={v => onLayoutChange(v as 'inline' | 'side')}
           options={[
-            { label: DIFF_LAYOUT_LABEL.inline, value: 'inline' },
-            { label: DIFF_LAYOUT_LABEL.side, value: 'side' },
+            { label: t(DIFF_LAYOUT_LABEL.inline), value: 'inline' },
+            { label: t(DIFF_LAYOUT_LABEL.side), value: 'side' },
           ]}
         />
         <span className="pl-num" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--ink-soft)' }}>
@@ -209,7 +213,7 @@ function Screen2_Diff({
 
       {diff.tooLarge ? (
         <div className="pl-content" style={{ padding: 16, color: 'var(--ink-soft)', fontSize: 13 }}>
-          两版差异过大（超过 10000 行 / 50 万字符），移动端不做逐行比对。回桌面端的历史面板看完整对照。
+          {t('mb.hist.diffTooLarge')}
         </div>
       ) : layout === 'inline' ? (
         /* 桌面是 1400px 双栏并排；390px 下每栏只剩 170px，公式与中文都会挤断行，故默认行内 */
@@ -230,8 +234,8 @@ function Screen2_Diff({
       ) : (
         <div className="pl-content pl-diff">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '8px' }}>
-            <div style={{ color: 'var(--ink-faint)', fontSize: 11 }}>改动前</div>
-            <div style={{ color: 'var(--ink-faint)', fontSize: 11 }}>改动后</div>
+            <div style={{ color: 'var(--ink-faint)', fontSize: 11 }}>{t('mb.hist.before')}</div>
+            <div style={{ color: 'var(--ink-faint)', fontSize: 11 }}>{t('mb.hist.after')}</div>
             {diff.rows.map((row, index) => (
               <div key={index} style={{ display: 'contents' }}>
                 <div
@@ -260,7 +264,7 @@ function Screen2_Diff({
             ))}
           </div>
           <div style={{ padding: '0 8px 8px', fontSize: 11, color: 'var(--ink-faint)' }}>
-            并排视图每栏约 170px，长行会折很多截；需要精确比对时切回行内。
+            {t('mb.hist.sideHint')}
           </div>
         </div>
       )}
@@ -268,10 +272,10 @@ function Screen2_Diff({
       <div className="pl-toolbelt">
         <div style={{ display: 'flex', gap: 8, padding: 12 }}>
           <Button block fill="outline" onClick={onBack}>
-            取消
+            {t('dialog.cancel')}
           </Button>
           <Button block color="primary" size="large" disabled={diff.added + diff.removed === 0} onClick={onRestore}>
-            恢复此版本
+            {t('mb.hist.restoreThis')}
           </Button>
         </div>
       </div>
@@ -299,6 +303,7 @@ export function Screen4_RestoreBanner({
   onRestore: () => void
   onDiscard: () => void
 }) {
+  const t = useT()
   return (
     <div
       style={{
@@ -311,17 +316,17 @@ export function Screen4_RestoreBanner({
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
         <GlobalOutline />
-        <span>这台浏览器里留着 {prompt.pendingTabs.length} 篇未落盘草稿</span>
+        <span>{t('mb.hist.draftBanner', { n: prompt.pendingTabs.length, p: prompt.pendingTabs.length > 1 ? 's' : '' })}</span>
       </div>
       <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-soft)', lineHeight: 1.7 }}>
-        它们已自动恢复成标签，但只存在本机浏览器：清数据或 iOS 长期未访问会被系统回收，也不会同步到电脑。
+        {t('mb.hist.draftNote')}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <Button className="pl-min-touch" size="small" fill="outline" onClick={onDiscard}>
-          知道了
+          {t('mb.hist.gotIt')}
         </Button>
         <Button className="pl-min-touch" size="small" color="primary" onClick={onRestore}>
-          打开最近一篇
+          {t('mb.hist.openLatest')}
         </Button>
       </div>
     </div>
@@ -341,6 +346,7 @@ export function Screen4_RestoreBanner({
 export function Screen5_OfflineState() {
   const navigate = useNavigate()
   const ws = useMobileWorkspace()
+  const t = useT()
   const network = useNetworkState()
   const [checking, setChecking] = useState(false)
   const local = ws.engines.filter(name => name !== 'builtin')
@@ -350,7 +356,7 @@ export function Screen5_OfflineState() {
     if (!checking) return
     const timer = window.setTimeout(() => {
       setChecking(false)
-      Toast.show({ content: '仍未检测到 TeX 服务，可先用近似排版继续写', icon: 'fail' })
+      Toast.show({ content: t('mb.hist.recheckFailed'), icon: 'fail' })
     }, 1500)
     return () => clearTimeout(timer)
   }, [checking])
@@ -358,52 +364,52 @@ export function Screen5_OfflineState() {
   return (
     <div className="pl-screen">
       <NavBar back={null}>
-        <span className="pl-nav-name">真实排版暂不可用</span>
+        <span className="pl-nav-name">{t('mb.hist.realUnavailable')}</span>
       </NavBar>
 
       {network === 'offline' && (
-        <NoticeBar color="alert" content="当前离线：可继续编辑与近似排版预览，编译与云端项目需要网络。" />
+        <NoticeBar color="alert" content={t('mb.hist.offlineNotice')} />
       )}
 
       <div className="pl-content" style={{ padding: 12 }}>
-        <List header="引擎状态">
+        <List header={t('mb.hist.engineStatus')}>
           <List.Item
             prefix={<span style={{ color: ws.builtinStatus === 'error' ? 'var(--seal)' : 'var(--ok)' }}>●</span>}
-            extra={<Tag fill="outline">{ENGINE_STATUS_LABEL[ws.builtinStatus] || ws.builtinStatus}</Tag>}
-            title={ENGINE_LABEL.builtin}
-            description={<span style={{ whiteSpace: 'normal' }}>浏览器内 wasm；首次编译需预热约 98 MB 资源，之后可离线</span>}
+            extra={<Tag fill="outline">{t(ENGINE_STATUS_LABEL[ws.builtinStatus] || ws.builtinStatus)}</Tag>}
+            title={t(ENGINE_LABEL.builtin)}
+            description={<span style={{ whiteSpace: 'normal' }}>{t('mb.hist.builtinDesc')}</span>}
           />
           {local.map(name => (
             <List.Item
               key={name}
               prefix={<span style={{ color: 'var(--ok)' }}>●</span>}
-              extra={<Tag fill="outline">可用</Tag>}
-              title={ENGINE_LABEL[name as keyof typeof ENGINE_LABEL] || name}
-              description={<span style={{ whiteSpace: 'normal' }}>来自本机 TeX 服务（server.mjs /api/health）</span>}
+              extra={<Tag fill="outline">{t('mb.hist.available')}</Tag>}
+              title={t(ENGINE_LABEL[name as keyof typeof ENGINE_LABEL] || name)}
+              description={<span style={{ whiteSpace: 'normal' }}>{t('mb.hist.localEngineDesc')}</span>}
             />
           ))}
           {local.length === 0 && (
             <List.Item
               prefix={<ExclamationTriangleOutline style={{ color: 'var(--seal)' }} />}
-              extra={<Tag fill="outline">未检测到</Tag>}
-              title="本机 XeLaTeX"
-              description={<span style={{ whiteSpace: 'normal' }}>手机连不到跑着 PaperLite 服务的电脑时，只能用内置 wasm 引擎</span>}
+              extra={<Tag fill="outline">{t('mb.hist.notDetected')}</Tag>}
+              title={t('mb.hist.localXelatex')}
+              description={<span style={{ whiteSpace: 'normal' }}>{t('mb.hist.localEngineHint')}</span>}
             />
           )}
         </List>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
           <Button block fill="outline" onClick={() => setChecking(true)} disabled={checking}>
-            <LoopOutline /> 重新检测
+            <LoopOutline /> {t('mb.hist.recheck')}
           </Button>
           <Button block color="primary" onClick={() => navigate('/m')}>
-            仅编辑，继续写
+            {t('mb.hist.editOnly')}
           </Button>
         </div>
 
         {checking && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: 'var(--ink-soft)' }}>
-            <SpinLoading color="primary" /> 正在探测本机 TeX 服务…
+            <SpinLoading color="primary" /> {t('mb.hist.probing')}
           </div>
         )}
       </div>
@@ -419,6 +425,7 @@ export function Flow4_History() {
   const navigate = useNavigate()
   const { docId } = useParams()
   const ws = useMobileWorkspace()
+  const t = useT()
 
   const [stage, setStage] = useState<'list' | 'diff'>('list')
   const [versionId, setVersionId] = useState<string | null>(null)
@@ -442,10 +449,10 @@ export function Flow4_History() {
     return (
       <div className="pl-screen">
         <NavBar onBack={() => navigate('/m')}>
-          <span className="pl-nav-name">版本历史</span>
+          <span className="pl-nav-name">{t('mb.hist.title')}</span>
         </NavBar>
         <div className="pl-content" style={{ padding: 16, color: 'var(--ink-soft)' }}>
-          这篇稿件已经不在了，回列表重新打开一篇再看历史。
+          {t('mb.hist.docMissing')}
         </div>
       </div>
     )
@@ -454,10 +461,10 @@ export function Flow4_History() {
   if (stage === 'diff' && version) {
     const restore = () => {
       Dialog.confirm({
-        title: '恢复到这个版本？',
-        content: '当前内容会先存为一个新快照（标记为「恢复前快照」），再被这个版本覆盖。手机端撤销空间有限，确认后再操作。',
-        confirmText: '恢复',
-        cancelText: '取消',
+        title: t('mb.hist.restoreTitle'),
+        content: t('mb.hist.restoreBody'),
+        confirmText: t('mb.hist.restoreConfirm'),
+        cancelText: t('dialog.cancel'),
         onConfirm: () => {
           recordVersion(tab.historyKey, current, { reason: 'beforeRestore', force: true })
           const result = recordVersion(tab.historyKey, version.text, { reason: 'restore', label: version.label, force: true })
@@ -465,7 +472,7 @@ export function Flow4_History() {
           setStage('list')
           setTick(t => t + 1)
           Toast.show({
-            content: result.ok ? '已恢复，当前内容已存为快照' : '已恢复，但快照写入失败（浏览器存储可能已满）',
+            content: result.ok ? t('mb.hist.restoredOk') : t('mb.hist.restoredFail'),
             icon: result.ok ? 'success' : 'fail',
           })
         },
@@ -491,7 +498,7 @@ export function Flow4_History() {
       </NavBar>
       <div className="pl-content" style={{ padding: 12, background: 'var(--desk)' }}>
         <div className="pl-paper" style={{ margin: 0, opacity: 0.4, pointerEvents: 'none' }}>
-          <p>工作区残影 · 历史 Sheet 不离开当前文档</p>
+          <p>{t('mb.hist.workspaceGhost')}</p>
         </div>
       </div>
 
@@ -509,7 +516,7 @@ export function Flow4_History() {
       <ActionSheet
         visible={actionVersion !== null}
         onClose={() => setActionVersion(null)}
-        cancelText="取消"
+        cancelText={t('dialog.cancel')}
         extra={
           <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--ink-soft)' }}>
             {actionVersion ? formatRelative(actionVersion.date) : ''}
@@ -520,32 +527,33 @@ export function Flow4_History() {
             ? [
                 {
                   key: 'rename',
-                  text: <span><EditSOutline /> 重命名版本</span>,
+                  text: <span><EditSOutline /> {t('mb.hist.rename')}</span>,
                   onClick: () => {
                     const target = actionVersion
                     setActionVersion(null)
                     let next = target.label
                     Dialog.show({
-                      title: '版本命名',
+                      title: t('mb.hist.renameDialogTitle'),
                       content: (
                         <RenameInput
                           initial={target.label}
+                          placeholder={t('mb.hist.renamePlaceholder')}
                           onChange={value => { next = value }}
                         />
                       ),
                       closeOnAction: true,
                       actions: [
                         [
-                          { key: 'cancel', text: '取消' },
+                          { key: 'cancel', text: t('dialog.cancel') },
                           {
                             key: 'ok',
-                            text: '保存',
+                            text: t('m.save'),
                             bold: true,
                             onClick: () => {
                               // 手动命名后不会被自动清理（对齐 renameVersion 的 protectIds 语义）
                               renameVersion(tab.historyKey, target.id, next)
                               setTick(t => t + 1)
-                              Toast.show({ content: '已命名', icon: 'success' })
+                              Toast.show({ content: t('mb.hist.renamed'), icon: 'success' })
                             },
                           },
                         ],
@@ -555,20 +563,20 @@ export function Flow4_History() {
                 },
                 {
                   key: 'delete',
-                  text: <span><DeleteOutline /> 删除此快照</span>,
+                  text: <span><DeleteOutline /> {t('mb.hist.delete')}</span>,
                   danger: true,
                   onClick: () => {
                     const target = actionVersion
                     setActionVersion(null)
                     Dialog.confirm({
-                      title: '删除这个快照？',
-                      content: '只删这一份历史，当前稿件内容不受影响。删除后无法找回。',
-                      confirmText: '删除',
-                      cancelText: '取消',
+                      title: t('mb.hist.deleteTitle'),
+                      content: t('mb.hist.deleteBody'),
+                      confirmText: t('mb.hist.deleteConfirm'),
+                      cancelText: t('dialog.cancel'),
                       onConfirm: () => {
                         deleteHistory(tab.historyKey, target.id)
                         setTick(t => t + 1)
-                        Toast.show({ content: '已删除该快照' })
+                        Toast.show({ content: t('mb.hist.deleted') })
                       },
                     })
                   },
@@ -581,13 +589,24 @@ export function Flow4_History() {
   )
 }
 
-/** Dialog.show 的内容脱离父组件渲染，需自带状态再把值回传给闭包 */
-function RenameInput({ initial, onChange }: { initial: string; onChange: (value: string) => void }) {
+/**
+ * Dialog.show 的内容脱离父组件渲染（独立 React 根，取不到 LangContext），
+ * 需自带状态再把值回传给闭包；文案由父组件翻译后经 placeholder 传入。
+ */
+function RenameInput({
+  initial,
+  placeholder,
+  onChange,
+}: {
+  initial: string
+  placeholder: string
+  onChange: (value: string) => void
+}) {
   const [value, setValue] = useState(initial)
   return (
     <input
       value={value}
-      placeholder="例如：导师批注前"
+      placeholder={placeholder}
       onChange={e => {
         setValue(e.target.value)
         onChange(e.target.value)
