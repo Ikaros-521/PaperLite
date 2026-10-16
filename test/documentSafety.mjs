@@ -8,6 +8,13 @@ import { tourStepsFor, shouldWelcome, dismissWelcome } from '../src/tour.js';
 
 const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
 const extract = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start)));
+// 标签/草稿数据层已抽到 src/workspace/tabModel.js，测试直接切那份真实实现（去掉 import 行后可在 vm 里跑）
+const tabModelBody = readFileSync(new URL('../src/workspace/tabModel.js', import.meta.url), 'utf8')
+  .split('\n').filter(line => !line.startsWith('import ')).join('\n').replace(/^export /gm, '');
+const modelWith = sandbox => vm.runInNewContext(
+  tabModelBody + '\n({ makeTab, readDrafts, draftsOf, persistDrafts, markDraftsStored, hasUnsavedWork })', sandbox);
+// 自动保存 effect 已从 App.jsx 抽到 useWorkspace，测试改切这份真实实现
+const workspaceSrc = readFileSync(new URL('../src/workspace/useWorkspace.js', import.meta.url), 'utf8');
 let value = 'A', disk = '', finish, fail = false;
 let tabs = [{ id: 1, kind: 'tex', name: 'paper.tex', handle: {}, historyKey: 'h', saved: 'old', dirty: true,
   doc: { getValue: () => value, setValue: text => { value = text; } } }];
@@ -22,8 +29,11 @@ const writeFileText = async (_, text) => {
   if (fail) throw new Error('write failed');
   disk = text;
 };
-const save = vm.runInNewContext(extract('  const saveActive = useCallback(', '\n  // ---- 关闭标签') + '\nsaveActive', {
-  ...common, fs: { writeFileText },
+const SAVE_DEPS = '  }, [activeId, rootDir, saveTabAs, alertBox]);';
+const saveBegin = workspaceSrc.indexOf('  const saveActive = useCallback(');
+const saveSource = workspaceSrc.slice(saveBegin, workspaceSrc.indexOf(SAVE_DEPS, saveBegin) + SAVE_DEPS.length);
+const save = vm.runInNewContext(saveSource + '\nsaveActive', {
+  ...common, fs: { writeFileText }, flashRef: { current: () => {} }, alertBox: () => {}, saveTabAs: async () => false,
 });
 let pending = save(); assert.equal(saveState(tabs[0]), 'saving'); value = 'B'; finish(); await pending;
 assert.equal(disk, 'A'); assert.equal(tabs[0].saved, 'A'); assert.equal(tabs[0].dirty, true);
@@ -38,10 +48,15 @@ assert.equal(saveState(tabs[0]), 'failed');
 for (const kind of ['tex', 'draft']) for (const inFolder of [true, false]) {
   value = 'save-as A';
   tabs[0] = { ...tabs[0], kind, handle: null, saved: '', dirty: true };
-  const saveAs = vm.runInNewContext(extract('  const saveTabAs = async', '\n  // ---- 保存') + '\nsaveTabAs', {
+  const asBegin = workspaceSrc.indexOf('  const saveTabAs = useCallback(');
+  const asDeps = '  }, [t, rootDir, confirm, alertBox, onTreeChanged]);';
+  const asSource = workspaceSrc.slice(asBegin, workspaceSrc.indexOf(asDeps, asBegin) + asDeps.length);
+  const saveAs = vm.runInNewContext(asSource + '\nsaveTabAs', {
     ...common, rootDir: inFolder ? { name: 'project', getFileHandle: async () => { throw new Error('missing'); } } : null,
     window: { showSaveFilePicker: async () => ({ name: 'paper.tex' }) },
-    fs: { createFile: async () => ({}), writeFileText }, copyHistory: () => true, setTreeKey() {},
+    fs: { createFile: async () => ({}), writeFileText }, copyHistory: () => true,
+    confirm: async () => true, alertBox: () => {}, flashRef: { current: () => {} },
+    onTreeChanged() {}, downloadFile() {},
   });
   pending = saveAs(tabs[0]);
   // Advance the picker and file-creation awaits before resolving the write.
@@ -59,19 +74,21 @@ const before = tabs[0].saved;
 await template('blank');
 assert.equal(value, 'template content'); assert.equal(tabs[0].saved, before); assert.equal(tabs[0].dirty, true);
 
-const makeTab = vm.runInNewContext(extract('function makeTab(', '\nexport default function App') + '\nmakeTab', {
-  tabSeq: 0, crypto: { randomUUID }, CodeMirror: { Doc: function(text) { this.getValue = () => text; } },
+const { makeTab } = modelWith({
+  crypto: { randomUUID }, CodeMirror: { Doc: function(text) { this.getValue = () => text; } },
 });
 const first = makeTab({ name: 'same.tex', kind: 'draft', text: 'first' });
 const second = makeTab({ name: 'same.tex', kind: 'draft', text: 'second' });
 assert.notEqual(first.historyKey, second.historyKey);
 const restored = makeTab({ name: 'same.tex', kind: 'draft', draftId: first.draftId });
 assert.equal(restored.historyKey, first.historyKey);
-const makeFallbackTab = vm.runInNewContext(extract('function makeTab(', '\nexport default function App') + '\nmakeTab', { tabSeq: 0 });
+const { makeTab: makeFallbackTab } = modelWith({});
 assert.notEqual(makeFallbackTab({ kind: 'draft' }).historyKey, makeFallbackTab({ kind: 'draft' }).historyKey);
 const inputDrafts = [{ id: first.draftId, name: first.name, text: 'first' }, { id: second.draftId, name: second.name, text: 'second' }];
-const readDrafts = vm.runInNewContext(app.slice(app.indexOf('function readDrafts()'), app.indexOf('\nfunction rangeText')) + '\nreadDrafts', {
-  localStorage: { getItem: key => key === 'drafts' ? JSON.stringify(inputDrafts) : null }, LS_DRAFTS: 'drafts', LS_KEY: 'legacy',
+const { readDrafts } = modelWith({
+  // 模块内部自己 const 了键名，注入别名会被遮蔽，这里用真实键
+  localStorage: { getItem: key => key === 'paperlite.drafts.v1' ? JSON.stringify(inputDrafts) : null },
+  samples: { demo: 'demo' },
 });
 assert.deepEqual(JSON.parse(JSON.stringify(readDrafts())), inputDrafts);
 
@@ -105,16 +122,22 @@ for (const [source, current, tabId, confirm, expected] of [
 console.log('PDF exports: matching source, stale rejection/acceptance and document isolation passed.');
 
 // Autosave failure remains visible, retries clear it, and disk saves leave the draft set.
-const autoBegin = app.indexOf('  useEffect(() => {', app.indexOf('  const draftMembership'));
-const autoEndMarker = '  }, [activeValue, tabs.length, draftMembership, flash]);';
-const autoSource = app.slice(autoBegin, app.indexOf(autoEndMarker, autoBegin) + autoEndMarker.length);
+const autoBegin = workspaceSrc.indexOf('  useEffect(() => {', workspaceSrc.indexOf('  const draftMembership'));
+const autoEndMarker = '  }, [activeValue, tabs.length, draftMembership]);';
+const autoSource = workspaceSrc.slice(autoBegin, workspaceSrc.indexOf(autoEndMarker, autoBegin) + autoEndMarker.length);
 let autosave, rejectAuto = false, storedDrafts;
+const autoStorage = { setItem: (_, text) => { if (rejectAuto) throw new Error('quota'); storedDrafts = JSON.parse(text); } };
+const autoModel = modelWith({
+  localStorage: autoStorage, LS_DRAFTS: 'drafts', LS_DOC: 'legacy', samples: { demo: 'demo' },
+  CodeMirror: { Doc: function (text) { this.getValue = () => text; } },
+});
 value = 'browser draft';
 tabs = [{ id: 1, kind: 'draft', saved: '', doc: { getValue: () => value } }];
 vm.runInNewContext(autoSource, {
-  ...common, tabs, activeValue: value, draftMembership: '1', draftsWarnedRef: { current: false }, LS_DRAFTS: 'drafts',
+  ...common, tabs, activeValue: value, draftMembership: '1', draftsWarnedRef: { current: false },
+  flashRef: { current: () => {} },
+  persistDrafts: autoModel.persistDrafts, markDraftsStored: autoModel.markDraftsStored,
   useEffect: fn => fn(), setTimeout: fn => { autosave = fn; return 1; }, clearTimeout() {},
-  localStorage: { setItem: (_, text) => { if (rejectAuto) throw new Error('quota'); storedDrafts = JSON.parse(text); } },
 });
 assert.equal(saveState(tabs[0]), 'browserPending');
 autosave(); assert.equal(saveState(tabs[0]), 'browserSaved');

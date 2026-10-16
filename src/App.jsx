@@ -35,11 +35,10 @@ import * as ctxBudget from './context.js';
 import { LS_LANG, detectLang, getLang, setLang as setModuleLang, tr } from './i18n.js';
 import { detectTheme, applyTheme } from './theme.js';
 import { saveState } from './saveState.js';
+import { makeTab } from './workspace/tabModel.js';
+import { useWorkspace } from './workspace/useWorkspace.js';
 import { LangContext } from './useI18n.js';
 
-const LS_KEY = 'paperlite.doc.v2';
-// 每个草稿标签各存一份：旧版只存活动那一篇，多草稿会互相覆盖（关页即丢）
-const LS_DRAFTS = 'paperlite.drafts.v1';
 const LS_MODE = 'paperlite.viewmode.v2';
 const LS_LAYOUT = 'paperlite.layout.v1';
 // 把手宽度与 app.css 的 .divider 保持一致，拖拽换算按它补偿半格偏移
@@ -50,7 +49,6 @@ const SPLIT_MIN = 15, SPLIT_MAX = 85, SPLIT_DEFAULT = 52;
 const PANES_KEEP = 350;
 const clampNum = (v, lo, hi, dflt) => (Number.isFinite(v) && v > 0 ? Math.min(hi, Math.max(lo, v)) : dflt);
 let lastRenderMs = 0;
-let tabSeq = 0;
 
 // 插入片段中的示例文字随界面语言变化（LaTeX 命令本身不变）
 const makeSnippets = (t) => ({
@@ -63,38 +61,33 @@ const makeSnippets = (t) => ({
   tBib: '\\cite{key}'
 });
 
-function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', draftId }) {
-  const id = ++tabSeq;
-  if (kind === 'draft') draftId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
-  const t = {
-    id, name, path: path || name, kind, handle: handle || null, parentDir: parentDir || null,
-    draftId,
-    historyKey: JSON.stringify([kind === 'draft' ? 'draft' : historyScope, kind === 'draft' ? draftId : path || name]),
-    saved: saved !== undefined ? saved : (text || ''),
-    imageUrl: imageUrl || null,
-    dirty: false, doc: null
-  };
-  if (text !== undefined && text !== null) t.doc = new CodeMirror.Doc(text, modeSpec);
-  return t;
-}
-
 export default function App() {
   const [lang, setLang] = useState(detectLang);
   setModuleLang(lang); // 引擎模块（linter/llm）读模块级语言；渲染期同步保证当帧文案正确
   // App 自身在 Provider 之上，useContext 读不到自己下发的值——直接由 lang 状态构建 t
   const t = useMemo(() => (key, params) => tr(lang, key, params), [lang]);
 
-  // ---- 多标签 ----
-  const [tabs, setTabs] = useState(() => {
-    const drafts = readDrafts();
-    const L = detectLang();
-    return drafts.map(d => makeTab({ name: d.name || tr(L, 'app.draftName'), path: tr(L, 'app.draftPath'), kind: 'draft', draftId: d.id, text: d.text, modeSpec: 'stex', saved: d.text }));
-  });
-  // 焦点落在最后恢复的那篇（最近编辑的）；不依赖模块级计数器，StrictMode 下会被调用两次
-  const [activeId, setActiveId] = useState(() => (tabs.length ? tabs[tabs.length - 1].id : 1));
-  const [activeValue, setActiveValue] = useState(() => {
-    const c = tabs.length ? tabs[tabs.length - 1] : null;
-    return c && c.doc ? c.doc.getValue() : '';
+  // 工作区 hook 需要这几个 UI 回调，先于它声明
+  const [flashMsg, setFlashMsg] = useState('');
+  const flash = useCallback((msg) => {
+    setFlashMsg(msg);
+    setTimeout(() => setFlashMsg(''), 1600);
+  }, []);
+  const [treeKey, setTreeKey] = useState(0);
+  const [sideTab, setSideTab] = useState('outline');
+
+  // ---- 工作区：标签 / 草稿 / 文件夹 / 保存 / 版本历史（与移动端 #/m 共用同一份编排）----
+  const {
+    tabs, setTabs, tabsRef, activeId, setActiveId, activeValue, setActiveValue,
+    rootDir, setRootDir, restorePrompt, setRestorePrompt,
+    historyKey, setHistoryTick, historyError, setHistoryError, historyClearedRef,
+    noteHistory, snapshot,
+    openFolder, closeFolder, restoreFolder, openFileTab,
+    newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
+    onDocChange: applyDocChange,
+  } = useWorkspace({
+    t, flash, alertBox: alert, confirm: showConfirm, prompt: showPrompt,
+    onTreeChanged: () => setTreeKey(n => n + 1), onSideTab: setSideTab,
   });
 
   // ---- 视图 ----
@@ -130,22 +123,12 @@ export default function App() {
   });
   const [syncScroll, setSyncScroll] = useState(editorSettings.syncScroll);
   const [fileDialog, setFileDialog] = useState(null);
-  const [, setHistoryTick] = useState(0);
-  const [historyError, setHistoryError] = useState('');
-  const historyClearedRef = useRef(new WeakMap());
   const [packaging, setPackaging] = useState(false);
-  const [sideTab, setSideTab] = useState('outline');
   const [panelOpen, setPanelOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInject, setChatInject] = useState(null); // {text, n} 预填对话输入框（诊断点一键修复）
   const [selection, setSelection] = useState({ did: 0, sel: null });
-  const [flashMsg, setFlashMsg] = useState('');
   const [cmReady, setCmReady] = useState(0);
-
-  // ---- 文件夹 ----
-  const [rootDir, setRootDir] = useState(null);
-  const [restorePrompt, setRestorePrompt] = useState(null);
-  const [treeKey, setTreeKey] = useState(0);
 
   // ---- 编译 ----
   const [engines, setEngines] = useState([]);
@@ -171,8 +154,6 @@ export default function App() {
 
   const cmRef = useRef(null);
   const ratioRef = useRef({ edit: 0, preview: 0 });
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
   const valueRef = useRef(activeValue);
   valueRef.current = activeValue;
 
@@ -188,11 +169,6 @@ export default function App() {
   if (compileContextRef.current?.doc !== activeTab?.doc) {
     compileContextRef.current = { doc: activeTab?.doc };
   }
-
-  const flash = useCallback((msg) => {
-    setFlashMsg(msg);
-    setTimeout(() => setFlashMsg(''), 1600);
-  }, []);
 
   useEffect(() => { llm.saveChannels(channels); }, [channels]);
   useEffect(() => {
@@ -253,38 +229,6 @@ export default function App() {
     return () => { if (ic !== null && 'cancelIdleCallback' in window) cancelIdleCallback(ic); if (tid !== null) clearTimeout(tid); };
   }, [activeTab?.doc, warmPreamble, isTexLike]);
 
-  const historyKey = activeTab?.historyKey || JSON.stringify([rootDir?.name || '', activeTab?.kind === 'draft' ? 'draft' : activeTab?.path]);
-  // 超上限淘汰旧版本是静默的（README 记为有意取舍），但用户必须看得见被清了几条
-  const noteHistory = (result) => {
-    setHistoryError(result.ok ? '' : tr(getLang(), 'hist.storageError'));
-    if (result.ok && result.dropped) flash(tr(getLang(), 'hist.dropped', { n: result.dropped }));
-    setHistoryTick(n => n + 1);
-  };
-  const snapshot = (label = '', reason = 'manual', force = true) => {
-    if (!activeTab?.doc) return false;
-    const result = recordVersion(historyKey, activeTab.doc.getValue(), { label, reason, force });
-    noteHistory(result);
-    return result.ok;
-  };
-  useEffect(() => {
-    const doc = activeTab?.doc;
-    if (!doc) return;
-    let timer;
-    const capture = () => {
-      if (historyClearedRef.current.get(doc) === doc.getValue()) return;
-      noteHistory(recordVersion(historyKey, doc.getValue()));
-    };
-    capture();
-    const changed = () => {
-      if (historyClearedRef.current.get(doc) !== doc.getValue()) historyClearedRef.current.delete(doc);
-      clearTimeout(timer); timer = setTimeout(capture, 3000);
-    };
-    doc.on('change', changed);
-    // Flush the actual document on tab changes; never record stale activeValue.
-    const flush = () => { if (historyClearedRef.current.get(doc) !== doc.getValue()) recordVersion(historyKey, doc.getValue()); };
-    window.addEventListener('pagehide', flush);
-    return () => { clearTimeout(timer); doc.off('change', changed); window.removeEventListener('pagehide', flush); flush(); };
-  }, [activeTab?.doc, historyKey]);
   useEffect(() => {
     const settings = { ...editorSettings, syncScroll };
     try { localStorage.setItem('paperlite.editor-settings', JSON.stringify(settings)); } catch { /* ignore */ }
@@ -292,42 +236,6 @@ export default function App() {
     if (c) { c.setOption('lineWrapping', settings.lineWrapping); c.getWrapperElement().style.fontSize = settings.fontSize + 'px'; c.refresh(); }
   }, [editorSettings, syncScroll, cmReady]);
 
-  // ---- 文件夹操作 ----
-  const openFolder = async () => {
-    try {
-      const h = await fs.pickDirectory();
-      setRootDir(h); setRestorePrompt(null);
-      await fs.saveRootHandle(h);
-      setSideTab('files');
-      flash(t('app.folderOpened', { name: h.name }));
-    } catch (e) { if (e && e.name !== 'AbortError') alert(t('app.openFolderFailed', { msg: e.message || e })); }
-  };
-  const closeFolder = async () => { setRootDir(null); setRestorePrompt(null); await fs.clearRootHandle(); };
-  const restoreFolder = async () => {
-    if (!restorePrompt) return;
-    const perm = await fs.requestPermission(restorePrompt, 'readwrite');
-    if (perm === 'granted') { setRootDir(restorePrompt); setRestorePrompt(null); setSideTab('files'); }
-  };
-
-  // ---- 打开文件 ----
-  const openFileTab = useCallback(async (fileHandle, path, parentDir) => {
-    const name = fileHandle.name || (path ? path.split('/').pop() : tr(getLang(), 'app.untitled'));
-    const info = infoFor(name);
-    const exist = tabsRef.current.filter(t => t.handle === fileHandle)[0];
-    if (exist) { setActiveId(exist.id); return exist; }
-    try {
-      if (info.kind === 'image' || info.kind === 'pdf') {
-        const url = await fs.fileBlobUrl(fileHandle);
-        const t = makeTab({ name, path, kind: info.kind, handle: fileHandle, parentDir, imageUrl: url });
-        setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue('');
-        return t;
-      }
-      const text = await fs.readFileText(fileHandle);
-      const t = makeTab({ name, path, kind: info.kind, handle: fileHandle, parentDir, text, modeSpec: info.mode, saved: text, historyScope: parentDir ? rootDir?.name || '' : '' });
-      setTabs(ts => ts.concat([t])); setActiveId(t.id); setActiveValue(text);
-      return t;
-    } catch (e) { alert(tr(getLang(), 'app.cannotOpen', { name, msg: e.message || e })); return null; }
-  }, [rootDir?.name]);
 
   useEffect(() => {
     window.__plInject = (name, content) => {
@@ -339,15 +247,14 @@ export default function App() {
     window.__plTabs = () => tabsRef.current.map(t => ({ id: t.id, name: t.name, kind: t.kind, dirty: t.dirty }));
   }, []);
 
-  // ---- 编辑器联动 ----
+  // ---- 编辑器联动：脏标记与 activeValue 归工作区 hook，这里只负责让旧诊断失效 ----
   const onDocChange = useCallback((doc, value) => {
     compileContextRef.current = { doc };
     // Compile diagnostics describe the old source. Keep PDF/log artifacts, but retire markers.
     setCompileResult(r => r ? { ...r, errors: [] } : r);
     setPreviewMode(mode => mode === 'log' ? 'rich' : mode);
-    setActiveValue(value);
-    setTabs(ts => ts.map(t => t.doc === doc ? { ...t, dirty: value !== t.saved } : t));
-  }, []);
+    applyDocChange(doc, value);
+  }, [applyDocChange]);
 
   useEffect(() => {
     if (activeTab && activeTab.doc) {
@@ -357,43 +264,6 @@ export default function App() {
     setCompileResult(null); setDismissedIssues(null); setPreviewMode('rich');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
-
-  // 草稿自动保存：整组草稿标签各存一份。写失败必须让人看见——静默 catch 等于静默丢稿
-  const draftsWarnedRef = useRef(false);
-  const draftMembership = tabs.filter(tab => tab.kind === 'draft').map(tab => tab.id).join(',');
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue() }));
-      try {
-        localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
-        draftsWarnedRef.current = false;
-        setTabs(ts => {
-          let changed = false;
-          const next = ts.map(x => {
-            if (x.kind !== 'draft' || !x.doc) return x;
-            const v = x.doc.getValue();
-            if (x.saved === v && x.browserStored && !x.saveError) return x;
-            // 只推进 saved，不动 dirty：● 仍表示「没落到磁盘文件」，关标签照旧要确认
-            changed = true;
-            return { ...x, saved: v, browserStored: true, saveError: '' };
-          });
-          return changed ? next : ts;
-        });
-      } catch (e) {
-        setTabs(ts => ts.map(x => x.kind === 'draft' ? { ...x, saveError: tr(getLang(), 'app.draftSaveFailed') } : x));
-        if (!draftsWarnedRef.current) { draftsWarnedRef.current = true; flash(tr(getLang(), 'app.draftSaveFailed')); }
-      }
-    }, 800);
-    return () => clearTimeout(t);
-  }, [activeValue, tabs.length, draftMembership, flash]);
-
-  // 草稿写入失败或尚在防抖等待期间，也必须防止刷新丢稿。
-  useEffect(() => {
-    if (!tabs.some(x => x.kind === 'draft' ? x.doc && x.doc.getValue() !== x.saved : x.dirty)) return;
-    const onUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
-    window.addEventListener('beforeunload', onUnload);
-    return () => window.removeEventListener('beforeunload', onUnload);
-  }, [tabs]);
 
   useEffect(() => { try { localStorage.setItem(LS_MODE, preferredViewMode); } catch (e) { /* ignore */ } }, [preferredViewMode]);
 
@@ -416,22 +286,6 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // ---- 新建文件（未保存标签；Ctrl+S 时另存到已开文件夹，或弹出系统另存为）----
-  const newFile = async () => {
-    let n = 1;
-    const base = t('app.newFileDefault', { n: '' });
-    const existNames = new Set(tabsRef.current.map(t => t.name));
-    while (existNames.has(base.replace('.tex', (n > 1 ? n : '') + '.tex'))) n++;
-    const input = await showPrompt(t('app.newFilePrompt'), base.replace('.tex', (n > 1 ? n : '') + '.tex'));
-    if (!input) return;
-    const name = input.trim();
-    if (!name || /[\\/:*?"<>|]/.test(name)) { alert(t('app.badFileName')); return; }
-    const info = infoFor(name);
-    const t2 = makeTab({ name, path: t('app.unsavedPath') + '/' + name, kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
-    setTabs(ts => ts.concat([t2])); setActiveId(t2.id); setActiveValue('');
-    flash(t('app.created', { name }));
-  };
-
   const newFolder = async () => {
     try {
       const dir = rootDir || await fs.pickDirectory();
@@ -445,62 +299,6 @@ export default function App() {
       setTreeKey(n => n + 1);
       flash(t('app.created', { name }));
     } catch (e) { if (e.name !== 'AbortError') alert(t('ft.createFailed', { msg: e.message })); }
-  };
-
-  const uploadFiles = () => {
-    const input = document.createElement('input');
-    input.type = 'file'; input.multiple = true;
-    input.onchange = async () => {
-      for (const file of Array.from(input.files || [])) {
-        try {
-          if (!validName(file.name)) throw new Error(t('app.badFileName'));
-          if (rootDir) {
-            let exists = false;
-            try { await rootDir.getFileHandle(file.name); exists = true; } catch (e) { if (e.name !== 'NotFoundError') throw e; }
-            const opened = tabsRef.current.find(tab => tab.handle && tab.path === file.name);
-            if ((exists || opened) && !await showConfirm(t('app.overwriteConfirm', { name: file.name }))) continue;
-            const handle = await fs.createFile(rootDir, file.name);
-            const writable = await handle.createWritable();
-            await writable.write(file); await writable.close();
-            if (opened) {
-              if (opened.doc) { const value = await file.text(); opened.doc.setValue(value); setTabs(ts => ts.map(x => x.id === opened.id ? { ...x, saved: value, dirty: false } : x)); }
-              else { const url = await fs.fileBlobUrl(handle); URL.revokeObjectURL(opened.imageUrl); setTabs(ts => ts.map(x => x.id === opened.id ? { ...x, imageUrl: url } : x)); }
-              setActiveId(opened.id);
-            } else await openFileTab(handle, file.name, rootDir);
-          } else {
-            // Open uploaded files in memory when no local folder is connected.
-            const info = infoFor(file.name);
-            let uploaded;
-            if (info.kind === 'image' || info.kind === 'pdf') uploaded = makeTab({ name: file.name, kind: info.kind, imageUrl: URL.createObjectURL(file) });
-            else {
-              const text = file.size <= 2 * 1024 * 1024 ? await file.text() : null;
-              uploaded = text !== null && !text.includes('\u0000')
-                ? makeTab({ name: file.name, kind: info.kind, text, modeSpec: info.mode })
-                : makeTab({ name: file.name, kind: 'asset' });
-            }
-            uploaded.uploadedFile = file;
-            setTabs(ts => ts.concat(uploaded)); setActiveId(uploaded.id); setActiveValue(uploaded.doc?.getValue() || '');
-          }
-        } catch (e) { alert(t('file.uploadFailed', { name: file.name, msg: e.message })); }
-      }
-      setTreeKey(n => n + 1); if (rootDir) setSideTab('files');
-    };
-    input.click();
-  };
-
-  const makeCopy = () => {
-    if (!activeTab?.doc) return;
-    const original = activeTab.name;
-    const dot = original.lastIndexOf('.');
-    const base = dot > 0 ? original.slice(0, dot) : original;
-    const ext = dot > 0 ? original.slice(dot) : '';
-    let name = base + '-copy' + ext, n = 2;
-    while (tabsRef.current.some(tab => tab.name === name)) name = base + '-copy-' + n++ + ext;
-    const value = activeTab.doc.getValue(), info = infoFor(name);
-    const copy = makeTab({ name, path: t('app.unsavedPath') + '/' + name, kind: info.kind, text: value, modeSpec: info.mode, saved: '' });
-    copy.dirty = !!value;
-    setTabs(ts => ts.concat(copy)); setActiveId(copy.id); setActiveValue(value);
-    flash(t('app.created', { name }));
   };
 
   const exportProject = async () => {
@@ -528,103 +326,6 @@ export default function App() {
     } catch (e) { alert(t('file.downloadFailed', { msg: e.message })); }
     finally { setPackaging(false); }
   };
-
-  // 另存为：无磁盘句柄的标签保存时走这里。
-  // 已开文件夹 → 直接存到根目录（重名确认）；否则系统「另存为」对话框；再否则退化为下载。
-  const saveTabAs = async (tab) => {
-    const value = tab.doc ? tab.doc.getValue() : '';
-    if (rootDir) {
-      try {
-        await rootDir.getFileHandle(tab.name);
-        if (!await showConfirm(t('app.overwriteConfirm', { name: tab.name }))) return false;
-      } catch (e) { /* 不存在，直接创建 */ }
-      try {
-        const h = await fs.createFile(rootDir, tab.name);
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
-        await fs.writeFileText(h, value);
-        const nextKey = JSON.stringify([rootDir.name, tab.name]);
-        const copied = copyHistory(tab.historyKey, nextKey);
-        if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, kind: x.kind === 'draft' ? infoFor(tab.name).kind : x.kind, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
-        setTreeKey(k => k + 1);
-        flash(t('app.savedToFolder', { name: tab.name }));
-        return true;
-      } catch (e) { setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: false, saveError: String(e.message || e) } : x)); alert(t('app.saveFailed', { msg: e.message || e })); return false; }
-    }
-    if (typeof window.showSaveFilePicker === 'function') {
-      try {
-        const h = await window.showSaveFilePicker({ suggestedName: tab.name });
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
-        await fs.writeFileText(h, value);
-        const nextKey = JSON.stringify(['', h.name]);
-        const copied = copyHistory(tab.historyKey, nextKey);
-        if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, kind: x.kind === 'draft' ? infoFor(h.name).kind : x.kind, name: h.name, handle: h, path: h.name, saved: value, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
-        flash(t('app.saved', { name: h.name }));
-        return true;
-      } catch (e) {
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: false, ...(e?.name !== 'AbortError' ? { saveError: String(e.message || e) } : {}) } : x));
-        if (e && e.name !== 'AbortError') alert(t('app.saveFailed', { msg: e.message || e }));
-        return false;
-      }
-    }
-    downloadFile(tab.name, value, 'text/plain;charset=utf-8');
-    flash(t('app.downloadFallback', { name: tab.name }));
-    return false;
-  };
-
-  // ---- 保存 ----
-  const saveActive = useCallback(async () => {
-    const t = tabsRef.current.filter(x => x.id === activeId)[0];
-    if (!t?.doc || t.saving) return;
-    const recorded = recordVersion(t.historyKey, t.doc.getValue(), { reason: 'save' });
-    setHistoryError(recorded.ok ? '' : tr(getLang(), 'hist.storageError'));
-    setHistoryTick(n => n + 1);
-    if (t.kind === 'draft') {
-      try {
-        const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue() }));
-        localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
-      } catch (e) { setTabs(ts => ts.map(x => x.kind === 'draft' ? { ...x, saveError: tr(getLang(), 'app.draftSaveFailed') } : x)); flash(tr(getLang(), 'app.draftSaveFailed')); return; }
-      setTabs(ts => ts.map(x => x.kind === 'draft' && x.doc ? { ...x, saved: x.doc.getValue(), browserStored: true, saveError: '', dirty: x.id === t.id ? false : x.dirty } : x));
-      flash(tr(getLang(), 'app.draftSaved'));
-      return;
-    }
-    if (!t.handle) { await saveTabAs(t); return; }
-    try {
-      const value = t.doc.getValue();
-      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saving: true } : x));
-      await fs.writeFileText(t.handle, value);
-      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: value, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
-      flash(tr(getLang(), 'app.saved', { name: t.name }));
-    } catch (e) {
-      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saving: false, saveError: String(e.message || e) } : x));
-      // 权限失效是最高频的一种（句柄跨会话/文件夹被移动）：给出口，别抛浏览器英文原文
-      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) alert(tr(getLang(), 'app.savePermission', { name: t.name }));
-      else alert(tr(getLang(), 'app.saveFailed', { msg: e.message || e }));
-    }
-  }, [activeId, rootDir, flash]);
-
-  // ---- 关闭标签 ----
-  const closeTab = useCallback(async (id) => {
-    const t = tabsRef.current.filter(x => x.id === id)[0];
-    if (t && t.dirty && !await showConfirm(tr(getLang(), 'app.dirtyClose', { name: t.name }))) return;
-    if (t && t.imageUrl) URL.revokeObjectURL(t.imageUrl);
-    setTabs(ts => {
-      const rest = ts.filter(x => x.id !== id);
-      if (!rest.length) {
-        const text = samples.blank;
-        const nt = makeTab({ name: tr(getLang(), 'app.draftName'), path: tr(getLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text });
-        setActiveId(nt.id); setActiveValue(text);
-        return [nt];
-      }
-      if (id === activeId) {
-        const nt = rest[rest.length - 1];
-        setActiveId(nt.id);
-        setActiveValue(nt.doc ? nt.doc.getValue() : '');
-      }
-      return rest;
-    });
-  }, [activeId]);
 
   // ---- 编辑器辅助 ----
   const cm = () => cmRef.current;
@@ -1497,20 +1198,6 @@ export default function App() {
   );
 }
 
-/* 恢复草稿：优先读新的多草稿键，退回旧版单篇键，都没有则给示例论文。
- * 恢复全部已保存的草稿，不能在读取时截断后再由自动保存覆盖原始数据。 */
-function readDrafts() {
-  const nameOf = n => String(n || '').slice(0, 80);
-  try {
-    const arr = JSON.parse(localStorage.getItem(LS_DRAFTS) || 'null');
-    if (Array.isArray(arr)) {
-      const list = arr.filter(d => d && typeof d.text === 'string').map(d => ({ name: nameOf(d.name), text: d.text, ...(typeof d.id === 'string' && d.id ? { id: d.id } : {}) }));
-      if (list.length) return list;
-    }
-  } catch (e) { /* 落盘格式坏了，退回旧键 */ }
-  try { const s = localStorage.getItem(LS_KEY); if (s && s.trim()) return [{ name: '', text: s }]; } catch (e) { /* ignore */ }
-  return [{ name: '', text: samples.demo }];
-}
 function rangeText(cm, a, b) {
   const lines = [];
   for (let i = a; i <= b; i++) lines.push(cm.getLine(i) || '');

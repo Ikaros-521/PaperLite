@@ -226,6 +226,15 @@ export default function Toolbar({
 
         <div className="mb-right" data-tour="rightbar">
           <LangSwitch lang={lang} setLang={setLang} />
+          {/* 切换要 reload：main.jsx 在加载时决定渲染哪棵树，且 reload 才会触发脏标签的 beforeunload 守卫 */}
+          <button
+            className="btn sm"
+            aria-label={t('m.mobileView')}
+            title={t('m.mobileViewTip')}
+            onClick={() => { window.location.hash = '#/m'; window.location.reload(); }}
+          >
+            {t('m.mobileView')}
+          </button>
           <div className="view-switch" title={t('vm.tip')}>
             {[['edit', '✎', t('vm.edit')], ['split', '▤▤', t('vm.split')], ['preview', '▢', t('vm.preview')]].map(([m, ic, ti]) => (
               <button key={m} className={'btn sm' + (viewMode === m ? ' on' : '')} aria-label={ti} aria-pressed={viewMode === m} disabled={compact && m === 'split'} title={ti} onClick={() => setViewMode(m)}>{compact ? ti : ic}</button>

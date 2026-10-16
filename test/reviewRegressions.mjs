@@ -21,29 +21,39 @@ async function settles(promise) {
 
 // Exercise the actual persistence handlers without mounting CodeMirror/React.
 const app = source('App.jsx');
+// 标签/草稿数据层已抽到 src/workspace/tabModel.js：切那份真实实现，去掉 import 行后在 vm 里跑
+const tabModelBody = source('workspace/tabModel.js').split('\n').filter(line => !line.startsWith('import ')).join('\n').replace(/^export /gm, '');
+// 保存编排已从 App.jsx 抽到 useWorkspace，测试改切这份真实实现
+const workspaceSrc = source('workspace/useWorkspace.js');
+// 模块内部自己 const 了键名，测试必须用真实键，注入别名会被遮蔽
+const DRAFT_KEY = 'paperlite.drafts.v1';
 const drafts = Array.from({ length: 24 }, (_, i) => ({ name: 'draft ' + i, text: 'content ' + i }));
-const stored = new Map([['drafts', JSON.stringify(drafts)]]);
+const stored = new Map([[DRAFT_KEY, JSON.stringify(drafts)]]);
 let failWrites = false;
 const storage = {
   getItem: key => stored.get(key) || null,
   setItem: (key, value) => { if (failWrites) throw new Error('QuotaExceededError'); stored.set(key, value); },
 };
-const readDrafts = vm.runInNewContext(app.slice(app.indexOf('function readDrafts()'), app.indexOf('\nfunction rangeText'))
-  + '\nreadDrafts', { localStorage: storage, LS_DRAFTS: 'drafts', LS_KEY: 'legacy', samples: { demo: 'demo' } });
+const model = vm.runInNewContext(tabModelBody + '\n({ readDrafts, persistDrafts, markDraftsStored })', {
+  localStorage: storage, samples: { demo: 'demo' }, tr: (_, key) => key, getLang: () => 'zh',
+});
+const readDrafts = model.readDrafts;
 assert.equal(JSON.stringify(readDrafts()), JSON.stringify(drafts), 'All persisted drafts must survive reload');
-storage.setItem('drafts', JSON.stringify(readDrafts()));
-assert.equal(JSON.parse(stored.get('drafts')).length, 24, 'Subsequent autosave must not discard older drafts');
+storage.setItem(DRAFT_KEY, JSON.stringify(readDrafts()));
+assert.equal(JSON.parse(stored.get(DRAFT_KEY)).length, 24, 'Subsequent autosave must not discard older drafts');
 
 let tabs = [{ id: 1, kind: 'draft', name: 'draft', dirty: true, saved: 'old', historyKey: 'h',
   doc: { getValue: () => 'new content' } }];
 const flashes = [];
-const saveBegin = app.indexOf('  const saveActive = useCallback(');
-const saveEnd = app.indexOf('  }, [activeId, rootDir, flash]);', saveBegin) + '  }, [activeId, rootDir, flash]);'.length;
-const saveActive = vm.runInNewContext(app.slice(saveBegin, saveEnd) + '\nsaveActive', {
-  useCallback: fn => fn, activeId: 1, rootDir: null, flash: msg => flashes.push(msg),
-  tabsRef: { get current() { return tabs; } }, localStorage: storage, LS_DRAFTS: 'drafts',
+const SAVE_DEPS = '  }, [activeId, rootDir, saveTabAs, alertBox]);';
+const saveBegin = workspaceSrc.indexOf('  const saveActive = useCallback(');
+const saveEnd = workspaceSrc.indexOf(SAVE_DEPS, saveBegin) + SAVE_DEPS.length;
+const saveActive = vm.runInNewContext(workspaceSrc.slice(saveBegin, saveEnd) + '\nsaveActive', {
+  useCallback: fn => fn, activeId: 1, rootDir: null, flashRef: { current: msg => flashes.push(msg) },
+  tabsRef: { get current() { return tabs; } }, persistDrafts: model.persistDrafts,
   recordVersion: () => ({ ok: true }), setHistoryError() {}, setHistoryTick() {},
   getLang: () => 'zh', tr: (_, key) => key, setTabs: update => { tabs = update(tabs); },
+  saveTabAs: async () => false, alertBox: msg => flashes.push('alert:' + msg), fs: {},
 });
 failWrites = true;
 await saveActive();
@@ -54,7 +64,7 @@ failWrites = false;
 await saveActive();
 assert.equal(tabs[0].dirty, false);
 assert.equal(tabs[0].saved, 'new content');
-assert.equal(JSON.parse(stored.get('drafts'))[0].text, 'new content');
+assert.equal(JSON.parse(stored.get(DRAFT_KEY))[0].text, 'new content');
 assert.equal(flashes.at(-1), 'app.draftSaved', 'Retry can persist and acknowledge a successful save');
 
 // Run the graphics effect against persistent DOM nodes, as React does when only

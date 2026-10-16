@@ -1,0 +1,521 @@
+/* ============================================================================
+   PaperLite Mobile · 主题桥接与移动专属样式
+   ----------------------------------------------------------------------------
+   1) 把 antd-mobile 的 --adm-* token 映射到 PaperLite 的 --paper/--ink/--accent/--seal，
+      四套皮肤（宣纸 / 冷灰 / 竹青 / 夜阅）自动生效，组件内不写死色值。
+   2) 只放桌面 app.css 没有的移动专属层：安全区、FAB、横滑工具带、键盘避让、
+      单栏纸面缩放、行内 diff。刻意不动 app.css 的三栏布局，避免影响桌面端。
+   作用域 .pl-mobile 由 App Shell 挂在根容器上，桌面界面不受污染。
+   ========================================================================== */
+
+.pl-mobile {
+  --adm-color-primary: var(--accent);
+  --adm-color-success: var(--ok);
+  --adm-color-warning: var(--warn-strong);
+  --adm-color-danger: var(--seal);
+  --adm-color-text: var(--ink);
+  --adm-color-text-secondary: var(--ink-soft);
+  --adm-color-weak: var(--ink-faint);
+  --adm-color-light: var(--ink-faint);
+  --adm-color-border: var(--line);
+  --adm-color-box: var(--chrome);
+  --adm-color-background: var(--paper);
+  --adm-font-family: inherit;
+  --adm-tag-border-radius: 4px;
+
+  color: var(--ink);
+  background: var(--desk);
+  font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  /* 移动端禁止整体横向溢出（audit-3 实测 390 视口溢出到 630） */
+  overflow-x: hidden;
+}
+
+/* ---------- 骨架：flex 列，TabBar 走文档流，不用 position:fixed ---------- */
+.pl-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  max-width: 430px;
+  margin: 0 auto;
+  background: var(--desk);
+}
+
+.pl-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* 路由出口：每个 flow 屏自己管内部滚动，这里只做 flex 容器，不再套一层 .pl-content */
+.pl-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pl-body > .pl-screen {
+  flex: 1;
+  min-height: 0;
+}
+
+.pl-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* ---------- 安全区 ---------- */
+.pl-safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.pl-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ---------- Sheet：内容自适应高度，键盘弹起时由内联 bottom 偏移 ---------- */
+.pl-sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: 82dvh;
+}
+
+.pl-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  font-weight: 600;
+}
+
+.pl-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pl-sheet-foot {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  /* viewport-fit=cover 后必须自己吃 home indicator，否则底部主 CTA 被手势条压住 */
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line-soft);
+  background: var(--chrome);
+}
+
+/* ---------- FAB：antd-mobile 无 FloatButton，自实现；触控 56px ---------- */
+.pl-fab {
+  position: absolute;
+  right: 16px;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--paper);
+  box-shadow: 0 6px 18px rgba(var(--accent-rgb), 0.28);
+  cursor: pointer;
+}
+
+.pl-fab:active {
+  background: var(--accent-deep);
+  transform: scale(0.96);
+}
+
+/* ---------- 横滑工具带：替代桌面 113px 高换行的 #toolbelt ---------- */
+.pl-scroll-x {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 12px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.pl-scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+.pl-scroll-x > * {
+  flex: none;
+  scroll-snap-align: start;
+}
+
+.pl-toolbelt {
+  flex: none;
+  border-top: 1px solid var(--line);
+  background: var(--chrome);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pl-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 60px;
+  min-height: 48px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.pl-tool:active {
+  border-color: var(--accent-border);
+  background: var(--hover);
+  color: var(--accent);
+}
+
+/* ---------- 触控目标下限 48px（audit-3：28/40 个按钮 <32px） ---------- */
+.pl-min-touch {
+  min-height: 48px;
+  min-width: 48px;
+}
+
+/* 文字型小按钮（顶栏、Sheet 头部）实测 24-27px，统一抬到 44px 命中区。
+   Popup / ActionSheet / Dialog 默认 portal 到 document.body，不在 .pl-mobile 子树内，
+   因此这些选择器不能加 .pl-mobile 前缀（这些类名也只存在于移动端样式文件里）。 */
+.adm-nav-bar button,
+.adm-nav-bar .adm-button,
+.adm-nav-bar-right .adm-button,
+.pl-sheet-head .adm-button,
+.pl-banner-actions .adm-button,
+.pl-tab-chip {
+  min-height: 44px;
+}
+
+.adm-nav-bar-right .adm-button {
+  min-width: 44px;
+}
+
+/* ---------- 顶栏标题与保存态 ---------- */
+.pl-nav-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pl-nav-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pl-figure {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---------- 单栏纸面：字号三档，替代移动端不成立的双指缩放 ---------- */
+.pl-paper {
+  margin: 12px auto;
+  padding: 20px 16px 40px;
+  background: var(--doc-paper);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  color: var(--ink);
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.pl-paper[data-scale='small'] {
+  font-size: 13px;
+}
+
+.pl-paper[data-scale='normal'] {
+  font-size: 15px;
+}
+
+.pl-paper[data-scale='large'] {
+  font-size: 17.5px;
+}
+
+.pl-paper p {
+  margin: 0.7em 0;
+  text-indent: 2em;
+}
+
+.pl-paper h2,
+.pl-paper h3 {
+  margin: 1.1em 0 0.5em;
+  text-indent: 0;
+  line-height: 1.4;
+}
+
+.pl-paper h2 {
+  font-size: 1.25em;
+}
+
+.pl-paper h3 {
+  font-size: 1.08em;
+}
+
+.pl-paper .pl-meta {
+  text-indent: 0;
+  color: var(--ink-soft);
+  font-size: 0.86em;
+}
+
+.pl-paper .pl-formula {
+  margin: 0.9em 0;
+  padding: 10px 12px;
+  background: var(--doc-code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  text-indent: 0;
+  text-align: center;
+  overflow-x: auto;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 0.92em;
+}
+
+.pl-paper .pl-caption {
+  margin: 0.4em 0 1em;
+  text-indent: 0;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.85em;
+}
+
+.pl-paper table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.pl-paper th,
+.pl-paper td {
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  text-align: left;
+}
+
+/* ---------- 行内 diff（移动端默认行内，并排降为可选） ---------- */
+.pl-diff {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.pl-diff-line {
+  display: flex;
+  gap: 8px;
+  padding: 2px 8px;
+  border-left: 3px solid transparent;
+}
+
+.pl-diff-line > span:first-child {
+  flex: none;
+  width: 34px;
+  text-align: right;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.pl-diff-line > span:last-child {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pl-diff-add {
+  border-left-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
+.pl-diff-del {
+  border-left-color: var(--seal);
+  background: color-mix(in srgb, var(--seal) 10%, transparent);
+}
+
+/* ---------- 文稿行：List.Item 不转发 touch 事件，长按需自实现行 ---------- */
+.pl-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px 6px;
+  background: var(--desk);
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.pl-doc-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pl-doc-row:active {
+  background: var(--hover);
+}
+
+.pl-doc-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  color: var(--ink-faint);
+  font-size: 20px;
+}
+
+.pl-doc-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.pl-doc-name {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 15px;
+}
+
+.pl-doc-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+/* ---------- 编辑区：--pl-keyboard 由 App Shell 注入（见 shell 的 useKeyboardInset） ---------- */
+.pl-editor {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 10px calc(8px + var(--pl-keyboard, 0px));
+  background: var(--paper);
+}
+
+.pl-editor .adm-text-area-element {
+  font-family: Consolas, 'Courier New', monospace;
+  line-height: 1.7;
+  tab-size: 4;
+}
+
+/* 键盘弹起时工具带贴键盘，不再叠加 safe-area */
+.pl-toolbelt[data-keyboard='true'] {
+  padding-bottom: 0;
+}
+
+.pl-para {
+  text-indent: 2em;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pl-para-selected {
+  background: var(--hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pl-error-card {
+  margin: 0.7em 0;
+  padding: 10px 12px;
+  border: 1px solid var(--seal-edge);
+  border-radius: 4px;
+  background: var(--seal-wash);
+  color: var(--seal-deep);
+  text-indent: 0;
+  font-size: 0.88em;
+}
+
+/* ---------- 符号网格 / 表格尺寸选择（点击式，替代桌面 hover 网格） ---------- */
+.pl-sym-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+
+.pl-sym {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.pl-sym:active {
+  border-color: var(--accent-border);
+  background: var(--hover);
+}
+
+.pl-cell-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 34px);
+  gap: 4px;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.pl-cell {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pl-cell[data-active='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* ---------- 数字统一等宽，避免字数/页码跳动 ---------- */
+.pl-num {
+  font-variant-numeric: tabular-nums;
+}
