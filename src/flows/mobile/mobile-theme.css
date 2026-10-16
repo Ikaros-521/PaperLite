@@ -237,7 +237,7 @@
   -webkit-overflow-scrolling: touch;
 }
 
-/* ---------- 单栏纸面：字号三档，替代移动端不成立的双指缩放 ---------- */
+/* ---------- 单栏纸面：字号由壳注入的 --pl-font 统一驱动（见 shared/scale.ts） ---------- */
 .pl-paper {
   margin: 12px auto;
   padding: 20px 16px 40px;
@@ -245,20 +245,9 @@
   border: 1px solid var(--line-soft);
   border-radius: 6px;
   color: var(--ink);
+  font-size: var(--pl-font, 15px);
   line-height: 1.9;
   overflow-wrap: anywhere;
-}
-
-.pl-paper[data-scale='small'] {
-  font-size: 13px;
-}
-
-.pl-paper[data-scale='normal'] {
-  font-size: 15px;
-}
-
-.pl-paper[data-scale='large'] {
-  font-size: 17.5px;
 }
 
 .pl-paper p {
@@ -372,6 +361,38 @@
   font-size: 12px;
 }
 
+/* 分组标题右侧的次要操作（清空搜索记录等） */
+.pl-group-head .adm-button {
+  margin-left: auto;
+  color: var(--ink-faint);
+}
+
+/* 搜索默认态的关键词胶囊 */
+.pl-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 16px 10px;
+}
+
+.pl-chip {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-chip:active {
+  background: var(--hover);
+}
+
 .pl-doc-row {
   display: flex;
   align-items: center;
@@ -432,12 +453,6 @@
   -webkit-overflow-scrolling: touch;
   padding: 8px 10px calc(8px + var(--pl-keyboard, 0px));
   background: var(--paper);
-}
-
-.pl-editor .adm-text-area-element {
-  font-family: Consolas, 'Courier New', monospace;
-  line-height: 1.7;
-  tab-size: 4;
 }
 
 /* 键盘弹起时工具带贴键盘，不再叠加 safe-area */
@@ -567,6 +582,13 @@
 .pl-mobile #paper {
   max-width: 100%;
   padding: 22px 16px;
+  /* 近似排版与纸面预览同一档字号，切档时不会出现「预览变大了正文没变」 */
+  font-size: var(--pl-font, 15px);
+}
+
+/* 编辑区跟阅读区同档；桌面仍是 app.css 的 14px，不受影响 */
+.pl-mobile #editorHost .CodeMirror {
+  font-size: var(--pl-font, 15px);
 }
 
 /* ---------- 真 PDF 查看器（复用桌面 PdfViewer / pdfjs） ---------- */

@@ -18,6 +18,7 @@ import SettingsDialog from '../../components/SettingsDialog.jsx'
 import DialogHost from '../../components/MessageDialog.jsx'
 import { MobileWorkspaceProvider, useMobileWorkspace } from './mobileWorkspace'
 import { ENGINE_LABEL, ENGINE_STATUS_LABEL } from './shared/labels'
+import { SCALE_IDS } from './shared/scale'
 import { useKeyboardInset } from './shared/hooks'
 import { THEME_IDS, applyTheme, detectTheme } from '../../theme.js'
 import { wordCount } from '../../fileActions.js'
@@ -161,6 +162,14 @@ function SettingsTab() {
             />
           </List.Item>
           <List.Item>
+            <div style={{ marginBottom: 8 }}>{ws.t('mb.sh.fontLabel')}</div>
+            <Selector
+              value={[ws.scale]}
+              onChange={v => ws.setScale(String(v[0] || ws.scale) as typeof ws.scale)}
+              options={SCALE_IDS.map(id => ({ label: ws.t('mb.sh.font' + id[0].toUpperCase() + id.slice(1)), value: id }))}
+            />
+          </List.Item>
+          <List.Item>
             <div style={{ marginBottom: 8 }}>{ws.t('mb.sh.langLabel')}</div>
             <Selector
               value={[ws.lang]}
@@ -225,7 +234,7 @@ function MobileShell() {
   const activeKey = TABS.find(tab => tab.key === location.pathname)?.key ?? ''
 
   return (
-    <div className="pl-mobile" style={{ '--pl-keyboard': `${keyboard}px` } as CSSProperties}>
+    <div className="pl-mobile" style={{ '--pl-keyboard': `${keyboard}px`, '--pl-font': `${ws.scaleFont}px` } as CSSProperties}>
       <div className="pl-shell">
         <SafeArea position="top" />
 

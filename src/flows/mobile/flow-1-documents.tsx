@@ -50,6 +50,20 @@ import { wordCount } from '../../fileActions.js'
 
 const PAGE_SIZE = 6
 
+/** 最近搜索词：只存本机，最多 6 条；传空串即清空 */
+const LS_RECENT = 'paperlite.mobile.search.v1'
+function readRecentQueries(): string[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(LS_RECENT) || '[]')
+    return Array.isArray(arr) ? arr.filter(x => typeof x === 'string' && x).slice(0, 6) : []
+  } catch { return [] }
+}
+function writeRecentQueries(keyword: string): string[] {
+  const next = keyword ? [keyword, ...readRecentQueries().filter(x => x !== keyword)].slice(0, 6) : []
+  try { localStorage.setItem(LS_RECENT, JSON.stringify(next)) } catch { /* 存不下就不记，不影响搜索本身 */ }
+  return next
+}
+
 const KIND_ICON: Record<string, ReactNode> = {
   tex: <FileOutline />,
   md: <ContentOutline />,
@@ -145,6 +159,26 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
   const [sheet, setSheet] = useState<'none' | 'new' | 'import'>('none')
   const [actionTab, setActionTab] = useState<MobileTab | null>(null)
   const [undoDraft, setUndoDraft] = useState<{ name: string; text: string } | null>(null)
+  const [searchActive, setSearchActive] = useState(false)
+  const [recent, setRecent] = useState<string[]>(readRecentQueries)
+
+  /** 只记提交过的关键词（回车/点建议），边打字边存会把半截词也留下 */
+  const commitQuery = (q: string) => {
+    const k = q.trim()
+    if (!k) return
+    const next = writeRecentQueries(k)
+    setRecent(next)
+  }
+  const clearRecent = () => {
+    writeRecentQueries('')
+    setRecent([])
+    Toast.show({ content: t('mb.doc.recentCleared') })
+  }
+  // 「最近改动」按真实 updatedAt 排，取前三篇
+  const recentDocs = useMemo(
+    () => ws.tabs.filter(tab => tab.doc).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 3),
+    [ws.tabs],
+  )
 
   const filtered = useMemo(
     () => ws.tabs.filter(tab => tab.name.toLowerCase().includes(query.trim().toLowerCase())),
@@ -249,13 +283,44 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
           placeholder={t('mb.doc.searchPlaceholder')}
           value={query}
           onChange={setQuery}
-          onSearch={setQuery}
+          onFocus={() => setSearchActive(true)}
+          onBlur={() => window.setTimeout(() => setSearchActive(false), 160)}
+          onSearch={q => { setQuery(q); commitQuery(q) }}
           onClear={() => setQuery('')}
         />
       </div>
 
       <PullToRefresh onRefresh={onRefresh}>
-        {pageRows.length === 0 ? (
+        {searchActive && !query.trim() ? (
+          /* STATE: 聚焦未输入 —— 最近搜索词 + 最近改动的文稿，避免一上来就是空搜索框 */
+          <div style={{ padding: '4px 12px 24px' }}>
+            {recent.length > 0 && (
+              <>
+                <div className="pl-group-head">
+                  <span>{t('mb.doc.recentSearches')}</span>
+                  <Button fill="none" size="mini" onClick={clearRecent}>{t('mb.doc.clearRecent')}</Button>
+                </div>
+                <div className="pl-chip-row">
+                  {recent.map(k => (
+                    <button key={k} type="button" className="pl-chip" onClick={() => { setQuery(k); commitQuery(k) }}>{k}</button>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="pl-group-head">{t('mb.doc.hotDocs')}</div>
+            {recentDocs.map(tab => (
+              <DocRow
+                key={tab.id}
+                tab={tab}
+                onOpen={openDoc}
+                onLongPress={setActionTab}
+                onHistory={tt => navigate(`/m/history/${tt.id}`)}
+                onDelete={removeTab}
+              />
+            ))}
+            {!recent.length && !recentDocs.length && <Empty description={t('mb.doc.noHistory')} />}
+          </div>
+        ) : pageRows.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '32px 16px' }}>
             <Empty description={query ? t('mb.doc.noMatch', { q: query }) : t('mb.doc.noDocs')} />
             <div style={{ marginTop: 16 }}>

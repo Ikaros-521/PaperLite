@@ -16,6 +16,7 @@ import { LS_LANG, detectLang, setLang as setModuleLang, tr } from '../../i18n.js
 import * as fs from '../../fs.js'
 import * as llm from '../../llm.js'
 import { saveStateOf } from './shared/labels'
+import { SCALE_FONT, readScale, writeScale, type ScaleId } from './shared/scale'
 import type { SaveState } from './shared/types'
 
 /** CodeMirror Doc 的最小面：flow 只用到取值/取值，不依赖 CM 类型 */
@@ -100,6 +101,10 @@ interface MobileWorkspaceValue {
   settingsOpen: boolean
   openSettings: () => void
   closeSettings: () => void
+  // 字号档位（见 shared/scale.ts）：scaleFont 是 px 数值，壳注入成 --pl-font
+  scale: ScaleId
+  setScale: (scale: ScaleId) => void
+  scaleFont: number
 }
 
 const MobileCtx = createContext<MobileWorkspaceValue | null>(null)
@@ -207,6 +212,13 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     setModuleLang(next)
   }, [])
 
+  // 字号档位：持久化在本地，壳把 SCALE_FONT[scale] 注入 --pl-font 供预览与编辑器共用
+  const [scale, setScaleState] = useState<ScaleId>(readScale)
+  const setScale = useCallback((next: ScaleId) => {
+    setScaleState(next)
+    writeScale(next)
+  }, [])
+
   const value = useMemo<MobileWorkspaceValue>(() => ({
     t,
     lang,
@@ -248,7 +260,10 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     settingsOpen,
     openSettings: () => setSettingsOpen(true),
     closeSettings: () => setSettingsOpen(false),
-  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chatInject, buildContext, beforeAiApply, sendChatInject, settingsOpen])
+    scale,
+    setScale,
+    scaleFont: SCALE_FONT[scale],
+  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chatInject, buildContext, beforeAiApply, sendChatInject, settingsOpen, scale, setScale])
 
   return (
     // antd-mobile 自带文案（下拉刷新 / 没有更多了 / 搜索框、蒙层等 aria-label）默认是 zh-CN，
