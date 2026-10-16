@@ -592,6 +592,186 @@
   margin: 0 auto 8px;
 }
 
+/* ---------- AI 对话：narrow 模式填满容器（桌面那份是 fixed 停靠右缘 + 可拖可拉伸） ---------- */
+.pl-chat-host {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pl-mobile #chatPanel.narrow {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transition: none;
+  z-index: auto;
+}
+
+/* 标题栏与把手在手机上没有意义（不能拖），只留右侧操作钮 */
+.pl-mobile #chatPanel.narrow .sp-title {
+  cursor: default;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* NavBar 已经写了「AI 助手」，面板内再写一遍就是两行同字 */
+.pl-mobile #chatPanel.narrow .sp-title .sp-t {
+  display: none;
+}
+
+/* 桌面 13px 字 + 2px 6px padding 的头部按钮只有约 22px 高，手机上按不准 */
+.pl-mobile #chatPanel .cp-head-acts button {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 15px;
+}
+
+/* 两个下拉并排在 390px 里会把模型名挤没，改为各占一行 */
+.pl-mobile #chatPanel .chat-config {
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.pl-mobile #chatPanel .chat-config select {
+  flex: 1 1 100%;
+  max-width: none;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+/* 用量条：轨道先占整行，百分比与「压缩」按钮再同行，避免三块挤成竖排 */
+.pl-mobile #chatPanel .ctx-bar {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.pl-mobile #chatPanel .ctx-track {
+  order: 1;
+  flex: 1 1 100%;
+}
+
+.pl-mobile #chatPanel .ctx-num {
+  order: 2;
+}
+
+.pl-mobile #chatPanel .ctx-acts {
+  order: 3;
+  margin-left: auto;
+}
+
+.pl-mobile #chatPanel .ctx-compact {
+  min-height: 40px;
+  padding: 6px 12px;
+}
+
+.pl-mobile #chatPanel .chat-code-acts button {
+  min-height: 40px;
+  padding: 6px 10px;
+}
+
+/* 空态里的三条建议钮桌面只有 35px 高，手机上正好是拇指最常点的一排 */
+.pl-mobile #chatPanel .chat-suggest {
+  min-height: 48px;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
+/* 16px 以下 iOS 聚焦会自动放大页面，输入区必须守住这个下限 */
+.pl-mobile #chatPanel .chat-input textarea {
+  min-height: 84px;
+  font-size: 16px;
+}
+
+.pl-mobile #chatPanel .chat-input-acts .btn {
+  min-height: 44px;
+  padding: 8px 18px;
+}
+
+/* 无渠道引导里的「前往 AI 设置」等 .btn sm 只有 27px，手机上按不准 */
+.pl-mobile #chatPanel .btn {
+  min-height: 44px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+/* ---------- AI 渠道设置：复用桌面 SettingsDialog，窄屏下重排表单项 ---------- */
+.pl-mobile .modal {
+  width: min(560px, 94vw);
+  max-height: 86dvh;
+}
+
+.pl-mobile .modal-body {
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+}
+
+/* 协议/预设、上下文窗口这类并排项在窄屏一律改单列 */
+.pl-mobile .ch-row,
+.pl-mobile .ch-ctxwin {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.pl-mobile .ch-ctxwin label {
+  min-width: 0;
+}
+
+/* 思维链开关：原生勾选框只有 13px，整行给到 44px 再把它本身放大 */
+.pl-mobile .ch-edit label.inline {
+  min-height: 44px;
+}
+
+.pl-mobile .ch-edit input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+}
+
+.pl-mobile .ch-edit input:not([type='checkbox']),
+.pl-mobile .ch-edit select {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.pl-mobile .ch-acts button,
+.pl-mobile .mi-fetch,
+.pl-mobile .kv-eye,
+.pl-mobile .modal-h .btn {
+  min-height: 40px;
+  padding: 6px 10px;
+}
+
+/* 模型下拉是 absolute 浮层：桌面 190px 在手机上只露三行，5px 行高也按不准 */
+.pl-mobile .mi-drop {
+  max-height: 240px;
+}
+
+.pl-mobile .mi-opt {
+  padding: 12px 14px;
+  font-size: 14px;
+}
+
+/* 共享的 alert/confirm（<dialog class="modal message-dialog">）：
+   桌面组件里的 showConfirm/showAlert 在移动壳里也走这一份，删渠道靠它 */
+.pl-mobile .message-dialog .btn {
+  min-height: 44px;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+
+.pl-mobile .message-dialog input {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.pl-mobile .message-dialog .modal-body {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 /* ---------- 数字统一等宽，避免字数/页码跳动 ---------- */
 .pl-num {
   font-variant-numeric: tabular-nums;

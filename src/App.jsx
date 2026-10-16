@@ -30,13 +30,13 @@ import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.
 import { extOf, infoFor } from './fileTypes.js';
 import * as fs from './fs.js';
 import * as llm from './llm.js';
-import * as ctxBudget from './context.js';
 import { LS_LANG, detectLang, getLang, setLang as setModuleLang, tr } from './i18n.js';
 import { detectTheme, applyTheme } from './theme.js';
 import { saveState } from './saveState.js';
 import { makeTab } from './workspace/tabModel.js';
 import { useWorkspace } from './workspace/useWorkspace.js';
 import { useCompile } from './workspace/useCompile.js';
+import { buildLLMContext, aiFixPrompt, aiFixIssuePrompt } from './workspace/chatContext.js';
 import { LangContext } from './useI18n.js';
 
 const LS_MODE = 'paperlite.viewmode.v2';
@@ -562,50 +562,10 @@ export default function App() {
 
   const setZoomClamped = (d) => setZoom(z => Math.min(1.6, Math.max(0.5, +(z + d).toFixed(2))));
 
-  // ---- LLM 上下文构建（按 token 预算截断，见 context.js） ----
-  const buildContext = useCallback(async (scope, query, channel) => {
-    const c = cm();
-    const doc = valueRef.current || '';
-    const L = getLang();
-    const budget = ctxBudget.docBudget(channel, scope);
-    const omitted = '\n\n' + tr(L, 'app.ctxOmitted') + '\n\n';
-    // 截断后确实验证超了预算才提示「已截断」，避免估算与展示不一致
-    const fit = (t) => {
-      const out = ctxBudget.truncateToTokens(t, budget, omitted);
-      return { text: out, cut: out !== t };
-    };
-    const note = (base, cut) => base + (cut ? tr(L, 'app.ctxTruncated') : '');
-    if (scope === 'selection') {
-      const sel = c ? c.getSelection() : '';
-      if (!sel) return { text: '', note: tr(L, 'app.ctxSelEmpty'), tokens: 0, budget };
-      const full = ctxBudget.inputBudget(channel);
-      const out = ctxBudget.truncateToTokens(sel, full, omitted);
-      return { text: out, note: note(tr(L, 'app.ctxSel'), out !== sel), tokens: ctxBudget.estimateTokens(out), budget: full };
-    }
-    if (scope === 'paragraph') {
-      if (!c) return { text: '', note: '', tokens: 0, budget };
-      const cur = c.getCursor();
-      let a = cur.line, b = cur.line;
-      const n = c.lineCount();
-      while (a > 0 && (c.getLine(a - 1) || '').trim()) a--;
-      while (b < n - 1 && (c.getLine(b + 1) || '').trim()) b++;
-      const f = fit(rangeText(c, a, b));
-      return { text: f.text, note: note(tr(L, 'app.ctxPara', { a: a + 1, b: b + 1 }), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
-    }
-    if (scope === 'retrieve') {
-      if (channel && channel.embedModel) {
-        const chunks = await llm.retrieve(channel, query, doc, 6);
-        if (chunks && chunks.length) {
-          const f = fit(chunks.join('\n\n——\n\n'));
-          return { text: f.text, note: note(tr(L, 'app.ctxRag', { n: chunks.length }), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
-        }
-      }
-      const f = fit(doc);
-      return { text: f.text, note: note(tr(L, 'app.ctxFallback'), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
-    }
-    const f = fit(doc);
-    return { text: f.text, note: note(tr(L, 'app.ctxFull'), f.cut), tokens: ctxBudget.estimateTokens(f.text), budget };
-  }, []);
+  // ---- LLM 上下文构建（桌面与移动端共用，见 workspace/chatContext.js） ----
+  const buildContext = useCallback(
+    (scope, query, channel) => buildLLMContext({ cm: () => cmRef.current, doc: valueRef.current }, scope, query, channel),
+    []);
   buildContext.cm = () => cmRef.current;
 
   // ---- AI 修复 ----
@@ -618,10 +578,7 @@ export default function App() {
     if (!issues.length) { flash(tr(L, 'app.noFixable')); return; }
     setAiBusy(true);
     setChatOpen(true); setPanelOpen(false);
-    const prompt = tr(L, 'ai.fixPrompt', {
-      issues: issues.map(d => tr(L, 'ai.errLine', { n: d.line != null ? d.line + 1 : '?', msg: d.msg })).join('\n'),
-      doc: ctxBudget.truncateToTokens(activeValue, ctxBudget.docBudget(channel, 'full'), '\n\n' + tr(L, 'app.ctxOmitted') + '\n\n')
-    });
+    const prompt = aiFixPrompt({ issues, doc: activeValue, channel });
     setChatMessages(ms => ms.concat([{ role: 'user', content: tr(L, 'app.aiFixReq'), ctxNote: '🛠 ' + tr(L, 'app.nIssues', { n: issues.length }) }, { role: 'assistant', content: '', reasoning: '' }]));
     try {
       const r = await llm.chat(channel, [{ role: 'user', content: prompt }], { temperature: 0.2 });
@@ -638,14 +595,8 @@ export default function App() {
     if (!channel) { setSettingsOpen(true); alert(tr(L, 'app.needChannel')); return; }
     if (!isTexLike) { flash(tr(L, 'app.onlyTexAiFix')); return; }
     const all = (list && list.length ? list : [issue]);
-    const lines = activeValue.split('\n');
     setChatOpen(true); setPanelOpen(false);
-    const detail = all.map(d => {
-      const t = d.line != null ? (lines[d.line] || '').slice(0, 300) : '';
-      return tr(L, 'ai.errLineSrc', { n: d.line != null ? d.line + 1 : '?', msg: d.msg, src: t.trim() });
-    }).join('\n');
-    const prompt = tr(L, 'ai.fixIssuePrompt', { detail });
-    setChatInject({ text: prompt, n: Date.now() });
+    setChatInject({ text: aiFixIssuePrompt({ issues: all, lines: activeValue.split('\n') }), n: Date.now() });
   };
 
   // ---- 导出 ----
@@ -1118,11 +1069,6 @@ export default function App() {
   );
 }
 
-function rangeText(cm, a, b) {
-  const lines = [];
-  for (let i = a; i <= b; i++) lines.push(cm.getLine(i) || '');
-  return lines.join('\n');
-}
 function countOf(s) {
   const str = String(s || '');
   const cjk = (str.match(/[\u4e00-\u9fff]/g) || []).length;

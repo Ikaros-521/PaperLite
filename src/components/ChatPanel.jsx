@@ -10,7 +10,7 @@ import { showAlert as alert, showConfirm } from '../dialogs.js';
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -75,8 +75,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   if (!open) return null;
 
   // 拖拽：按下标题栏（按钮除外）浮窗化并跟随指针，双击标题回停靠（同图样式面板）
+  // narrow（移动端嵌入）下不浮窗：面板填满容器，拖动只会让它在 430px 宽里乱跑
   const startDrag = (e) => {
-    if (e.button !== 0 || e.target.closest('button')) return;
+    if (narrow || e.button !== 0 || e.target.closest('button')) return;
     const el = panelRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -93,7 +94,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
 
   // 左缘拉伸宽度：右缘保持不动（浮动态同时回移 left）
   const startResize = (e) => {
-    if (e.button !== 0) return;
+    if (narrow || e.button !== 0) return;
     const el = panelRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -242,7 +243,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     } else {
       cm.replaceSelection(code);
     }
-    cm.focus();
+    cm.focus && cm.focus();
   };
 
   const copy = (text) => navigator.clipboard && navigator.clipboard.writeText(text);
@@ -276,8 +277,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       role="complementary"
       aria-label={t('m.aiAssistant')}
       ref={panelRef}
-      className={'open' + (pos ? ' floating' : '')}
-      style={{
+      className={'open' + (narrow ? ' narrow' : '') + (pos ? ' floating' : '')}
+      style={narrow ? {} : {
         ...(width ? { width: width + 'px' } : {}),
         ...(pos ? {
           left: pos.x + 'px', top: pos.y + 'px',
@@ -286,14 +287,14 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         } : {})
       }}
     >
-      <span className="cp-resize" title={t('chat.resize')} onPointerDown={startResize}></span>
-      <div className="sp-title" onPointerDown={startDrag} onDoubleClick={() => setPos(null)}>
-        <span className="sp-drag" title={t('chat.drag')}>⠿</span>
+      {!narrow && <span className="cp-resize" title={t('chat.resize')} onPointerDown={startResize}></span>}
+      <div className="sp-title" onPointerDown={startDrag} onDoubleClick={narrow ? undefined : () => setPos(null)}>
+        {!narrow && <span className="sp-drag" title={t('chat.drag')}>⠿</span>}
         <span className="sp-t">{t('chat.title')}</span>
         <span className="cp-head-acts">
           <button title={t('chat.settings')} onClick={onOpenSettings}>⚙</button>
           <button title={t('chat.clear')} onClick={() => { setMessages([]); setReqUsage(null); setRealUsage(null); setNote(''); }}>{lang === 'zh' ? '清' : 'Clr'}</button>
-          <button title={t('chat.close')} onClick={onClose}>✕</button>
+          {!narrow && <button title={t('chat.close')} onClick={onClose}>✕</button>}
         </span>
       </div>
 

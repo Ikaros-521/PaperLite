@@ -29,6 +29,8 @@ import {
   ClockCircleOutline,
   ContentOutline,
   EditSOutline,
+  ExclamationTriangleOutline,
+  MessageOutline,
   MoreOutline,
   PictureOutline,
   PlayOutline,
@@ -42,6 +44,7 @@ import PreviewPane from '../../components/PreviewPane.jsx'
 import { renderLatex } from '../../engines/latex.js'
 import { renderMarkdownFull } from '../../engines/markdown.js'
 import { lintLaTeX } from '../../engines/linter.js'
+import { aiFixIssuePrompt } from '../../workspace/chatContext.js'
 import { wordCount } from '../../fileActions.js'
 import { tr, getLang } from '../../i18n.js'
 import { formatWords } from './shared/format'
@@ -87,6 +90,9 @@ const SYMBOLS = ['α', 'β', 'γ', 'δ', 'ε', 'θ', 'λ', 'μ', 'π', 'σ', 'ω
 function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
   const ws = useMobileWorkspace()
   const keyboard = useKeyboardInset()
+
+  // 卸载后共享层不能再把这个实例当「当前编辑器」（AI 写回会落到已 detach 的空 Doc 上）
+  useEffect(() => () => { ws.cmRef.current = null }, [])
 
   return (
     <div className="pl-editor" data-keyboard={keyboard > 0}>
@@ -668,6 +674,25 @@ export function Flow2_Workspace() {
               navigate(`/m/history/${tab.id}`)
             },
           },
+          {
+            key: 'ai',
+            text: <span><MessageOutline /> AI 助手</span>,
+            onClick: () => {
+              setMoreOpen(false)
+              navigate('/m/chat')
+            },
+          },
+          // 桌面点编辑器 gutter 红点会预填修复提示词；移动端没有 gutter 点击，
+          // 把同一份提示词（共享 chatContext）挂在这里，语法问题也能一键带去对话
+          ...(issues.length ? [{
+            key: 'aifix',
+            text: <span><ExclamationTriangleOutline /> AI 修 {issues.length} 处语法</span>,
+            onClick: () => {
+              setMoreOpen(false)
+              ws.sendChatInject(aiFixIssuePrompt({ issues: issues.slice(0, 20), lines: value.split('\n') }))
+              navigate('/m/chat')
+            },
+          }] : []),
           {
             key: 'export',
             text: '导出源码备份',

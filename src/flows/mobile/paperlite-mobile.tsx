@@ -13,6 +13,9 @@ import { Screen1_DocumentsHome } from './flow-1-documents'
 import { Flow2_Workspace } from './flow-2-editor'
 import { Flow3_Compile } from './flow-3-compile'
 import { Flow4_History, Screen4_RestoreBanner, Screen5_OfflineState } from './flow-4-history'
+import ChatPanel from '../../components/ChatPanel.jsx'
+import SettingsDialog from '../../components/SettingsDialog.jsx'
+import DialogHost from '../../components/MessageDialog.jsx'
 import { MobileWorkspaceProvider, useMobileWorkspace } from './mobileWorkspace'
 import { useKeyboardInset } from './shared/hooks'
 import { THEME_IDS, applyTheme, detectTheme } from '../../theme.js'
@@ -74,31 +77,53 @@ function ChatTab() {
   const ws = useMobileWorkspace()
   const navigate = useNavigate()
   const recent = ws.tabs.filter(tab => tab.doc)[0]
+  // 对话必须贴着一份文稿：没有可编辑的 Doc 时，选区/段落/全文三种上下文都无从取
+  if (!ws.activeTab?.doc) {
+    return (
+      <div className="pl-screen">
+        <NavBar back={null}>{ws.t('chat.title')}</NavBar>
+        <div className="pl-content" style={{ textAlign: 'center', padding: '32px 16px' }}>
+          {/* Empty 不接受 children，CTA 放外层 div */}
+          <Empty description={recent ? '当前打开的那篇不是文字稿，切回一篇再聊' : '先建一篇稿子，再让 AI 改'} />
+          <div style={{ marginTop: 16 }}>
+            <Button
+              color="primary"
+              onClick={() => {
+                if (!recent) {
+                  const tab = ws.addDraft('对话草稿.tex')
+                  navigate(`/m/workspace/${tab.id}`)
+                  return
+                }
+                ws.openTab(recent.id)
+                navigate(`/m/workspace/${recent.id}`)
+              }}
+            >
+              {recent ? '继续改最近那篇' : '新建一篇再改'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="pl-screen">
-      <NavBar back={null}>AI 助手</NavBar>
-      <div className="pl-content" style={{ textAlign: 'center', padding: '32px 16px' }}>
-        {/* Empty 不接受 children，CTA 放外层 div */}
-        <Empty description={recent ? 'AI 改写要贴着选区触发，不在独立页里聊' : '先建一篇稿子，再让 AI 改'} />
-        <div style={{ marginTop: 16 }}>
-          <Button
-            color="primary"
-            onClick={() => {
-              if (!recent) {
-                const tab = ws.addDraft('对话草稿.tex')
-                navigate(`/m/workspace/${tab.id}`)
-                return
-              }
-              ws.openTab(recent.id)
-              navigate(`/m/workspace/${recent.id}`)
-            }}
-          >
-            {recent ? '继续改最近那篇' : '新建一篇再改'}
-          </Button>
-        </div>
-        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--ink-faint)' }}>
-          对话面板在工作区右上角 ⋯ 内，选中段落后就地改写。
-        </div>
+      <NavBar back={null}>{ws.t('chat.title')}</NavBar>
+      <div className="pl-content pl-chat-host">
+        {/* 桌面同一个组件，narrow 模式填满容器：禁拖拽/改宽，上下文与 token 口径完全一致 */}
+        <ChatPanel
+          open
+          narrow
+          onClose={() => navigate('/m')}
+          channels={ws.channels as never}
+          activeChannelId={ws.activeChannelId}
+          setActiveChannelId={ws.setActiveChannelId as never}
+          onOpenSettings={ws.openSettings}
+          buildContext={ws.buildContext}
+          messages={ws.chatMessages as never}
+          setMessages={ws.setChatMessages as never}
+          inject={ws.chatInject as never}
+          onBeforeApply={ws.beforeAiApply}
+        />
       </div>
     </div>
   )
@@ -108,6 +133,9 @@ function SettingsTab() {
   const ws = useMobileWorkspace()
   const navigate = useNavigate()
   const [theme, setTheme] = useState(detectTheme)
+  type Channel = { id: string; name?: string; chatModel?: string }
+  const list = ws.channels as Channel[]
+  const activeChannel = list.filter(c => c.id === ws.activeChannelId)[0] || list[0] || null
   return (
     <div className="pl-screen">
       <NavBar back={null}>设置</NavBar>
@@ -163,8 +191,17 @@ function SettingsTab() {
           <List.Item extra={<Tag fill="outline">98 MB 可清理</Tag>}>内置 TeX 资源</List.Item>
         </List>
         <List header="AI">
-          <List.Item extra={<Tag fill="outline">桌面端配置</Tag>}>渠道与密钥</List.Item>
-          <List.Item extra="上下文压缩：自动">Token 用量</List.Item>
+          <List.Item
+            clickable
+            arrowIcon
+            extra={activeChannel ? `${activeChannel.name} · ${activeChannel.chatModel || ws.t('chat.noModel')}` : '未配置'}
+            onClick={ws.openSettings}
+          >
+            渠道与密钥
+          </List.Item>
+          <List.Item clickable arrowIcon extra={ws.activeTab?.doc ? '打开对话' : '先建一篇稿子'} onClick={() => navigate('/m/chat')}>
+            {ws.t('chat.title')}
+          </List.Item>
         </List>
       </div>
     </div>
@@ -172,6 +209,7 @@ function SettingsTab() {
 }
 
 function MobileShell() {
+  const ws = useMobileWorkspace()
   const location = useLocation()
   const navigate = useNavigate()
   const keyboard = useKeyboardInset()
@@ -208,6 +246,20 @@ function MobileShell() {
             <SafeArea position="bottom" />
           </div>
         )}
+
+        {/* 桌面同一份渠道表单：ChatPanel 的 ⚙ 与设置页都开它，不再另写一套字段。
+            必须挂在 .pl-mobile 内，窄屏重排规则（单列、44px、16px）才作用得到 */}
+        <SettingsDialog
+          open={ws.settingsOpen}
+          onClose={ws.closeSettings}
+          channels={ws.channels as never}
+          setChannels={ws.setChannels as never}
+          activeChannelId={ws.activeChannelId}
+          setActiveChannelId={ws.setActiveChannelId as never}
+        />
+        {/* ChatPanel / SettingsDialog 里的 alert、confirm 走桌面那条 dialogs.js 队列；
+            移动壳不挂 DialogHost 的话这些调用会永远不 resolve（删除渠道按不动） */}
+        <DialogHost />
       </div>
     </div>
   )

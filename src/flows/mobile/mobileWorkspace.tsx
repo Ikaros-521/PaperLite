@@ -8,9 +8,11 @@ import { type ReactNode, type RefObject, createContext, useCallback, useContext,
 import { Button, Dialog, Input, Popup, Toast } from 'antd-mobile'
 import { useWorkspace } from '../../workspace/useWorkspace.js'
 import { useCompile } from '../../workspace/useCompile.js'
+import { buildLLMContext } from '../../workspace/chatContext.js'
 import { LangContext } from '../../useI18n.js'
 import { LS_LANG, detectLang, setLang as setModuleLang, tr } from '../../i18n.js'
 import * as fs from '../../fs.js'
+import * as llm from '../../llm.js'
 import { saveStateOf } from './shared/labels'
 import type { SaveState } from './shared/types'
 
@@ -35,6 +37,15 @@ export interface MobileTab {
 interface PromptState {
   message: string
   value: string
+}
+
+/** ChatPanel 需要的上下文构造器；除常规调用外还挂 cm()，供「替换选区/替换全文」回写编辑器 */
+export type ChatContextBuilder = ((
+  scope: string,
+  query: string,
+  channel: unknown,
+) => Promise<{ text: string; note: string; tokens: number; budget: number }>) & {
+  cm?: () => unknown
 }
 
 interface MobileWorkspaceValue {
@@ -73,6 +84,20 @@ interface MobileWorkspaceValue {
   compile: () => Promise<string>
   cancelCompile: () => void
   pdfIsStale: boolean
+  // AI 对话：与桌面共用同一个 ChatPanel 与同一份渠道存储（localStorage），不另写一套
+  channels: unknown[]
+  setChannels: (updater: unknown) => void
+  activeChannelId: string
+  setActiveChannelId: (id: string) => void
+  chatMessages: unknown[]
+  setChatMessages: (updater: unknown) => void
+  chatInject: { text: string; n: number } | null
+  sendChatInject: (text: string) => void
+  buildContext: ChatContextBuilder
+  beforeAiApply: () => void
+  settingsOpen: boolean
+  openSettings: () => void
+  closeSettings: () => void
 }
 
 const MobileCtx = createContext<MobileWorkspaceValue | null>(null)
@@ -123,6 +148,53 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     { tabsRef: ws.tabsRef, activeTab, isTexLike, autoWarm: false },
   )
 
+  // ---- AI 对话：渠道、消息、上下文构造全部复用桌面实现 ----
+  const [channels, setChannels] = useState(() => llm.loadChannels())
+  const [activeChannelId, setActiveChannelId] = useState(() => (llm.loadChannels()[0] || {}).id || '')
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatInject, setChatInject] = useState<{ text: string; n: number } | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => { llm.saveChannels(channels) }, [channels])
+
+  const activeValueRef = useRef(ws.activeValue)
+  activeValueRef.current = ws.activeValue
+
+  /**
+   * 编辑器只在「源码」视图挂载，AI Tab 是独立路由，此时 cmRef 已随 EditorPane 卸载。
+   * CodeMirror 的 Doc 本身就是数据模型（getSelection/getCursor/setValue 都在），
+   * 所以脱离编辑器也能读写；回到工作区时 swapDoc 会显示新内容。
+   * 代价是 Doc 的 change 事件不会传给共享层，必须手动 onDocChange，否则脏标记与草稿不落盘。
+   */
+  const docAsCm = (doc: MobileDoc & Record<string, any>) => ({
+    getSelection: () => doc.getSelection(),
+    getCursor: () => doc.getCursor(),
+    lineCount: () => doc.lineCount(),
+    getLine: (n: number) => doc.getLine(n),
+    setValue: (text: string) => { doc.setValue(text); ws.onDocChange(doc, doc.getValue()) },
+    replaceSelection: (text: string) => { doc.replaceSelection(text); ws.onDocChange(doc, doc.getValue()) },
+    focus: () => {},
+  })
+  const chatCm = () => {
+    // EditorPane 卸载时会清掉 cmRef；这里再按 DOM 是否还在兜一层——
+    // 拿到已 detach 的实例会把 AI 结果写进它 swapDoc 换出来的临时空 Doc，静默丢失。
+    const inst = cmRef.current as { getWrapperElement?: () => HTMLElement } | null
+    const el = inst?.getWrapperElement?.()
+    if (el?.isConnected) return cmRef.current
+    const doc = activeTab?.doc as (MobileDoc & Record<string, any>) | null
+    return doc ? docAsCm(doc) : null
+  }
+
+  const buildContext = useCallback<ChatContextBuilder>((scope: string, query: string, channel: unknown) =>
+    buildLLMContext({ cm: chatCm, doc: activeValueRef.current }, scope, query, channel), [activeTab])
+  buildContext.cm = chatCm
+
+  // 整篇替换会冲掉撤销栈：先存一份版本，与桌面 hist.beforeAi 同一入口
+  const beforeAiApply = useCallback(() => {
+    ws.snapshot(tr(lang, 'hist.beforeAi'), 'manual', true)
+  }, [ws, lang])
+
+  const sendChatInject = useCallback((text: string) => setChatInject({ text, n: Date.now() }), [])
+
   useEffect(() => {
     try { localStorage.setItem(LS_LANG, lang) } catch { /* ignore */ }
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
@@ -161,7 +233,20 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     compile: compileLayer.compile,
     cancelCompile: compileLayer.cancelCompile,
     pdfIsStale: compileLayer.pdfIsStale,
-  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer])
+    channels,
+    setChannels,
+    activeChannelId,
+    setActiveChannelId,
+    chatMessages,
+    setChatMessages,
+    chatInject,
+    sendChatInject,
+    buildContext,
+    beforeAiApply,
+    settingsOpen,
+    openSettings: () => setSettingsOpen(true),
+    closeSettings: () => setSettingsOpen(false),
+  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chatInject, buildContext, beforeAiApply, sendChatInject, settingsOpen])
 
   return (
     <LangContext.Provider value={lang}>
