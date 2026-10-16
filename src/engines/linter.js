@@ -57,11 +57,13 @@ export function lintLaTeX(src) {
     let bs = 0;
     for (let i = 0; i < l.length; i++) {
       const c = l.charAt(i);
-      if (c === '\\') { bs++; i++; continue; }
-      if (c === '{') depth++;
-      else if (c === '}') {
-        depth--;
-        if (depth < 0) { out.push({ line: li, msg: t('lint.extraBrace'), severity: 'error', kind: 'brace' }); depth = 0; }
+      if (c === '\\') { bs++; continue; }
+      if (bs % 2 === 0) {
+        if (c === '{') depth++;
+        else if (c === '}') {
+          depth--;
+          if (depth < 0) { out.push({ line: li, msg: t('lint.extraBrace'), severity: 'error', kind: 'brace' }); depth = 0; }
+        }
       }
       bs = 0;
     }
@@ -74,7 +76,7 @@ export function lintLaTeX(src) {
     let count = 0, bs = 0;
     for (let i = 0; i < l.length; i++) {
       const c = l.charAt(i);
-      if (c === '\\') { bs++; i++; continue; }
+      if (c === '\\') { bs++; continue; }
       if (c === '$' && bs % 2 === 0) count++;
       bs = 0;
     }

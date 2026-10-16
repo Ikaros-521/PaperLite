@@ -507,8 +507,8 @@ body.cp-dragging::before {
 .pdf-host iframe { width: 100%; height: 100%; border: 0; background: var(--pdf-bg); }
 .compile-log { max-width: 900px; margin: 0 auto; padding: 14px; }
 /* 没有行号的报错：点不动就别说得动，给出禁用态与解释 */
-.compile-log .diag-item.no-line { cursor: default; opacity: .72; }
-.compile-log .diag-item.no-line:hover { background: none; }
+.diag-item.no-line { cursor: default; opacity: .72; }
+.diag-item.no-line:hover { background: none; }
 .compile-log .log-note { font-size: 12px; color: var(--ink-faint); margin-top: 10px; }
 .compile-log pre {
   font-family: Consolas, monospace; font-size: 12px; background: var(--code-bg); color: var(--code-ink);

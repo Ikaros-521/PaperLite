@@ -560,6 +560,22 @@ export function Flow2_Workspace() {
     setInsertOpen(true)
   }
 
+  const jumpToLine = (lineZeroBased: number) => {
+    setView('source')
+    requestAnimationFrame(() => {
+      const instance = cm()
+      if (!instance) return
+      const line = Math.max(0, lineZeroBased)
+      instance.setCursor({ line, ch: 0 })
+      instance.scrollIntoView({ line, ch: 0 }, 120)
+      instance.focus()
+    })
+  }
+
+  const errCount = issues.filter(i => i.severity === 'error').length
+  const warnCount = issues.filter(i => i.severity === 'warn').length
+  const firstIssueWithLine = issues.find(i => typeof i.line === 'number' && i.line >= 0)
+
   return (
     <div className="pl-screen" style={{ '--pl-keyboard': `${keyboard}px` } as CSSProperties}>
       <NavBar
@@ -594,11 +610,21 @@ export function Flow2_Workspace() {
         style={{ margin: '8px 12px', '--segmented-background': 'var(--chrome)' } as CSSProperties}
       />
 
-      {issues.some(i => i.severity === 'error') && (
+      {(errCount > 0 || warnCount > 0) && (
         <NoticeBar
-          color="alert"
+          color={errCount > 0 ? 'alert' : 'info'}
           wrap
-          content={`${issues.filter(i => i.severity === 'error').length} 个错误会影响真实编译，可点「编译」查看逐错跳行。`}
+          style={{ cursor: firstIssueWithLine ? 'pointer' : undefined }}
+          content={
+            errCount > 0
+              ? `${errCount} 个错误可能影响编译（点击跳转至第 ${firstIssueWithLine ? firstIssueWithLine.line + 1 : 1} 行）`
+              : `${warnCount} 处语法提示（点击跳转至第 ${firstIssueWithLine ? firstIssueWithLine.line + 1 : 1} 行）`
+          }
+          onClick={() => {
+            if (firstIssueWithLine && typeof firstIssueWithLine.line === 'number') {
+              jumpToLine(firstIssueWithLine.line)
+            }
+          }}
         />
       )}
 

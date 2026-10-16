@@ -22,7 +22,20 @@ export default function DiagnosticsPanel({ issues = [], dismissedCount = 0, onRe
       {dismissedCount > 0 && <div className="diag-note">{t('diag.hidden', { n: dismissedCount })} <button className="btn sm" onClick={onRestore}>{t('diag.restore')}</button></div>}
       {all.length > 0 && <div className="diag-note">{t('diag.dismissTip')}</div>}
       {all.map(d => (
-        <div key={d.id} className={'diag-item ' + d.severity} onClick={() => d.line != null && onJump(d)}>
+        <div
+          key={d.id}
+          className={'diag-item ' + d.severity + (d.line == null ? ' no-line' : '')}
+          role={d.line != null ? 'button' : undefined}
+          tabIndex={d.line != null ? 0 : undefined}
+          title={d.line != null ? t('diag.jump') : t('diag.noLine')}
+          onClick={() => d.line != null && onJump(d)}
+          onKeyDown={e => {
+            if (d.line != null && (e.key === 'Enter' || e.key === ' ')) {
+              e.preventDefault();
+              onJump(d);
+            }
+          }}
+        >
           <span className="diag-sev">{d.severity === 'error' ? '✖' : '⚠'}</span>
           <span className="diag-msg">{d.msg}</span>
           {d.line != null && <span className="diag-line">{t('diag.line', { n: d.line + 1 })}</span>}
