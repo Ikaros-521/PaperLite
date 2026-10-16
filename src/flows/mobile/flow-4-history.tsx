@@ -336,7 +336,7 @@ export function Screen4_RestoreBanner({
    ENTRY:  编译入口检测到离线，或所有本机引擎不可用
    EXIT:   「仅编辑」→ 回工作区（近似排版仍可用）；「重新检测」→ 重新探测引擎
    BRANCH: 恢复在线 → 该屏自动让位给编译 Sheet
-   注意：引擎清单当前仍是 mock，接 /api/health 与 engineStatus 属编译那一轮
+   注意：引擎清单来自共享 useCompile 的 /api/health 探测，非 mock
    ================================================ */
 export function Screen5_OfflineState() {
   const navigate = useNavigate()

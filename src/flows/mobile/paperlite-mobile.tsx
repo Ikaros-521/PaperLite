@@ -17,6 +17,7 @@ import ChatPanel from '../../components/ChatPanel.jsx'
 import SettingsDialog from '../../components/SettingsDialog.jsx'
 import DialogHost from '../../components/MessageDialog.jsx'
 import { MobileWorkspaceProvider, useMobileWorkspace } from './mobileWorkspace'
+import { ENGINE_LABEL, ENGINE_STATUS_LABEL } from './shared/labels'
 import { useKeyboardInset } from './shared/hooks'
 import { THEME_IDS, applyTheme, detectTheme } from '../../theme.js'
 import { wordCount } from '../../fileActions.js'
@@ -185,10 +186,14 @@ function SettingsTab() {
           </List.Item>
         </List>
         <List header="编译">
-          <List.Item clickable arrowIcon extra="XeLaTeX（本机）" onClick={() => navigate('/m/offline')}>
-            默认引擎与状态
+          <List.Item clickable arrowIcon extra={ENGINE_LABEL[ws.engine as keyof typeof ENGINE_LABEL] || ws.engine} onClick={() => navigate('/m/offline')}>
+            默认引擎
           </List.Item>
-          <List.Item extra={<Tag fill="outline">98 MB 可清理</Tag>}>内置 TeX 资源</List.Item>
+          <List.Item extra={ENGINE_STATUS_LABEL[ws.builtinStatus] || ws.builtinStatus}>
+            内置引擎状态
+          </List.Item>
+          {/* 应用侧没有清理 wasm 资源的入口，只能如实说明首次编译的下载量 */}
+          <List.Item extra={<Tag fill="outline">首次编译约 98 MB</Tag>}>内置 TeX 资源</List.Item>
         </List>
         <List header="AI">
           <List.Item
