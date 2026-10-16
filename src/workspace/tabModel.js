@@ -20,7 +20,7 @@ let tabSeq = 0;
  * 造一个标签。doc 是 CodeMirror Doc 实例（不是字符串），
  * 两端都要按这个形状走，否则 EditorPane / 历史 / 保存逻辑全要对齐两套。
  */
-export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', draftId }) {
+export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', draftId, updatedAt }) {
   const id = ++tabSeq;
   if (kind === 'draft') draftId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
   const tab = {
@@ -29,6 +29,8 @@ export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, s
     historyKey: JSON.stringify([kind === 'draft' ? 'draft' : historyScope, kind === 'draft' ? draftId : path || name]),
     saved: saved !== undefined ? saved : (text || ''),
     imageUrl: imageUrl || null,
+    // 移动端文稿列表要按「多久没动」排序与展示；桌面忽略这个字段
+    updatedAt: typeof updatedAt === 'number' ? updatedAt : Date.now(),
     dirty: false, doc: null
   };
   if (text !== undefined && text !== null) tab.doc = new CodeMirror.Doc(text, modeSpec);
@@ -41,7 +43,12 @@ export function readDrafts() {
   try {
     const arr = JSON.parse(localStorage.getItem(LS_DRAFTS) || 'null');
     if (Array.isArray(arr)) {
-      const list = arr.filter(d => d && typeof d.text === 'string').map(d => ({ name: nameOf(d.name), text: d.text, ...(typeof d.id === 'string' && d.id ? { id: d.id } : {}) }));
+      const list = arr.filter(d => d && typeof d.text === 'string').map(d => ({
+        name: nameOf(d.name),
+        text: d.text,
+        ...(typeof d.id === 'string' && d.id ? { id: d.id } : {}),
+        ...(Number.isFinite(d.updated) ? { updated: d.updated } : {}),
+      }));
       if (list.length) return list;
     }
   } catch (e) { /* 落盘格式坏了，退回旧键 */ }
@@ -59,12 +66,13 @@ export function restoreDraftTabs(lang = getLang()) {
     text: d.text,
     modeSpec: 'stex',
     saved: d.text,
+    updatedAt: d.updated,
   }));
 }
 
 /** 落盘前的形状 */
 export function draftsOf(tabs) {
-  return tabs.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue() }));
+  return tabs.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue(), updated: x.updatedAt || Date.now() }));
 }
 
 /** 写失败会抛（配额满/隐私模式），调用方必须把它变成可见提示，静默 catch 等于静默丢稿 */
@@ -80,7 +88,8 @@ export function markDraftsStored(tabs) {
     const value = x.doc.getValue();
     if (x.saved === value && x.browserStored && !x.saveError) return x;
     changed = true;
-    return { ...x, saved: value, browserStored: true, saveError: '' };
+    // 时间戳随内容推进；落盘读的是上一轮数组，最多滞后一个防抖周期（<1s），列表展示可接受
+    return { ...x, saved: value, browserStored: true, saveError: '', updatedAt: Date.now() };
   });
   return changed ? next : tabs;
 }

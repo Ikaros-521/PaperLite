@@ -1,13 +1,31 @@
 import type { DocKind, EngineName, PreviewMode, SaveState } from './types'
+import { saveState as desktopSaveState } from '../../../saveState.js'
 
-/** 保存态文案对齐 src/i18n.js 的 save.* 六态，移动端改为顶栏常驻徽标 */
+/** 保存态文案对齐 src/i18n.js 的 save.* 语义，移动端改为顶栏常驻徽标 */
 export const SAVE_STATE: Record<SaveState, { text: string; color: string; tip: string }> = {
   'browser-saved': { text: '已存浏览器', color: 'primary', tip: '草稿只存在这台浏览器，不会写入文件或同步到其他设备' },
   'browser-pending': { text: '等待自动保存', color: 'default', tip: '编辑停顿后自动存入当前浏览器' },
   'disk-saved': { text: '已写入文件', color: 'success', tip: '内容与磁盘文件一致' },
   'disk-dirty': { text: '有未保存修改', color: 'warning', tip: '内容与磁盘不同，点「保存」写入' },
+  unsaved: { text: '尚未存到文件', color: 'warning', tip: '此标签还没有文件位置，保存时会让你选位置' },
   saving: { text: '正在写入…', color: 'primary', tip: '保存中，此时继续输入的新改动会保留标记' },
   failed: { text: '保存失败', color: 'danger', tip: '内容尚未安全保存，请重试或先导出源码备份' },
+}
+
+/** 复用桌面唯一的「脏」判据（src/saveState.js），两端不各定一套定义 */
+const DESKTOP_STATE: Record<string, SaveState> = {
+  saving: 'saving',
+  failed: 'failed',
+  browserSaved: 'browser-saved',
+  browserPending: 'browser-pending',
+  diskSaved: 'disk-saved',
+  diskUnsaved: 'disk-dirty',
+  unsaved: 'unsaved',
+}
+
+export function saveStateOf(tab: Parameters<typeof desktopSaveState>[0]): SaveState {
+  const raw = desktopSaveState(tab as never)
+  return (raw && DESKTOP_STATE[raw]) || 'browser-pending'
 }
 
 export const DOC_KIND_LABEL: Record<DocKind, string> = {

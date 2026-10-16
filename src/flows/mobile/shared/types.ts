@@ -12,7 +12,7 @@ export type DocKind = 'tex' | 'md' | 'image' | 'pdf'
  * 顶栏保存态徽标。取值对齐 i18n 的 save.* 六态：
  * browser-saved / browser-pending / disk-saved / disk-dirty / saving / failed
  */
-export type SaveState = 'browser-saved' | 'browser-pending' | 'disk-saved' | 'disk-dirty' | 'saving' | 'failed'
+export type SaveState = 'browser-saved' | 'browser-pending' | 'disk-saved' | 'disk-dirty' | 'unsaved' | 'saving' | 'failed'
 
 /** 工作区段控件：源码 ⇄ 排版；pdf / log 是编译结果态，不属于视图切换 */
 export type WorkspaceView = 'source' | 'rich'

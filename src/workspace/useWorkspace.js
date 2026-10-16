@@ -381,6 +381,47 @@ export function useWorkspace(ui) {
     return tab || null;
   }, []);
 
+  /** 浏览器草稿：移动端「新建草稿」与桌面空态共用。立即落盘，避免改名/新建后刷新即丢 */
+  const addDraft = useCallback((name, text = '') => {
+    const tab = makeTab({
+      name: name || tr(getLang(), 'app.draftName'),
+      path: tr(getLang(), 'app.draftPath'),
+      kind: 'draft', text, modeSpec: 'stex', saved: text,
+    });
+    setTabs(ts => {
+      const next = ts.concat(tab);
+      try { persistDrafts(next); } catch (e) { /* 自动保存会再报，这里不重复弹 */ }
+      return next;
+    });
+    setActiveId(tab.id);
+    setActiveValue(text);
+    return tab;
+  }, []);
+
+  /** 改名：草稿只改显示名，文件标签同时改 path；改完立刻整组落盘 */
+  const renameTab = useCallback((id, name) => {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return false;
+    setTabs(ts => {
+      const next = ts.map(x => x.id === id ? { ...x, name: trimmed, path: x.kind === 'draft' ? x.path : trimmed } : x);
+      try { persistDrafts(next); } catch (e) { /* 自动保存会再报 */ }
+      return next;
+    });
+    return true;
+  }, []);
+
+  /** 落盘成功后推进 saved（Ctrl+S 的浏览器路径） */
+  const persistNow = useCallback(() => {
+    try {
+      persistDrafts(tabsRef.current);
+      setTabs(markDraftsStored);
+      return true;
+    } catch (e) {
+      setTabs(ts => ts.map(x => x.kind === 'draft' ? { ...x, saveError: tr(getLang(), 'app.draftSaveFailed') } : x));
+      return false;
+    }
+  }, []);
+
   return {
     tabs, setTabs, tabsRef, activeId, setActiveId, activeValue, setActiveValue, activeTab,
     rootDir, setRootDir, restorePrompt, setRestorePrompt,
@@ -388,6 +429,7 @@ export function useWorkspace(ui) {
     noteHistory, snapshot,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
+    addDraft, renameTab, persistNow,
     onDocChange, activateTab,
   };
 }

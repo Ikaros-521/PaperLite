@@ -4,17 +4,19 @@
 // 导航模式：根层 TabBar，工作区/编译/历史走 Stack push（隐藏 TabBar）
 // =============================================
 
-import { type CSSProperties, useState } from 'react'
+import { type CSSProperties, useMemo, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { Button, Empty, List, NavBar, NoticeBar, SafeArea, TabBar, Tag, Toast } from 'antd-mobile'
+import { Button, Empty, List, NavBar, NoticeBar, SafeArea, Selector, TabBar, Tag, Toast } from 'antd-mobile'
 import { FileOutline, MessageOutline, SetOutline } from 'antd-mobile-icons'
 import './mobile-theme.css'
 import { Screen1_DocumentsHome } from './flow-1-documents'
 import { Flow2_Workspace } from './flow-2-editor'
 import { Flow3_Compile } from './flow-3-compile'
 import { Flow4_History, Screen4_RestoreBanner, Screen5_OfflineState } from './flow-4-history'
+import { MobileWorkspaceProvider, useMobileWorkspace } from './mobileWorkspace'
 import { useKeyboardInset } from './shared/hooks'
-import { mockRestorePrompt } from './shared/mock-data'
+import { THEME_IDS, applyTheme, detectTheme } from '../../theme.js'
+import { wordCount } from '../../fileActions.js'
 
 /**
  * 用 HashRouter 而不是 BrowserRouter：
@@ -31,7 +33,23 @@ const TABS = [
 const IMMERSIVE = ['/m/workspace', '/m/compile', '/m/history', '/m/offline']
 
 function DocumentsTab() {
-  const [prompt, setPrompt] = useState(mockRestorePrompt)
+  const ws = useMobileWorkspace()
+  const navigate = useNavigate()
+  const [dismissed, setDismissed] = useState(false)
+
+  // 真实草稿：浏览器草稿就是没有磁盘句柄的标签，冷启动时已由共享层恢复
+  const prompt = useMemo(() => {
+    const drafts = ws.tabs.filter(tab => !tab.handle && tab.doc && tab.kind !== 'image' && tab.kind !== 'pdf')
+    if (!drafts.length || dismissed) return null
+    return {
+      folderName: ws.rootDir?.name || null,
+      pendingTabs: drafts.map(tab => ({
+        id: String(tab.id),
+        name: tab.name,
+        words: wordCount(tab.doc ? tab.doc.getValue() : '').total,
+      })),
+    }
+  }, [ws.tabs, ws.rootDir, dismissed])
 
   return (
     <Screen1_DocumentsHome
@@ -40,11 +58,11 @@ function DocumentsTab() {
           <Screen4_RestoreBanner
             prompt={prompt}
             onRestore={() => {
-              const count = prompt.pendingTabs.length
-              setPrompt(null)
-              Toast.show({ content: `已恢复 ${count} 个草稿`, icon: 'success' })
+              const first = prompt.pendingTabs[prompt.pendingTabs.length - 1]
+              ws.openTab(Number(first.id))
+              navigate(`/m/workspace/${first.id}`)
             }}
-            onDiscard={() => setPrompt(null)}
+            onDiscard={() => setDismissed(true)}
           />
         ) : undefined
       }
@@ -53,16 +71,29 @@ function DocumentsTab() {
 }
 
 function ChatTab() {
+  const ws = useMobileWorkspace()
   const navigate = useNavigate()
+  const recent = ws.tabs.filter(tab => tab.doc)[0]
   return (
     <div className="pl-screen">
       <NavBar back={null}>AI 助手</NavBar>
       <div className="pl-content" style={{ textAlign: 'center', padding: '32px 16px' }}>
         {/* Empty 不接受 children，CTA 放外层 div */}
-        <Empty description="AI 改写要贴着选区触发，不在独立页里聊" />
+        <Empty description={recent ? 'AI 改写要贴着选区触发，不在独立页里聊' : '先建一篇稿子，再让 AI 改'} />
         <div style={{ marginTop: 16 }}>
-          <Button color="primary" onClick={() => navigate('/m/workspace/d1')}>
-            打开最近的稿子
+          <Button
+            color="primary"
+            onClick={() => {
+              if (!recent) {
+                const tab = ws.addDraft('对话草稿.tex')
+                navigate(`/m/workspace/${tab.id}`)
+                return
+              }
+              ws.openTab(recent.id)
+              navigate(`/m/workspace/${recent.id}`)
+            }}
+          >
+            {recent ? '继续改最近那篇' : '新建一篇再改'}
           </Button>
         </div>
         <div style={{ marginTop: 12, fontSize: 12, color: 'var(--ink-faint)' }}>
@@ -74,16 +105,42 @@ function ChatTab() {
 }
 
 function SettingsTab() {
+  const ws = useMobileWorkspace()
   const navigate = useNavigate()
+  const [theme, setTheme] = useState(detectTheme)
   return (
     <div className="pl-screen">
       <NavBar back={null}>设置</NavBar>
       <div className="pl-content">
-        <NoticeBar color="info" content="移动端设置流本轮未设计，以下为只读摘要；改动请到桌面端。" />
         <List header="外观与语言">
-          <List.Item extra="宣纸">皮肤</List.Item>
-          <List.Item extra="中文">界面语言</List.Item>
-          <List.Item extra="14px">编辑器字号</List.Item>
+          <List.Item>
+            <div style={{ marginBottom: 8 }}>皮肤</div>
+            <Selector
+              columns={2}
+              value={[theme]}
+              onChange={v => {
+                const next = String(v[0] || theme)
+                applyTheme(next)
+                setTheme(next)
+                Toast.show({ content: ws.t('theme.' + next), icon: 'success' })
+              }}
+              options={THEME_IDS.map(id => ({ label: ws.t('theme.' + id), value: id }))}
+            />
+          </List.Item>
+          <List.Item>
+            <div style={{ marginBottom: 8 }}>界面语言</div>
+            <Selector
+              value={[ws.lang]}
+              onChange={v => {
+                ws.setLang(String(v[0] || 'zh'))
+                Toast.show({ content: '界面文案已切换；引擎告警同步换语言', icon: 'success' })
+              }}
+              options={[
+                { label: '中文', value: 'zh' },
+                { label: 'English', value: 'en' },
+              ]}
+            />
+          </List.Item>
         </List>
         <List header="界面形态">
           {/* 与桌面「手机版」对称：改 hash 后 reload，让 main.jsx 重新决定渲染哪棵树 */}
@@ -159,7 +216,10 @@ function MobileShell() {
 export default function PaperLiteMobile() {
   return (
     <HashRouter>
-      <MobileShell />
+      {/* Provider 持有一份共享工作区，四个 flow 读同一份 tabs / 草稿 / 保存实现 */}
+      <MobileWorkspaceProvider>
+        <MobileShell />
+      </MobileWorkspaceProvider>
     </HashRouter>
   )
 }

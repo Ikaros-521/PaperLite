@@ -515,6 +515,60 @@
   background: var(--accent);
 }
 
+/* ---------- 复用桌面组件时的落点：EditorPane / PreviewPane 依赖自己的 id ---------- */
+.pl-editor {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.pl-editor[data-keyboard='false'] {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pl-mobile #editorPane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 移动端窄屏不显示行号槽，省 30px 给正文 */
+.pl-mobile #editorPane .CodeMirror-linenumbers {
+  width: 22px;
+}
+
+.pl-preview-host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.pl-mobile #previewPane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  background: var(--desk);
+}
+
+/* 桌面预览条（同步滚动 / 引擎下拉 / 编译按钮）在移动端由顶栏与工具带承担 */
+.pl-mobile #previewBar {
+  display: none;
+}
+
+.pl-mobile #previewScroll {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 8px calc(12px + env(safe-area-inset-bottom));
+}
+
+.pl-mobile #paper {
+  max-width: 100%;
+  padding: 22px 16px;
+}
+
 /* ---------- 数字统一等宽，避免字数/页码跳动 ---------- */
 .pl-num {
   font-variant-numeric: tabular-nums;
