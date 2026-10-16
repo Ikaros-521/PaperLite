@@ -44,6 +44,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .mb-item { position: relative; }
 .mb-item.disabled { opacity: .45; }
 .mb-title {
+  white-space: nowrap;
   border: 0; background: none; font: inherit; font-size: 13.5px; color: var(--ink-soft);
   padding: 4px 10px; border-radius: 5px; cursor: default;
 }
@@ -76,6 +77,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .mi-sub:hover > .mb-menu.sub { display: block; }
 
 .mb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.compact-control { display: none; }
+.sidebar-backdrop { display: none; }
 
 #toolbelt {
   display: flex; align-items: center; gap: 6px; padding: 5px 12px;
@@ -835,12 +838,41 @@ figure.float .diagram { display: block; }
 #statusbar .sep { color: var(--ink-faint); }
 #statusbar .grow { flex: 1; }
 #statusbar .hint { color: var(--ink-faint); }
+.st-warn { border: 0; padding: 0; background: none; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
 .st-warn.has { color: var(--seal-deep); cursor: pointer; font-weight: 600; }
 #statusbar .st-chip { font-size: 11px; background: var(--chip-bg); color: var(--chip-ink); border-radius: 4px; padding: 1px 6px; margin-left: 6px; cursor: help; }
 #statusbar .st-engine { color: var(--ink-faint); cursor: help; white-space: nowrap; }
 #statusbar .st-engine.bad { color: var(--seal-deep); font-weight: 600; }
 .st-save-flash { color: var(--ok); opacity: 0; transition: opacity .3s; }
 .st-save-flash.on { opacity: 1; }
+
+@media screen and (max-width: 900px) {
+  #menubar { position: relative; flex-wrap: wrap; gap: 6px; padding: 6px 10px; }
+  .compact-control { display: inline-flex; }
+  #mainMenus { display: none; }
+  #mainMenus.expanded { display: flex; flex-direction: column; align-items: stretch; position: absolute; left: 10px; top: 100%; width: min(340px, calc(100vw - 20px)); max-height: 70dvh; overflow: auto; padding: 6px; background: var(--paper); border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 10px 28px rgba(var(--shadow-rgb), .16); z-index: 120; }
+  #mainMenus .mb-title { width: 100%; text-align: left; padding: 9px 10px; }
+  #mainMenus .mb-menu { position: static; min-width: 0 !important; box-shadow: none; margin: 4px 0; }
+  #mainMenus .mi-sub { flex-wrap: wrap; }
+  #mainMenus .mb-menu.sub { width: 100%; }
+  .mb-right { flex: 1 0 100%; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+  .mb-right .view-switch { margin-right: auto; }
+  .mb-right .lang-switch { margin-right: 0; }
+  .mb-right .view-switch button:disabled { display: none; }
+  #toolbelt { gap: 3px; padding: 4px 8px; }
+  #layout { position: relative; min-width: 0; }
+  #layout #sidebar { display: none; }
+  #layout[data-sidebar-open="true"] #sidebar { display: flex; position: absolute; inset: 0 auto 0 0; width: min(300px, calc(100vw - 48px)); min-width: 0; z-index: 22; box-shadow: 8px 0 24px rgba(var(--shadow-rgb), .15); }
+  .sidebar-backdrop { display: block; position: absolute; inset: 0; border: 0; background: rgba(var(--shadow-rgb), .25); z-index: 21; }
+  #sideDivider { display: none; }
+  #previewScroll { padding: 14px 10px 40px; }
+  #paper { padding: 28px 22px; min-height: 600px; }
+  #statusbar { position: relative; gap: 8px; min-height: 30px; white-space: nowrap; }
+  #statusbar .st-detail, #statusbar .sep, #statusbar .st-chip, #statusbar > .hint { display: none; }
+  #statusbar .st-path { min-width: 0; max-width: 25%; overflow: hidden; text-overflow: ellipsis; }
+  #statusbar .st-engine { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #statusbar .st-flash { position: absolute; inset: 0; display: flex; align-items: center; padding: 4px 12px; white-space: normal; background: var(--chrome); }
+}
 
 /* KaTeX 微调 */
 .paper .katex { font-size: 1.06em; }

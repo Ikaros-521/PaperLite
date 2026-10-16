@@ -33,6 +33,8 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 
 内置 PDF 阅读器与 PDF 插图预览共用本地 CMap/标准字体配置。开发服务器提供这些资源，构建时自动打包到 `dist/pdfjs/`，支持 GitHub Pages 子路径部署，无需外部字体 CDN。
 
+窗口宽度不超过 900px 时，分栏自动显示为单栏编辑，使用顶栏切换编辑/预览；「文件与大纲」展开侧栏，「菜单」访问完整菜单。自动适配不覆盖原来的桌面分栏偏好。编译统一放在顶栏，完成后可下载编译 PDF；「文件 → 下载 → 打印网页预览」单独保留浏览器打印，所有编译 PDF 下载入口共用源码过期确认。
+
 ## TeX 引擎编译（pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX）
 
 1. **内置 XeLaTeX（浏览器）——默认可用，无需安装**：XeTeX/dvipdfmx 的 WebAssembly 构建 + 随站点分发的 TeX 宏包/字体镜像（`public/xelatex/`，来源与许可见 [public/xelatex/NOTICE.md](public/xelatex/NOTICE.md)），GitHub Pages 纯静态托管即可把 LaTeX（含 `ctexart` 中文）编译成 PDF。应用空闲时后台预热引擎，就绪后**先用当前打开的文档跑一遍预热编译**（把这篇真正要用的宏包/字体拉进引擎内存），再按 `repo/warm.json`（内置模板冷编译实际加载的 456 项）并行预取进浏览器缓存；预取期间界面显示「资源预热中」，随时可编译。实测 40ms 往返链路下 demo 模板首次编译从 53s 降到 9s
@@ -119,7 +121,7 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 | **导出 PDF** | 「🖨 导出 PDF」调起浏览器打印 → 选「另存为 PDF」。矢量输出、文字可选中、A4 版式 |
 | **其他导出** | `.tex`（可传 Overleaf / 本地 TeX 编译）、独立 HTML、单图 SVG（矢量）/ PNG（2x） |
 | **编辑器** | CodeMirror 5（stex 高亮、括号匹配/补全、活动行）、工具栏插入模板、拖拽图片转 base64 |
-| **快捷键** | `Ctrl+S` 保存、`Ctrl+Enter` 编译、`Ctrl+P` 导出 PDF（已编译则直接打开 PDF）、`Ctrl+1/2/3` 仅编辑/分栏/仅预览、`Ctrl+Alt+N` 新建文件；编辑器内 `Ctrl+B` / `Ctrl+I`。「帮助 → 快捷键」列出全部 |
+| **快捷键** | `Ctrl+S` 保存、`Ctrl+Enter` 编译、`Ctrl+P` 下载编译 PDF（源码修改后先确认；尚未编译则打印网页预览）、`Ctrl+1/2/3` 仅编辑/分栏/仅预览、`Ctrl+Alt+N` 新建文件；编辑器内 `Ctrl+B` / `Ctrl+I`。「帮助 → 快捷键」列出全部 |
 | **中英双语** | 菜单栏右侧「中 / EN」一键切换全部界面文案（菜单/面板/对话框/诊断提示），随浏览器语言自动选择，localStorage 记忆；文档内容语言不受影响 |
 | **其他** | 三线表（booktabs + multicolumn）、参考文献自动编号、`\newcommand` 宏展开、ctexart 中文排版、双栏预览、同步滚动、字数统计、警告面板 |
 

@@ -81,3 +81,19 @@ assert.equal(options({}).cMapUrl, 'https://example.test/PaperLite/pdfjs/cmaps/')
 assert.equal(options({}).standardFontDataUrl, 'https://example.test/PaperLite/pdfjs/standard_fonts/');
 assert.equal(options({}).cMapPacked, true);
 console.log('Document safety: delayed save/retry/failure, both Save As paths, template dirty state, persistent draft identity and PDF subpath resources passed.');
+
+// Every compiled-PDF entry point shares the stale-source guard, reading the live Doc.
+let confirmations = 0, downloads = 0;
+for (const [source, current, tabId, confirm, expected] of [
+  ['A', 'A', 1, false, 1], ['A', 'B', 1, false, 0], ['A', 'B', 1, true, 1], ['A', 'A', 2, true, 0],
+]) {
+  confirmations = 0; downloads = 0;
+  const download = vm.runInNewContext(extract('  const downloadCurrentPdf = async', '\n  const SNIP') + '\ndownloadCurrentPdf', {
+    compileResult: { ok: true, source, tabId }, activeTab: { id: 1, doc: { getValue: () => current } },
+    t: key => key, showConfirm: async () => { confirmations++; return confirm; },
+    downloadCompiled: () => { downloads++; },
+  });
+  await download(); assert.equal(downloads, expected);
+  assert.equal(confirmations, source !== current && tabId === 1 ? 1 : 0);
+}
+console.log('PDF exports: matching source, stale rejection/acceptance and document isolation passed.');

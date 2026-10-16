@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useT } from '../useI18n.js';
 import { THEME_IDS } from '../theme.js';
 
-export default function FileDialog({ mode, onClose, name, counts, selectionCounts, settings, onSettings, engines, engine, setEngine, onSource, onPdf, pdfAvailable, busy, theme, setTheme }) {
+export default function FileDialog({ mode, onClose, name, counts, selectionCounts, settings, onSettings, engines, engine, setEngine, onSource, onPdf, pdfAvailable, compiledPdf, busy, theme, setTheme }) {
   const t = useT();
   const ref = useRef(null);
   useEffect(() => { ref.current.showModal(); }, []);
@@ -12,7 +12,7 @@ export default function FileDialog({ mode, onClose, name, counts, selectionCount
     <div className="modal-body">
       <p className="file-doc-name">{name}</p>
       {mode === 'wordCount' && <><p className="hint">{t('file.countNote')}</p>{countTable(counts)}{selectionCounts && <><h4>{t('file.selection')}</h4>{countTable(selectionCounts)}</>}</>}
-      {mode === 'submit' && <><p>{t('file.submitNote')}</p><div className="file-dialog-actions"><button className="btn" disabled={busy} onClick={onSource}>{busy ? t('file.packaging') : t('file.sourceZip')}</button><button className="btn primary" disabled={!pdfAvailable} onClick={onPdf}>{t('m.exportPdf')}</button></div></>}
+      {mode === 'submit' && <><p>{t('file.submitNote')}</p><div className="file-dialog-actions"><button className="btn" disabled={busy} onClick={onSource}>{busy ? t('file.packaging') : t('file.sourceZip')}</button><button className="btn primary" disabled={!pdfAvailable} onClick={onPdf}>{t(compiledPdf ? 'm.dlCompiled' : 'm.exportPdf')}</button></div></>}
       {mode === 'settings' && <div className="file-settings">
         <div className="file-theme">
           <div className="file-theme-h"><span>{t('file.theme')}</span><span className="hint">{t('file.themeHint')}</span></div>

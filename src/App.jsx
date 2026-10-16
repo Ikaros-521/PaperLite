@@ -97,7 +97,23 @@ export default function App() {
   });
 
   // ---- 视图 ----
-  const [viewMode, setViewMode] = useState(() => { try { return localStorage.getItem(LS_MODE) || 'split'; } catch (e) { return 'split'; } });
+  const [preferredViewMode, setViewMode] = useState(() => { try { return localStorage.getItem(LS_MODE) || 'split'; } catch (e) { return 'split'; } });
+  const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 900px)').matches);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const viewMode = compact && preferredViewMode === 'split' ? 'edit' : preferredViewMode;
+  useEffect(() => { setSidebarOpen(false); }, [activeId]);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)');
+    const change = () => { setCompact(media.matches); setSidebarOpen(false); };
+    media.addEventListener('change', change);
+    return () => media.removeEventListener('change', change);
+  }, []);
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const close = e => { if (e.key === 'Escape') { setSidebarOpen(false); document.getElementById('sidebarToggle')?.focus(); } };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [sidebarOpen]);
   const [theme, setTheme] = useState(detectTheme);
   // 三栏宽度：侧栏按 px，编辑/预览按比例（随窗口缩放）
   const [layoutSize, setLayoutSize] = useState(() => {
@@ -375,7 +391,7 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', onUnload);
   }, [tabs]);
 
-  useEffect(() => { try { localStorage.setItem(LS_MODE, viewMode); } catch (e) { /* ignore */ } }, [viewMode]);
+  useEffect(() => { try { localStorage.setItem(LS_MODE, preferredViewMode); } catch (e) { /* ignore */ } }, [preferredViewMode]);
 
   // 分栏宽度防抖落盘：拖动过程中不写 localStorage
   useEffect(() => {
@@ -629,6 +645,7 @@ export default function App() {
   const jumpToLine = useCallback((line) => {
     const c = cm();
     if (!c || line == null) return;
+    setSidebarOpen(false);
     syncSuppRef.current = Date.now() + 900;
     c.setCursor({ line, ch: 0 });
     c.scrollIntoView({ line, ch: 0 }, 120);
@@ -735,11 +752,13 @@ export default function App() {
         pdfUrlRef.current = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
         setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log, errors, engine, tabId, source });
         setPreviewMode('pdf');
+        if (compact) setViewMode('preview');
         flash(t('app.compileOk', { engine: engine === 'builtin' ? t('app.builtinEngine') : engine }));
       } else {
         setCompileResult({ ok: false, log, errors, error: errText, engine, tabId, source });
         setLogFull(false);
         setPreviewMode('log');
+        if (compact) setViewMode('preview');
       }
     } catch (e) {
       if (compileContextRef.current !== context) return;
@@ -841,7 +860,7 @@ export default function App() {
       if (mod && e.key === 'Enter') { e.preventDefault(); doCompile(); }
       if (mod && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault(); // 不接管就会把整个应用外壳打印出去，而矢量 PDF 唯一路径正是打印
-        if (compileResult?.ok && compileResult.tabId === activeTab?.id) window.open(compileResult.pdfUrl, '_blank');
+        if (compileResult?.ok && compileResult.tabId === activeTab?.id) downloadCurrentPdf();
         else exportPdfPrint();
       }
       if (mod && (e.key === '1' || e.key === '2' || e.key === '3')) {
@@ -1009,6 +1028,12 @@ export default function App() {
     tmp.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
     exportPDF(tmp.innerHTML, (isTexLike && latexResult) ? latexResult.meta : {});
   };
+  const downloadCurrentPdf = async () => {
+    const result = compileResult;
+    if (!result?.ok || result.tabId !== activeTab?.id) return;
+    if (result.source !== activeTab.doc.getValue() && !await showConfirm(t('prev.downloadStale'))) return;
+    return downloadCompiled(result);
+  };
 
   const SNIP = makeSnippets(t);
   const stats = previewResult && previewResult.stats ? previewResult.stats : countOf(activeValue);
@@ -1020,6 +1045,8 @@ export default function App() {
   return (
     <LangContext.Provider value={lang}>
       <Toolbar
+        compact={compact} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(o => !o)}
+        texDocument={isTexLike}
         actions={{
           newFolder, upload: uploadFiles, copy: makeCopy, canCopy: !!activeTab?.doc,
           history: () => setFileDialog('history'), wordCount: () => setFileDialog('wordCount'),
@@ -1115,8 +1142,8 @@ export default function App() {
         viewMode={viewMode} setViewMode={setViewMode} latexOk={isTexLike || isMd}
         markdown={isMd} documentKey={activeId}
         labels={[...new Set([...activeValue.replace(/(?<!\\)%[^\n]*/g, '').matchAll(/\\label\{([^}]+)\}/g)].map(match => match[1]))]}
-        engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} builtinStatus={builtinStatus}
-        downloadPdf={compileResult && compileResult.pdfUrl ? () => downloadCompiled(compileResult) : null}
+        engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} onCancelCompile={doCancelCompile} builtinStatus={builtinStatus}
+        downloadPdf={compileResult?.ok && compileResult.tabId === activeTab?.id ? downloadCurrentPdf : null}
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
         onAiFix={aiFix}
         syncScroll={syncScroll} setSyncScroll={setSyncScroll}
@@ -1126,7 +1153,8 @@ export default function App() {
         theme={theme} setTheme={setTheme}
       />
 
-      <main id="layout" data-mode={viewMode} style={{ '--sidebar-w': layoutSize.sidebar + 'px', '--g-edit': String(layoutSize.split), '--g-prev': String(100 - layoutSize.split) }}>
+      <main id="layout" data-mode={viewMode} data-sidebar-open={compact && sidebarOpen} style={{ '--sidebar-w': layoutSize.sidebar + 'px', '--g-edit': String(layoutSize.split), '--g-prev': String(100 - layoutSize.split) }}>
+        {compact && sidebarOpen && <button className="sidebar-backdrop" aria-label={t('side.close')} onClick={() => setSidebarOpen(false)} />}
         <div id="sidebar">
           <div className="side-tabs">
             <button className={sideTab === 'files' ? 'on' : ''} title={t('side.files')} onClick={() => setSideTab('files')}>{lang === 'zh' ? '文' : '▤'}</button>
@@ -1209,7 +1237,7 @@ export default function App() {
           ) : previewMode === 'pdf' && compileResult?.ok && compileResult.tabId === activeTab?.id ? (
             <PdfViewer url={compileResult.pdfUrl} title={activeTab.name + ' · PDF'} lang={lang}
               stale={compileResult.source !== activeValue} compiling={compiling} onCompile={doCompile}
-              onDownload={() => downloadCompiled(compileResult)} onClose={() => setPreviewMode('rich')} />
+              onDownload={downloadCurrentPdf} onClose={() => setPreviewMode('rich')} />
           ) : previewMode === 'log' && compileResult ? (
             <section id="previewPane">
               <div id="previewBar">
@@ -1276,16 +1304,16 @@ export default function App() {
       </main>
 
       <footer id="statusbar">
-        <span>{activeTab ? (activeTab.kind === 'draft' ? t('app.draftPath') : (activeTab.path || activeTab.name)) : ''}</span>
+        <span className="st-path">{activeTab ? (activeTab.kind === 'draft' ? t('app.draftPath') : (activeTab.path || activeTab.name)) : ''}</span>
         {isPristineDemo && <span className="st-chip" title={t('st.sampleTip')}>{t('st.sample')}</span>}
         <span className="sep">·</span>
-        <span>{wordText}</span>
+        <span className="st-detail">{wordText}</span>
         <span className="sep">·</span>
-        <span>{isTexLike || isMd ? lastRenderMs.toFixed(0) + ' ms' : t('st.textMode')}</span>
+        <span className="st-detail">{isTexLike || isMd ? lastRenderMs.toFixed(0) + ' ms' : t('st.textMode')}</span>
         <span className="sep">·</span>
-        <span className={'st-warn' + (issueCount ? ' has' : '')} onClick={() => setSideTab('issues')}>
+        <button className={'st-warn' + (issueCount ? ' has' : '')} onClick={() => { setSideTab('issues'); if (compact) setSidebarOpen(true); }}>
           {issueCount ? t('st.issues', { n: issueCount }) : hiddenCount ? t('diag.hidden', { n: hiddenCount }) : t('st.noIssues')}
-        </span>
+        </button>
         <span className="grow"></span>
         {/* 引擎与预热状态原来只藏在下拉框的 option 文本里，这里常驻一份 */}
         <span className={'st-engine' + (engine === 'builtin' && builtinStatus === 'error' ? ' bad' : '')} title={t('st.engineTip')}>
@@ -1355,8 +1383,8 @@ export default function App() {
         settings={{ ...editorSettings, syncScroll }} onSettings={settings => { setEditorSettings(settings); setSyncScroll(settings.syncScroll); }}
         theme={theme} setTheme={setTheme}
         engines={engines} engine={engine} setEngine={setEngine}
-        onSource={exportProject} busy={packaging} pdfAvailable={isTexLike || isMd}
-        onPdf={compileResult?.ok ? () => downloadCompiled(compileResult) : exportPdfPrint}
+        onSource={exportProject} busy={packaging} pdfAvailable={isTexLike || isMd} compiledPdf={!!compileResult?.ok}
+        onPdf={compileResult?.ok ? downloadCurrentPdf : exportPdfPrint}
       />}
 
       {helpOpen === 'keys' && (

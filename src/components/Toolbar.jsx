@@ -73,20 +73,21 @@ function LangSwitch({ lang, setLang }) {
 
 export default function Toolbar({
   actions, viewMode, setViewMode, latexOk, markdown, documentKey, labels,
-  engines, engine, setEngine, compiling, onCompile, downloadPdf, builtinStatus,
+  engines, engine, setEngine, compiling, onCompile, onCancelCompile, downloadPdf, builtinStatus,
   channelCount, onOpenChat, onOpenSettings, onAiFix,
   syncScroll, setSyncScroll, zoom, onZoom,
   onHelp, lang, setLang,
-  theme, setTheme
+  theme, setTheme, compact, sidebarOpen, onToggleSidebar, texDocument
 }) {
   const t = useT();
   const [open, setOpen] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef(null);
-  const close = () => setOpen(null);
+  const close = () => { setOpen(null); setMenuOpen(false); };
 
   useEffect(() => {
-    const onDoc = e => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(null); };
-    const onKey = e => { if (e.key === 'Escape') setOpen(null); };
+    const onDoc = e => { if (rootRef.current && !rootRef.current.contains(e.target)) close(); };
+    const onKey = e => { if (e.key === 'Escape') { close(); document.getElementById('compactMenuToggle')?.focus(); } };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
@@ -103,7 +104,9 @@ export default function Toolbar({
       <div id="menubar">
         <div className="brand compact"><span className="brand-seal">论</span>PaperLite</div>
 
-        <nav className="menus" role="menubar" data-tour="menubar">
+        <button id="sidebarToggle" className="btn sm compact-control" aria-expanded={sidebarOpen} aria-controls="sidebar" onClick={onToggleSidebar}>{t('side.workspace')}</button>
+        <button id="compactMenuToggle" className="btn sm compact-control" aria-expanded={menuOpen} aria-controls="mainMenus" onClick={() => { setMenuOpen(o => !o); setOpen(null); }}>{t('menu.all')}</button>
+        <nav id="mainMenus" className={'menus' + (menuOpen ? ' expanded' : '')} role="menubar" data-tour="menubar">
           <Mb title={t('menu.file')} open={open} setOpen={setOpen} width={236} tour="menu-file">
             <Mi label={t('m.new')} hint="Ctrl+Alt+N" close={close} onClick={actions.newFile} />
             <Mi label={t('m.newFolder')} close={close} onClick={actions.newFolder} />
@@ -173,7 +176,7 @@ export default function Toolbar({
           <Mb title={t('menu.view')} open={open} setOpen={setOpen} width={220}>
             <MiSub label={t('m.viewMode')}>
               <Mi check={viewMode === 'edit'} label={t('m.vmEdit')} close={close} onClick={() => setViewMode('edit')} />
-              <Mi check={viewMode === 'split'} label={t('m.vmSplit')} close={close} onClick={() => setViewMode('split')} />
+              <Mi check={viewMode === 'split'} disabled={compact} label={t('m.vmSplit')} close={close} onClick={() => setViewMode('split')} />
               <Mi check={viewMode === 'preview'} label={t('m.vmPreview')} close={close} onClick={() => setViewMode('preview')} />
             </MiSub>
             <Mi check={syncScroll} label={t('m.syncScroll')} close={close} onClick={() => setSyncScroll(!syncScroll)} />
@@ -224,10 +227,11 @@ export default function Toolbar({
           <LangSwitch lang={lang} setLang={setLang} />
           <div className="view-switch" title={t('vm.tip')}>
             {[['edit', '✎', t('vm.edit')], ['split', '▤▤', t('vm.split')], ['preview', '▢', t('vm.preview')]].map(([m, ic, ti]) => (
-              <button key={m} className={'btn sm' + (viewMode === m ? ' on' : '')} title={ti} onClick={() => setViewMode(m)}>{ic}</button>
+              <button key={m} className={'btn sm' + (viewMode === m ? ' on' : '')} aria-label={ti} aria-pressed={viewMode === m} disabled={compact && m === 'split'} title={ti} onClick={() => setViewMode(m)}>{compact ? ti : ic}</button>
             ))}
           </div>
-          <button className="btn sm primary" title={t('tb.exportPdfTip')} onClick={actions.exportPdf}>{t('tb.exportPdf')}</button>
+          {texDocument && <button className="btn sm primary" disabled={!engineOk} title={compiling ? t('prev.cancelTip') : 'Ctrl+Enter'} onClick={compiling ? onCancelCompile : onCompile}>{t(compiling ? 'prev.cancel' : 'prev.compile')}</button>}
+          {(downloadPdf || !texDocument) && <button className="btn sm" disabled={!downloadPdf && !actions.pdfAvailable} onClick={downloadPdf || actions.exportPdf}>{t(downloadPdf ? 'm.dlCompiled' : 'm.exportPdf')}</button>}
         </div>
       </div>
 

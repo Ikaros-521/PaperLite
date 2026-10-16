@@ -281,16 +281,11 @@ export default function PreviewPane({
           <input type="checkbox" checked={syncScroll} onChange={e => onSyncToggle(e.target.checked)} /> {t('prev.sync')}
         </label>
 
-        {(engines && engines.length) ? (
+        {(!result.isMd && engines && engines.length) ? (
           <span className="pb-compile" title={t('prev.compileTip')}>
             <select value={engine} onChange={e => setEngine(e.target.value)}>
               {engines.map(en => <option key={en} value={en}>{en === 'builtin' ? builtinLabel : en}</option>)}
             </select>
-            {compiling ? (
-              <button className="btn sm busy" onClick={onCancelCompile} title={t('prev.cancelTip')}>{t('prev.cancel')}</button>
-            ) : (
-              <button className="btn sm" onClick={onCompile}>{t('prev.compile')}</button>
-            )}
           </span>
         ) : null}
 
@@ -298,9 +293,7 @@ export default function PreviewPane({
           aria-expanded={noteOpen} onClick={() => setNoteOpen(o => !o)}>{t('prev.approx')}</button>
 
         <span className="pb-spacer"></span>
-        <button className="btn sm" title={t('prev.settingsTip')} onClick={onOpenSettings}>{'⚙︎'}</button>
         <button className={'btn sm' + (onTogglePanel ? '' : '')} title={t('prev.styleTip')} onClick={onTogglePanel}>{t('prev.style')}</button>
-        <button className="btn sm" title={t('prev.chatTip')} onClick={onOpenChat}>AI</button>
         <span className="pb-zoom">
           <button className="btn sm" onClick={() => onZoom(-0.1)}>−</button>
           <span>{Math.round(zoom * 100)}%</span>
