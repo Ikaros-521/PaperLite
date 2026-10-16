@@ -7,6 +7,7 @@
 import { type ReactNode, type RefObject, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Dialog, Input, Popup, Toast } from 'antd-mobile'
 import { useWorkspace } from '../../workspace/useWorkspace.js'
+import { useCompile } from '../../workspace/useCompile.js'
 import { LangContext } from '../../useI18n.js'
 import { LS_LANG, detectLang, setLang as setModuleLang, tr } from '../../i18n.js'
 import * as fs from '../../fs.js'
@@ -55,6 +56,23 @@ interface MobileWorkspaceValue {
   openFolder: () => Promise<void>
   cmRef: RefObject<unknown>
   treeTick: number
+  // 编译链：与桌面共用 useCompile，语义一致，只有"编译完看哪里"不同
+  engines: string[]
+  engine: string
+  setEngine: (engine: string) => void
+  builtinStatus: string
+  compiling: boolean
+  compileResult: {
+    ok: boolean
+    pdfUrl?: string
+    log?: string
+    errors?: Array<{ line: number | null; msg: string }>
+    engine: string
+    source?: string
+  } | null
+  compile: () => Promise<string>
+  cancelCompile: () => void
+  pdfIsStale: boolean
 }
 
 const MobileCtx = createContext<MobileWorkspaceValue | null>(null)
@@ -97,6 +115,14 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     onSideTab: () => {},
   })
 
+  // 编译链与桌面同一份实现：换引擎、预热、取消、结果与 PDF Blob 生命周期
+  const activeTab = (ws.tabs as MobileTab[]).filter(x => x.id === ws.activeId)[0] || null
+  const isTexLike = activeTab?.kind === 'tex' || activeTab?.kind === 'draft'
+  const compileLayer = useCompile(
+    { t, flash: (msg: string) => Toast.show({ content: msg }), alertBox: (msg: string) => { Dialog.alert({ title: '提示', content: msg, confirmText: '知道了' }) } },
+    { tabsRef: ws.tabsRef, activeTab, isTexLike, autoWarm: false },
+  )
+
   useEffect(() => {
     try { localStorage.setItem(LS_LANG, lang) } catch { /* ignore */ }
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
@@ -112,7 +138,7 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     lang,
     setLang,
     tabs: ws.tabs as MobileTab[],
-    activeTab: (ws.tabs as MobileTab[]).filter(x => x.id === ws.activeId)[0] || null,
+    activeTab,
     rootDir: ws.rootDir,
     fsSupported: fs.supported(),
     saveStateOf: tab => saveStateOf(tab as never),
@@ -126,7 +152,16 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     openFolder: ws.openFolder,
     cmRef,
     treeTick,
-  }), [t, lang, setLang, ws, treeTick])
+    engines: compileLayer.engines,
+    engine: compileLayer.engine,
+    setEngine: compileLayer.setEngine,
+    builtinStatus: compileLayer.builtinStatus,
+    compiling: compileLayer.compiling,
+    compileResult: compileLayer.compileResult as never,
+    compile: compileLayer.compile,
+    cancelCompile: compileLayer.cancelCompile,
+    pdfIsStale: compileLayer.pdfIsStale,
+  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer])
 
   return (
     <LangContext.Provider value={lang}>

@@ -36,7 +36,7 @@ import {
   UndoOutline,
   UnorderedListOutline,
 } from 'antd-mobile-icons'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import EditorPane from '../../components/EditorPane.jsx'
 import PreviewPane from '../../components/PreviewPane.jsx'
 import { renderLatex } from '../../engines/latex.js'
@@ -455,6 +455,24 @@ export function Flow2_Workspace() {
   useEffect(() => {
     if (tab && tab.id !== ws.activeId) ws.openTab(tab.id)
   }, [tab, ws])
+
+  // 编译失败页「跳到该行」带过来的行号（1-based，来自 XeLaTeX 日志的 l.132）
+  const location = useLocation()
+  const jumpLine = useMemo(() => Number(new URLSearchParams(location.search).get('line')) || null, [location.search])
+  useEffect(() => {
+    if (!jumpLine) return
+    setView('source')
+    const raf = requestAnimationFrame(() => {
+      const instance = cm()
+      if (!instance) return
+      const line = Math.max(0, jumpLine - 1)
+      instance.setCursor({ line, ch: 0 })
+      instance.scrollIntoView({ line, ch: 0 }, 120)
+      instance.focus()
+    })
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpLine])
 
   const cm = () => ws.cmRef.current as {
     getValue: () => string

@@ -109,7 +109,7 @@ assert.equal(current.children['figures/nested'], undefined);
 assert.equal(isTextEditable('drawing.SVG'), true);
 assert.equal(infoFor('drawing.SVG').mode, 'xml');
 const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
-const svgCode = app.slice(app.indexOf('  const isSvg ='), app.indexOf('  // Invalidate pending compilation'));
+const svgCode = app.slice(app.indexOf('  const isSvg ='), app.indexOf('  // 编译链与移动端共用同一份'));
 const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>图 #1 &amp; 2</text></svg>';
 for (const text of [svg, svg.replace('图 #1', '已修改')]) {
   const url = vm.runInNewContext(svgCode + '\nsvgPreviewUrl', {

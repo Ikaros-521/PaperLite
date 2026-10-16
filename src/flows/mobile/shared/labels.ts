@@ -50,6 +50,16 @@ export const ENGINE_LABEL: Record<EngineName, string> = {
   lualatex: 'LuaLaTeX（本机）',
 }
 
+/** 内置 wasm 引擎的预热状态 → 人话（对齐 App 的 app.engine* 文案） */
+export const ENGINE_STATUS_LABEL: Record<string, string> = {
+  idle: '待预热',
+  loading: '装载中',
+  warming: '资源预热中…',
+  busy: '编译中',
+  ready: '已就绪',
+  error: '不可用',
+}
+
 export const REASON_LABEL: Record<string, string> = {
   auto: '自动快照',
   manual: '手动版本',

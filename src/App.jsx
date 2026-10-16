@@ -10,7 +10,6 @@ import { quickInsert, replaceTemplate } from './editorTools.js';
 import EditorPane from './components/EditorPane.jsx';
 import PreviewPane from './components/PreviewPane.jsx';
 import PdfViewer from './components/PdfViewer.jsx';
-import { collectCompileFiles } from './compileProject.js';
 import StylePanel from './components/StylePanel.jsx';
 import FileTree from './components/FileTree.jsx';
 import TabsBar from './components/TabsBar.jsx';
@@ -25,7 +24,7 @@ import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
-import { warmEngine, compileXeLaTeX, cancelCompile, onEngineStatus } from './engines/xelatex.js';
+
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
 import { extOf, infoFor } from './fileTypes.js';
@@ -37,6 +36,7 @@ import { detectTheme, applyTheme } from './theme.js';
 import { saveState } from './saveState.js';
 import { makeTab } from './workspace/tabModel.js';
 import { useWorkspace } from './workspace/useWorkspace.js';
+import { useCompile } from './workspace/useCompile.js';
 import { LangContext } from './useI18n.js';
 
 const LS_MODE = 'paperlite.viewmode.v2';
@@ -130,18 +130,10 @@ export default function App() {
   const [selection, setSelection] = useState({ did: 0, sel: null });
   const [cmReady, setCmReady] = useState(0);
 
-  // ---- 编译 ----
-  const [engines, setEngines] = useState([]);
-  const [engine, setEngine] = useState('builtin');
-  const [builtinStatus, setBuiltinStatus] = useState('idle');
-  const [compiling, setCompiling] = useState(false);
-  const [compileResult, setCompileResult] = useState(null);
+  // ---- 编译结果的界面形态（引擎与编译本身在 useCompile 里，与移动端共用）----
   const [dismissedIssues, setDismissedIssues] = useState(null);
-  const compileContextRef = useRef(null);
-  const compileAbortRef = useRef(null);
   const [previewMode, setPreviewMode] = useState('rich');
   const [logFull, setLogFull] = useState(false);
-  const pdfUrlRef = useRef(null);
 
   // ---- LLM ----
   const [channels, setChannels] = useState(() => llm.loadChannels());
@@ -165,10 +157,24 @@ export default function App() {
   const svgPreviewUrl = useMemo(() => isSvg && activeTab?.doc
     ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(activeValue) : null,
   [isSvg, activeTab?.doc, activeValue]);
-  // Invalidate pending compilation when switching documents, including switching back.
-  if (compileContextRef.current?.doc !== activeTab?.doc) {
-    compileContextRef.current = { doc: activeTab?.doc };
-  }
+  // 编译链与移动端共用同一份；换文档时 hook 内部重绑上下文，迟到响应不会贴回旧错误
+  const {
+    engines, engine, setEngine, builtinStatus, compiling, compileResult, setCompileResult,
+    compile: runCompile, cancelCompile: doCancelCompile, retireErrors,
+  } = useCompile({ t, flash, alertBox: alert }, { tabsRef, activeTab, isTexLike });
+
+  // 桌面在这里决定"编译完看哪里"：切 PDF / 切日志，窄屏顺带切到预览
+  const doCompile = async () => {
+    const status = await runCompile();
+    if (status === 'ok') {
+      setPreviewMode('pdf');
+      if (compact) setViewMode('preview');
+    } else if (status === 'fail') {
+      setLogFull(false);
+      setPreviewMode('log');
+      if (compact) setViewMode('preview');
+    }
+  };
 
   useEffect(() => { llm.saveChannels(channels); }, [channels]);
   useEffect(() => {
@@ -194,40 +200,16 @@ export default function App() {
     setHelpOpen(key);
   }, []);
 
-  // ---- 恢复文件夹 & 检测 TeX 引擎 ----
+  // ---- 恢复上次授权的文件夹（引擎探测与预热已移入 useCompile）----
   useEffect(() => {
     (async () => {
       const h = await fs.loadRootHandle();
-      if (h) {
-        const perm = await fs.queryPermission(h, 'readwrite');
-        if (perm === 'granted') setRootDir(h);
-        else setRestorePrompt(h);
-      }
-      let local = [];
-      try {
-        const r = await fetch('/api/health');
-        if (r.ok) {
-          const j = await r.json();
-          local = j.engines || [];
-        }
-      } catch (e) { /* 静态托管（GitHub Pages），仅有内置引擎 */ }
-      // 内置 wasm 引擎始终可用；本机引擎排在前面供有 MiKTeX/TeX Live 的用户选择
-      setEngines(local.length ? [...local, 'builtin'] : ['builtin']);
-      if (!local.includes('xelatex')) setEngine('builtin');
+      if (!h) return;
+      const perm = await fs.queryPermission(h, 'readwrite');
+      if (perm === 'granted') setRootDir(h);
+      else setRestorePrompt(h);
     })();
   }, []);
-
-  // ---- 内置 XeLaTeX 引擎：状态订阅 + 文档/导言区变化时后台预热 ----
-  useEffect(() => onEngineStatus(setBuiltinStatus), []);
-  const warmPreamble = activeValue.split(/\\begin\s*\{document\}/)[0];
-  useEffect(() => {
-    if (!isTexLike) return;
-    const kick = () => { warmEngine(compileContextRef.current?.doc?.getValue() || '').catch(() => { /* 状态已置 error，由 UI 提示 */ }); };
-    let ic = null, tid = null;
-    if ('requestIdleCallback' in window) { ic = requestIdleCallback(kick, { timeout: 1000 }); }
-    else tid = setTimeout(kick, 1000);
-    return () => { if (ic !== null && 'cancelIdleCallback' in window) cancelIdleCallback(ic); if (tid !== null) clearTimeout(tid); };
-  }, [activeTab?.doc, warmPreamble, isTexLike]);
 
   useEffect(() => {
     const settings = { ...editorSettings, syncScroll };
@@ -249,7 +231,7 @@ export default function App() {
 
   // ---- 编辑器联动：脏标记与 activeValue 归工作区 hook，这里只负责让旧诊断失效 ----
   const onDocChange = useCallback((doc, value) => {
-    compileContextRef.current = { doc };
+    retireErrors();
     // Compile diagnostics describe the old source. Keep PDF/log artifacts, but retire markers.
     setCompileResult(r => r ? { ...r, errors: [] } : r);
     setPreviewMode(mode => mode === 'log' ? 'rich' : mode);
@@ -416,69 +398,7 @@ export default function App() {
   };
 
   // ---- 编译 ----
-  const doCompile = async () => {
-    if (compiling) return;
-    if (!isTexLike) { flash(t('app.onlyTexCompile')); return; }
-    if (engine !== 'builtin' && !engines.includes(engine)) {
-      alert(t('app.noEngine'));
-      return;
-    }
-    setCompiling(true);
-    const abort = new AbortController();
-    compileAbortRef.current = abort;
-    const context = compileContextRef.current;
-    const source = activeTab.doc.getValue();
-    const tabId = activeTab.id;
-    setCompileResult(r => r ? { ...r, errors: [] } : r);
-    try {
-      let ok, pdfBytes, log, errors, errText, wasCancelled = false;
-      if (engine === 'builtin') {
-        const files = await collectCompileFiles(activeTab, tabsRef.current);
-        if (abort.signal.aborted) { flash(t('app.compileCancelled')); return; }
-        const r = await compileXeLaTeX(source, files);
-        ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
-        wasCancelled = !!r.cancelled;
-        if (!ok && !wasCancelled) errText = (errors[0] && errors[0].msg) || t('app.compileFailed');
-      } else {
-        const r = await fetch('/api/compile', {
-          method: 'POST',
-          signal: abort.signal,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ engine, source })
-        });
-        const j = await r.json();
-        ok = j.ok; log = j.log || ''; errors = j.errors || [];
-        if (ok) {
-          const bin = atob(j.pdf);
-          pdfBytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) pdfBytes[i] = bin.charCodeAt(i);
-        } else errText = j.error || t('app.compileFailed');
-      }
-      // A late response must never restore errors for edited or inactive documents.
-      if (compileContextRef.current !== context) return;
-      if (wasCancelled) { flash(t('app.compileCancelled')); return; }
-      if (ok) {
-        if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
-        pdfUrlRef.current = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
-        setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log, errors, engine, tabId, source });
-        setPreviewMode('pdf');
-        if (compact) setViewMode('preview');
-        flash(t('app.compileOk', { engine: engine === 'builtin' ? t('app.builtinEngine') : engine }));
-      } else {
-        setCompileResult({ ok: false, log, errors, error: errText, engine, tabId, source });
-        setLogFull(false);
-        setPreviewMode('log');
-        if (compact) setViewMode('preview');
-      }
-    } catch (e) {
-      if (compileContextRef.current !== context) return;
-      if (abort.signal.aborted || String(e && e.message || e) === 'cancelled') { flash(t('app.compileCancelled')); return; }
-      alert(t('app.compileReqFailed', { msg: e.message || e }));
-    } finally { compileAbortRef.current = null; setCompiling(false); }
-  };
 
-  // 编译中按钮变「取消」：拆掉 Worker 立刻归还界面，长任务不该只能干等
-  const doCancelCompile = () => { compileAbortRef.current?.abort(); cancelCompile(); };
 
   // ---- 预览渲染 ----
   const deferred = useDeferredValue(activeValue);

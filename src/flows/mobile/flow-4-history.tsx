@@ -35,8 +35,7 @@ import {
 import { useNavigate, useParams } from 'react-router-dom'
 import { formatBytes, formatRelative } from './shared/format'
 import { useLongPress, useNetworkState } from './shared/hooks'
-import { DIFF_LAYOUT_LABEL, ENGINE_LABEL, REASON_LABEL } from './shared/labels'
-import { mockEngines } from './shared/mock-data'
+import { DIFF_LAYOUT_LABEL, ENGINE_LABEL, ENGINE_STATUS_LABEL, REASON_LABEL } from './shared/labels'
 import { readHistory, historyUsage, recordVersion, renameVersion, deleteHistory } from '../../historyStorage.js'
 import { compareVersions } from '../../historyDiff.js'
 import { useMobileWorkspace, type MobileTab } from './mobileWorkspace'
@@ -341,8 +340,10 @@ export function Screen4_RestoreBanner({
    ================================================ */
 export function Screen5_OfflineState() {
   const navigate = useNavigate()
+  const ws = useMobileWorkspace()
   const network = useNetworkState()
   const [checking, setChecking] = useState(false)
+  const local = ws.engines.filter(name => name !== 'builtin')
 
   // 重新检测是异步探测，必须有加载态并在超时后收回
   useEffect(() => {
@@ -366,21 +367,29 @@ export function Screen5_OfflineState() {
 
       <div className="pl-content" style={{ padding: 12 }}>
         <List header="引擎状态">
-          {mockEngines.map(engine => (
+          <List.Item
+            prefix={<span style={{ color: ws.builtinStatus === 'error' ? 'var(--seal)' : 'var(--ok)' }}>●</span>}
+            extra={<Tag fill="outline">{ENGINE_STATUS_LABEL[ws.builtinStatus] || ws.builtinStatus}</Tag>}
+            title={ENGINE_LABEL.builtin}
+            description={<span style={{ whiteSpace: 'normal' }}>浏览器内 wasm；首次编译需预热约 98 MB 资源，之后可离线</span>}
+          />
+          {local.map(name => (
             <List.Item
-              key={engine.name}
-              prefix={
-                engine.available ? (
-                  <span style={{ color: 'var(--ok)' }}>●</span>
-                ) : (
-                  <ExclamationTriangleOutline style={{ color: 'var(--seal)' }} />
-                )
-              }
-              extra={<Tag fill="outline">{engine.available ? '可用' : '不可用'}</Tag>}
-              title={ENGINE_LABEL[engine.name]}
-              description={<span style={{ whiteSpace: 'normal' }}>{engine.note}</span>}
+              key={name}
+              prefix={<span style={{ color: 'var(--ok)' }}>●</span>}
+              extra={<Tag fill="outline">可用</Tag>}
+              title={ENGINE_LABEL[name as keyof typeof ENGINE_LABEL] || name}
+              description={<span style={{ whiteSpace: 'normal' }}>来自本机 TeX 服务（server.mjs /api/health）</span>}
             />
           ))}
+          {local.length === 0 && (
+            <List.Item
+              prefix={<ExclamationTriangleOutline style={{ color: 'var(--seal)' }} />}
+              extra={<Tag fill="outline">未检测到</Tag>}
+              title="本机 XeLaTeX"
+              description={<span style={{ whiteSpace: 'normal' }}>手机连不到跑着 PaperLite 服务的电脑时，只能用内置 wasm 引擎</span>}
+            />
+          )}
         </List>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
