@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { loadPdfLibrary } from '../pdf.js';
+import { loadPdfLibrary, pdfOptions } from '../pdf.js';
 
 function PdfPage({ pdf, number, scale, width, height, root }) {
   const host = useRef(null), canvas = useRef(null), text = useRef(null);
@@ -57,7 +57,7 @@ export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload,
     setPdf(null); setPages([]); setError(''); setCurrent(1);
     loadPdfLibrary().then(async lib => {
       if (cancelled) return;
-      task = lib.getDocument({ url });
+      task = lib.getDocument(pdfOptions({ url }));
       const doc = await task.promise;
       const sizes = [];
       for (let i = 1; i <= doc.numPages; i++) {

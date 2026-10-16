@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { exportSvg, exportPng } from '../exporter.js';
 import { useT } from '../useI18n.js';
 import { readMermaidGeoms } from '../mermaidMutations.js';
-import { loadPdfLibrary } from '../pdf.js';
+import { loadPdfLibrary, pdfOptions } from '../pdf.js';
 
 let mermaidInited = false;
 let mermaidSeq = 0;
@@ -52,7 +52,7 @@ export default function PreviewPane({
         if (/\.pdf$/i.test(file.name)) {
           const lib = await loadPdfLibrary();
           if (cancelled) return;
-          const task = lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+          const task = lib.getDocument(pdfOptions({ data: new Uint8Array(await file.arrayBuffer()) }));
           tasks.push(task);
           const doc = await task.promise, page = await doc.getPage(1);
           if (cancelled) return;

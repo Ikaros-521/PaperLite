@@ -3,7 +3,7 @@ import { compareVersions, inlineChanges } from '../historyDiff.js';
 import { useLang, useT } from '../useI18n.js';
 import { downloadFile } from '../exporter.js';
 
-export default function HistoryDialog({ name, current, versions, onClose, onSnapshot, onRename, onRestore, error, usage, onDelete, onClear }) {
+export default function HistoryDialog({ name, current, versions, onClose, onSnapshot, onRename, onRestore, error, usage, onDelete, onClear, onExportLegacy }) {
   const t = useT(), lang = useLang();
   const dialog = useRef(null), scroller = useRef(null);
   const [baseId, setBaseId] = useState((versions.find(v => v.text !== current) || versions[0])?.id || 'current');
@@ -93,6 +93,10 @@ export default function HistoryDialog({ name, current, versions, onClose, onSnap
           <button className="btn sm" disabled={!usage.versions} onClick={() => setDeletion('all')}>{t('hist.clearAll')}</button>
         </div>
         <p className="hint history-note">{t('file.historyNote')}</p>
+        {onExportLegacy && <div className="history-note">
+          <p className="hint">{t('hist.legacyNote')}</p>
+          <button className="btn sm" onClick={onExportLegacy}>{t('hist.exportLegacy')}</button>
+        </div>}
       </aside>
       <section className="history-main" aria-label={t('hist.compare')}>
         <div className="history-compare">

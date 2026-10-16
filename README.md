@@ -29,6 +29,10 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 
 文件操作补充测试：`node test/fileActions.mjs`（ZIP 解压校验使用 Python 标准库）。
 
+文档安全回归测试：`node test/documentSafety.mjs`（已纳入 `npm test`），覆盖保存期间继续输入、另存为、模板替换、草稿历史隔离与 PDF 资源子路径。浏览器草稿使用随草稿持久化的独立 ID 记录历史；旧版共用的草稿历史保留在原存储中，可从草稿的版本历史面板导出 JSON 查阅，避免把混合记录归到错误文档。保存及另存为期间产生的新修改会继续保留未保存标记；模板替换磁盘文件也需保存后才会写盘。
+
+内置 PDF 阅读器与 PDF 插图预览共用本地 CMap/标准字体配置。开发服务器提供这些资源，构建时自动打包到 `dist/pdfjs/`，支持 GitHub Pages 子路径部署，无需外部字体 CDN。
+
 ## TeX 引擎编译（pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX）
 
 1. **内置 XeLaTeX（浏览器）——默认可用，无需安装**：XeTeX/dvipdfmx 的 WebAssembly 构建 + 随站点分发的 TeX 宏包/字体镜像（`public/xelatex/`，来源与许可见 [public/xelatex/NOTICE.md](public/xelatex/NOTICE.md)），GitHub Pages 纯静态托管即可把 LaTeX（含 `ctexart` 中文）编译成 PDF。应用空闲时后台预热引擎，就绪后**先用当前打开的文档跑一遍预热编译**（把这篇真正要用的宏包/字体拉进引擎内存），再按 `repo/warm.json`（内置模板冷编译实际加载的 456 项）并行预取进浏览器缓存；预取期间界面显示「资源预热中」，随时可编译。实测 40ms 往返链路下 demo 模板首次编译从 53s 降到 9s

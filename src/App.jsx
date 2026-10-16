@@ -62,11 +62,13 @@ const makeSnippets = (t) => ({
   tBib: '\\cite{key}'
 });
 
-function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '' }) {
+function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', draftId }) {
   const id = ++tabSeq;
+  if (kind === 'draft') draftId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
   const t = {
     id, name, path: path || name, kind, handle: handle || null, parentDir: parentDir || null,
-    historyKey: JSON.stringify([kind === 'draft' ? '' : historyScope, kind === 'draft' ? 'draft' : path || name]),
+    draftId,
+    historyKey: JSON.stringify([kind === 'draft' ? 'draft' : historyScope, kind === 'draft' ? draftId : path || name]),
     saved: saved !== undefined ? saved : (text || ''),
     imageUrl: imageUrl || null,
     dirty: false, doc: null
@@ -85,7 +87,7 @@ export default function App() {
   const [tabs, setTabs] = useState(() => {
     const drafts = readDrafts();
     const L = detectLang();
-    return drafts.map(d => makeTab({ name: d.name || tr(L, 'app.draftName'), path: tr(L, 'app.draftPath'), kind: 'draft', text: d.text, modeSpec: 'stex', saved: d.text }));
+    return drafts.map(d => makeTab({ name: d.name || tr(L, 'app.draftName'), path: tr(L, 'app.draftPath'), kind: 'draft', draftId: d.id, text: d.text, modeSpec: 'stex', saved: d.text }));
   });
   // 焦点落在最后恢复的那篇（最近编辑的）；不依赖模块级计数器，StrictMode 下会被调用两次
   const [activeId, setActiveId] = useState(() => (tabs.length ? tabs[tabs.length - 1].id : 1));
@@ -342,7 +344,7 @@ export default function App() {
   const draftsWarnedRef = useRef(false);
   useEffect(() => {
     const t = setTimeout(() => {
-      const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ name: x.name, text: x.doc.getValue() }));
+      const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue() }));
       try {
         localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
         draftsWarnedRef.current = false;
@@ -522,7 +524,7 @@ export default function App() {
         const nextKey = JSON.stringify([rootDir.name, tab.name]);
         const copied = copyHistory(tab.historyKey, nextKey);
         if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: false } : x));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, handle: h, parentDir: rootDir, path: tab.name, saved: value, dirty: x.doc.getValue() !== value } : x));
         setTreeKey(k => k + 1);
         flash(t('app.savedToFolder', { name: tab.name }));
         return true;
@@ -535,7 +537,7 @@ export default function App() {
         const nextKey = JSON.stringify(['', h.name]);
         const copied = copyHistory(tab.historyKey, nextKey);
         if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
-        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, name: h.name, handle: h, path: h.name, saved: value, dirty: false } : x));
+        setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, historyKey: copied ? nextKey : x.historyKey, name: h.name, handle: h, path: h.name, saved: value, dirty: x.doc.getValue() !== value } : x));
         flash(t('app.saved', { name: h.name }));
         return true;
       } catch (e) {
@@ -557,7 +559,7 @@ export default function App() {
     setHistoryTick(n => n + 1);
     if (t.kind === 'draft') {
       try {
-        const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ name: x.name, text: x.doc.getValue() }));
+        const drafts = tabsRef.current.filter(x => x.kind === 'draft' && x.doc).map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue() }));
         localStorage.setItem(LS_DRAFTS, JSON.stringify(drafts));
       } catch (e) { flash(tr(getLang(), 'app.draftSaveFailed')); return; }
       setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
@@ -566,8 +568,9 @@ export default function App() {
     }
     if (!t.handle) { await saveTabAs(t); return; }
     try {
-      await fs.writeFileText(t.handle, t.doc.getValue());
-      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: x.doc.getValue(), dirty: false } : x));
+      const value = t.doc.getValue();
+      await fs.writeFileText(t.handle, value);
+      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: value, dirty: x.doc.getValue() !== value } : x));
       flash(tr(getLang(), 'app.saved', { name: t.name }));
     } catch (e) {
       // 权限失效是最高频的一种（句柄跨会话/文件夹被移动）：给出口，别抛浏览器英文原文
@@ -678,7 +681,7 @@ export default function App() {
     if (useDraft && t.doc) {
       t.doc.setValue(text);
       setActiveValue(text);
-      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, saved: text, dirty: false } : x));
+      setTabs(ts => ts.map(x => x.id === t.id ? { ...x, dirty: text !== x.saved } : x));
     } else {
       const nt = makeTab({ name: tr(getLang(), 'app.draftName'), path: tr(getLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text });
       setTabs(ts => ts.concat([nt])); setActiveId(nt.id); setActiveValue(text);
@@ -1321,6 +1324,7 @@ export default function App() {
       />
 
       {fileDialog === 'history' && activeTab.doc && <HistoryDialog key={activeId} name={activeTab.name} current={activeTab.doc.getValue()} versions={readHistory(historyKey)}
+        onExportLegacy={activeTab.kind === 'draft' && readHistory('["","draft"]').length ? () => downloadFile('paperlite-legacy-draft-history.json', JSON.stringify(readHistory('["","draft"]'), null, 2), 'application/json') : null}
         usage={historyUsage(historyKey)}
         onDelete={id => {
           const version = readHistory(historyKey).find(v => v.id === id);
@@ -1445,7 +1449,7 @@ function readDrafts() {
   try {
     const arr = JSON.parse(localStorage.getItem(LS_DRAFTS) || 'null');
     if (Array.isArray(arr)) {
-      const list = arr.filter(d => d && typeof d.text === 'string').map(d => ({ name: nameOf(d.name), text: d.text }));
+      const list = arr.filter(d => d && typeof d.text === 'string').map(d => ({ name: nameOf(d.name), text: d.text, ...(typeof d.id === 'string' && d.id ? { id: d.id } : {}) }));
       if (list.length) return list;
     }
   } catch (e) { /* 落盘格式坏了，退回旧键 */ }
