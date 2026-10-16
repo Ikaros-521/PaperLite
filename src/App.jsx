@@ -26,7 +26,7 @@ import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnos
 import { warmEngine, compileXeLaTeX, cancelCompile, onEngineStatus } from './engines/xelatex.js';
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
-import { infoFor } from './fileTypes.js';
+import { extOf, infoFor } from './fileTypes.js';
 import * as fs from './fs.js';
 import * as llm from './llm.js';
 import * as ctxBudget from './context.js';
@@ -159,6 +159,10 @@ export default function App() {
   const activeKind = activeTab ? activeTab.kind : 'tex';
   const isTexLike = activeKind === 'tex' || activeKind === 'draft';
   const isMd = activeKind === 'md';
+  const isSvg = extOf(activeTab?.name) === 'svg';
+  const svgPreviewUrl = useMemo(() => isSvg && activeTab?.doc
+    ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(activeValue) : null,
+  [isSvg, activeTab?.doc, activeValue]);
   // Invalidate pending compilation when switching documents, including switching back.
   if (compileContextRef.current?.doc !== activeTab?.doc) {
     compileContextRef.current = { doc: activeTab?.doc };
@@ -1190,11 +1194,11 @@ export default function App() {
           activeTab && activeTab.kind === 'pdf' ? (
             <PdfViewer key={activeTab.id} url={activeTab.imageUrl} title={activeTab.name} lang={lang}
               onDownload={async () => downloadFile(activeTab.name, activeTab.uploadedFile || await (await fetch(activeTab.imageUrl)).blob())} />
-          ) : activeTab && activeTab.kind === 'image' ? (
+          ) : activeTab && (activeTab.kind === 'image' || isSvg) ? (
             <section id="previewPane">
               <div id="previewBar"><span className="pb-title">{t('prev.title')}</span></div>
               <div id="previewScroll"><div id="preview"><div id="paper" className="paper image-view" style={{ zoom }}>
-                <img src={activeTab.imageUrl} alt={activeTab.name} style={{ maxWidth: '100%' }} />
+                <img src={svgPreviewUrl || activeTab.imageUrl} alt={activeTab.name} style={{ maxWidth: '100%' }} />
               </div></div></div>
             </section>
           ) : previewMode === 'pdf' && compileResult?.ok && compileResult.tabId === activeTab?.id ? (

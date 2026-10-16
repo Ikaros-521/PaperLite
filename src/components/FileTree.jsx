@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { listDir, removeEntry, renameEntry, canRename, createFile, createDirectory } from '../fs.js';
 import { infoFor } from '../fileTypes.js';
 import { useLang, useT } from '../useI18n.js';
@@ -11,27 +11,65 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
   const [expanded, setExpanded] = useState({});   // path -> true
   const [loading, setLoading] = useState({});
   const [selDir, setSelDir] = useState('');       // 当前选中目录 path（新建目标）
+  const rootRef = useRef(null);
+  const childrenRef = useRef(children);
+  const requestsRef = useRef({});
+  childrenRef.current = children;
 
   const load = useCallback(async (dirHandle, path) => {
+    const request = {};
+    requestsRef.current[path] = request;
+    const isCurrent = () => rootRef.current === root && requestsRef.current[path] === request;
     setLoading(l => ({ ...l, [path]: true }));
     try {
       const entries = await listDir(dirHandle);
+      if (!isCurrent()) return;
       setChildren(c => ({ ...c, [path]: entries.map(entry => ({ ...entry,
         path: path ? path + '/' + entry.name : entry.name })) }));
     } catch (e) {
+      if (!isCurrent()) return;
       setChildren(c => ({ ...c, [path]: [{ name: t('ft.readFailed', { msg: e.message || e }), kind: 'error' }] }));
     }
     setLoading(l => ({ ...l, [path]: false }));
-  }, [t]);
+  }, [root, t]);
+
+  const parentHandle = useCallback((parentPath) => {
+    if (parentPath === '') return root;
+    // 目录 handle 存在父层的目录项中。
+    let h = root, prefix = '';
+    for (const name of parentPath.split('/')) {
+      const hit = (childrenRef.current[prefix] || []).find(x => x.kind === 'directory' && x.name === name);
+      if (!hit) return null;
+      h = hit.handle;
+      prefix = prefix ? prefix + '/' + name : name;
+    }
+    return h;
+  }, [root]);
+
+  const refreshTree = useCallback(() => {
+    if (!root) return;
+    // 更新所有已加载层级，折叠目录再次展开时也能看到最新内容。
+    const paths = new Set(['', ...Object.keys(childrenRef.current), ...Object.keys(requestsRef.current)]);
+    for (const path of paths) {
+      const handle = parentHandle(path);
+      if (handle) load(handle, path);
+    }
+  }, [root, parentHandle, load]);
 
   useEffect(() => {
-    if (root) {
+    if (rootRef.current !== root) {
+      rootRef.current = root;
+      childrenRef.current = {};
+      requestsRef.current = {};
       setChildren({});
       setExpanded({});
+      setLoading({});
       setSelDir('');
-      load(root, '');
     }
-  }, [root, refreshKey, load]);
+    refreshTree();
+  }, [root, refreshKey, refreshTree]);
+
+  useEffect(() => () => { requestsRef.current = {}; }, []);
 
   const toggle = async (entry) => {
     const path = entry.path;
@@ -45,23 +83,8 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
   };
 
   const refresh = (parentPath) => {
-    const dirHandle = parentPath === '' ? root : children[parentPath]?.find(x => x.kind === 'directory' && x.path === parentPath)?.handle;
+    const dirHandle = parentHandle(parentPath);
     if (dirHandle) load(dirHandle, parentPath);
-    else load(root, '');
-  };
-
-  const parentHandle = (parentPath) => {
-    if (parentPath === '') return root;
-    // 从 children 缓存里找该目录的 handle（目录项自带）
-    const seg = parentPath.split('/');
-    let h = root, prefix = '';
-    for (const name of seg) {
-      const hit = (children[prefix] || []).find(x => x.kind === 'directory' && x.name === name);
-      if (!hit) return null;
-      h = hit.handle;
-      prefix = prefix ? prefix + '/' + name : name;
-    }
-    return h;
   };
 
   const doNewFile = async (dirPath) => {
@@ -151,7 +174,7 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
         <span className="ft-acts ft-head-acts">
           <button title={t('ft.rootNewFile')} onClick={() => doNewFile('')}>{lang === 'zh' ? '＋文' : '＋f'}</button>
           <button title={t('ft.rootNewDir')} onClick={() => doNewDir('')}>{lang === 'zh' ? '＋夹' : '＋d'}</button>
-          <button title={t('ft.refresh')} onClick={() => load(root, '')}>⟳</button>
+          <button title={t('ft.refresh')} onClick={refreshTree}>⟳</button>
           <button title={t('ft.closeFolder')} onClick={onCloseFolder}>✕</button>
         </span>
       </div>
