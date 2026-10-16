@@ -6,3 +6,10 @@ dist/
 .zcode/design-review/
 *.bin
 spark-output/
+.agents/skills/
+.github/skills/
+artifacts/
+.github/agents/
+skills-lock.json
+.gitignore
+.github/hooks/impeccable.json
