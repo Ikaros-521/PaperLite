@@ -335,18 +335,28 @@ export default function App() {
   // 会按比例覆盖预览区刚刚设置的标题定位（反之亦然），造成跳转目标互打。
   const syncSuppRef = useRef(0);
   const jumpToLine = useCallback((line) => {
-    const c = cm();
-    if (!c || line == null) return;
+    if (line == null) return;
     setSidebarOpen(false);
-    syncSuppRef.current = Date.now() + 900;
-    c.setCursor({ line, ch: 0 });
-    c.scrollIntoView({ line, ch: 0 }, 120);
-    c.focus();
-    try {
-      c.addLineClass(line, 'background', 'jump-flash');
-      setTimeout(() => c.removeLineClass(line, 'background', 'jump-flash'), 1400);
-    } catch (e) { /* ignore */ }
     if (viewMode === 'preview') setViewMode('split');
+    syncSuppRef.current = Date.now() + 1000;
+
+    const doScroll = () => {
+      const c = cm();
+      if (!c) return;
+      c.refresh();
+      const maxLine = Math.max(0, c.lineCount() - 1);
+      const targetLine = Math.min(Math.max(0, line), maxLine);
+      c.setCursor({ line: targetLine, ch: 0 });
+      c.scrollIntoView({ line: targetLine, ch: 0 }, 120);
+      c.focus();
+      try {
+        c.addLineClass(targetLine, 'background', 'jump-flash');
+        setTimeout(() => c.removeLineClass(targetLine, 'background', 'jump-flash'), 1600);
+      } catch (e) { /* ignore */ }
+    };
+
+    doScroll();
+    requestAnimationFrame(doScroll);
   }, [viewMode]);
 
   const jumpToHeading = useCallback((h) => {

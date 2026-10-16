@@ -136,6 +136,11 @@ ok(good.filter(d => d.kind === 'env' || d.kind === 'brace').length === 0, '示�
 ok(lintLaTeX('text % { $ \\begin{itemize}').length === 0, '注释中的括号、公式和环境不误报');
 ok(lintLaTeX('text \\% {').some(d => d.kind === 'brace'), '转义百分号后仍检查真实语法');
 ok(lintLaTeX('{fixed}').length === 0 && lintLaTeX('{broken').some(d => d.kind === 'brace'), '修改后重新检测，已修复的错误消失');
+ok(lintLaTeX('On a five-level delay sweep ($\\Delta \\in \\{60, 300, 600, 900, 1800\\}$\\,s.').length === 0, '转义花括号紧随公式结尾不误报奇数 $');
+ok(lintLaTeX('Price is \\$100 and \\$200').length === 0, '转义美元 \\$ 不计入数学环境');
+ok(lintLaTeX('Formula \\\\$x$').length === 0, '换行 \\\\ 后的行内公式 $x$ 正常配对');
+ok(lintLaTeX('Formula \\\\\\$100').length === 0, '换行 \\\\ 后跟随转义 \\$ 不误报');
+ok(lintLaTeX('set \\{1, 2, 3\\}').length === 0, '转义花括号 \\{ \\} 不影响环境括号深度');
 
 // ---------- 主题皮肤 ----------
 console.log('== 主题皮肤 ==');
