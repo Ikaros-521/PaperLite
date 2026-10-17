@@ -4,6 +4,7 @@ dist/
 *.log
 .DS_Store
 .zcode/design-review/
+.zcode/skills/
 *.bin
 spark-output/
 .agents/skills/
