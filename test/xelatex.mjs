@@ -230,6 +230,15 @@ Test \cite{knuth1984}
 \begin{algorithm}\caption{Example}
 \begin{algorithmic}\STATE $x\gets 1$\end{algorithmic}\end{algorithm}
 \end{document}`,
+  pseudocode: String.raw`\documentclass{article}
+\usepackage{algorithm,algpseudocode}
+\begin{document}
+\begin{algorithm}\caption{Example}
+\begin{algorithmic}[1]\Require{$n$}\State $x\gets 1$
+\If{$x>1$}\State $x\gets x+1$\Else\State $x\gets 0$\EndIf
+\State \textbf{return} $x$
+\end{algorithmic}\end{algorithm}
+\end{document}`,
 };
 const flags = process.argv.slice(2).filter(arg => arg.startsWith('--'));
 // Compiled fixtures may be passed positionally: node test/xelatex.mjs in.tex out.pdf

@@ -14,6 +14,13 @@
     "sha256": "56c8cbdaf7c2d3fd2b43878e8661d8b6f4c1c0dfb051fe3d3425a30621783a83"
   },
   {
+    "name": "algorithmicx",
+    "revision": "15878",
+    "license": "lppl",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/algorithmicx.tar.xz",
+    "sha256": "67a57f9e1bd4c227d749c8ffc87d8f660fe76f721a7eba9a91e1a311e44a29ab"
+  },
+  {
     "name": "algorithms",
     "revision": "42428",
     "license": "lgpl2.1",

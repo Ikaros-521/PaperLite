@@ -24,7 +24,7 @@ newunicodechar environ standalone preview pgfplots colortbl threeparttable
 xurl infwarerr siunitx physics cancel jknapltx rsfs stmaryrd wasysym wasy wasy-type1
 upquote xunicode xltxtra tipa kvoptions etex-pkg everysel everyshi filehook
 hopatch ifoddpage lineno multido newfloat bigfoot ragged2e realscripts svn-prov
-translations translator varwidth zref algorithms ntheorem unicode-math lm-math latex-fonts cm
+translations translator varwidth zref algorithms algorithmicx ntheorem unicode-math lm-math latex-fonts cm
 abstract hologo appendix biblatex bibtex tex-gyre babel babel-english hyphen-base svg pdfpages pdflscape koma-script transparent'''.split()
 # These bundles support other engines too. Import their XeTeX runtime files,
 # without pulling platform binaries or the entire pTeX/LuaTeX font ecosystem.

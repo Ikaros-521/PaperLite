@@ -477,7 +477,9 @@
     "3/wasy5",
     "26/mt-cmr.cfg",
     "32/stmary10.pfb",
-    "32/wasy10.pfb"
+    "32/wasy10.pfb",
+    "26/algpseudocode.sty",
+    "26/algorithmicx.sty"
   ],
   "engines": {
     "tex": [
@@ -905,7 +907,9 @@
       "3/wasy10",
       "3/wasy7",
       "3/wasy5",
-      "26/mt-cmr.cfg"
+      "26/mt-cmr.cfg",
+      "26/algpseudocode.sty",
+      "26/algorithmicx.sty"
     ],
     "pdf": [
       "11/pdftex.map",
