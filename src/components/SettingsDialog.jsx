@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
-import { testConnection, fetchModels, newChannel, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
+import { testConnection, fetchModels, newChannel, normTemperature, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
 import { resolveWindow, inputBudget, formatTokens } from '../context.js';
 import { showConfirm } from '../dialogs.js';
 
@@ -135,7 +135,7 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                     <span className={'ch-dot' + (ch.id === activeChannelId ? ' on' : '')} title={t('set.activeTip')}></span>
                     <b>{ch.name}</b>
                     <span className={'ch-proto' + (proto === 'anthropic' ? ' anth' : '')}>{proto === 'anthropic' ? 'Claude' : 'OpenAI'}</span>
-                    <span className="dim">{ch.chatModel || t('set.noModel')}{ch.embedModel ? ' · ' + t('set.retrieval') + ':' + ch.embedModel : ''}{ch.cot ? ' · 🧠' : ''}</span>
+                    <span className="dim">{ch.chatModel || t('set.noModel')}{ch.embedModel ? ' · ' + t('set.retrieval') + ':' + ch.embedModel : ''}{ch.temperature != null ? ' · T' + ch.temperature : ''}{ch.cot ? ' · 🧠' : ''}</span>
                     <span className="ch-acts">
                       <button onClick={e => { e.stopPropagation(); setEditId(editId === ch.id ? null : ch.id); }}>{editId === ch.id ? t('set.collapse') : t('set.edit')}</button>
                       <button disabled={testing && testing.id === ch.id && !testing.result} onClick={e => { e.stopPropagation(); doTest(ch); }}>
@@ -203,6 +203,14 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                       <label className="inline">
                         <input type="checkbox" checked={!!ch.cot} onChange={e => patch(ch.id, 'cot', e.target.checked)} />
                         {t('set.cot')}
+                      </label>
+                      <label className="inline ch-temp">
+                        <span>{t('set.temp')}</span>
+                        <input type="number" min="0" max="2" step="0.1"
+                          value={ch.temperature == null ? '' : ch.temperature}
+                          placeholder={t('set.tempPh')}
+                          onChange={e => patch(ch.id, 'temperature', normTemperature(e.target.value))} />
+                        <span className="hint">{t('set.tempHint')}</span>
                       </label>
                       <div className="ch-ctxwin">
                         <label>{t('set.ctxWindow')}

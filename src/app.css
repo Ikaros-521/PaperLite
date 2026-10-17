@@ -245,6 +245,19 @@ body.dragging::before { content: ''; position: fixed; inset: 0; z-index: 9999; }
 .diag-msg { flex: 1; color: var(--ink); word-break: break-all; }
 .diag-line { flex: none; color: var(--accent); font-size: 11.5px; }
 .diag-line.dim { color: var(--ink-faint); }
+/* AI 修复：勾选 + 串行进度 */
+.diag-all { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; font-size: 11.5px; color: var(--ink-faint); cursor: pointer; }
+.diag-all input, .diag-check { width: 13px; height: 13px; margin: 0; cursor: pointer; accent-color: var(--accent); flex: none; }
+.diag-check:disabled, .diag-all input:disabled { cursor: default; opacity: .5; }
+.diag-check.ph { width: 13px; height: 13px; flex: none; display: inline-block; }
+.diag-prog { font-size: 11.5px; color: var(--accent); font-weight: 600; }
+.diag-status { flex: none; font-size: 11px; padding: 0 5px; border-radius: 8px; background: rgba(var(--accent-rgb), .1); color: var(--ink-faint); }
+.diag-status.fixing, .diag-status.retrying { color: var(--accent); }
+.diag-status.done { color: var(--ok); }
+.diag-status.failed { color: var(--seal); }
+.diag-item.st-fixing { background: rgba(var(--accent-rgb), .06); }
+.diag-item.st-done { opacity: .66; }
+.diag-item.st-failed .diag-msg { color: var(--seal); }
 
 /* 编辑器跳转闪烁 */
 .CodeMirror .jump-flash { background: var(--flash) !important; transition: background .8s; }
@@ -401,6 +414,10 @@ body.cp-dragging::before {
 .ch-edit { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .ch-edit label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-soft); }
 .ch-edit label.inline { flex-direction: row; align-items: center; gap: 8px; }
+.ch-edit .ch-temp { flex-wrap: wrap; }
+.ch-temp > span:first-child { flex: 0 0 auto; }
+.ch-temp input[type=number] { width: 120px; flex: 0 0 auto; }
+.ch-temp .hint { flex: 1 1 100%; opacity: .8; }
 .ch-edit input:not([type=checkbox]) {
   border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; font-size: 12.5px; background: var(--paper); color: var(--ink);
 }

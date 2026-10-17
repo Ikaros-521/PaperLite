@@ -10,7 +10,7 @@ import { showAlert as alert, showConfirm } from '../dialogs.js';
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -177,7 +177,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
 
   const send = async () => {
     const q = input.trim();
-    if (!q || busy) return;
+    if (!q || busy || externalBusy) return;
     if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
     setInput('');
     setNote('');
@@ -379,7 +379,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <textarea
           ref={taRef}
           value={input}
-          placeholder={channel ? t('chat.phReady') : t('chat.phNoChannel')}
+          placeholder={externalBusy ? t('diag.fixing') : (channel ? t('chat.phReady') : t('chat.phNoChannel'))}
+          disabled={externalBusy}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -388,7 +389,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <div className="chat-input-acts">
           {busy
             ? <button className="btn sm" onClick={() => abortRef.current && abortRef.current.abort()}>{t('chat.stop')}</button>
-            : <button className="btn sm primary" onClick={send} disabled={!channel}>{t('chat.send')}</button>}
+            : <button className="btn sm primary" onClick={send} disabled={!channel || externalBusy}>{t('chat.send')}</button>}
         </div>
       </div>
     </aside>

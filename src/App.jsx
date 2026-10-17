@@ -36,7 +36,8 @@ import { saveState } from './saveState.js';
 import { makeTab } from './workspace/tabModel.js';
 import { useWorkspace } from './workspace/useWorkspace.js';
 import { useCompile } from './workspace/useCompile.js';
-import { buildLLMContext, aiFixPrompt, aiFixIssuePrompt } from './workspace/chatContext.js';
+import { buildLLMContext, aiFixIssuePrompt } from './workspace/chatContext.js';
+import { runFixQueue } from './workspace/aiFixQueue.js';
 import { LangContext } from './useI18n.js';
 
 const LS_MODE = 'paperlite.viewmode.v2';
@@ -142,7 +143,10 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(null); // 'keys' | 'feedback' | 'about' | null
   const [tourStage, setTourStage] = useState(null); // 'welcome' | 'tour' | null
   const [chatMessages, setChatMessages] = useState([]);
-  const [aiBusy, setAiBusy] = useState(false);
+  // AI 修复串行队列状态：{ active, total, done, per: { [issueId]: { status, attempt, error } } }
+  const [fixRun, setFixRun] = useState(null);
+  const [selIds, setSelIds] = useState(() => new Set()); // 勾选待修复的 issue id
+  const fixCtrlRef = useRef(null);
 
   const cmRef = useRef(null);
   const ratioRef = useRef({ edit: 0, preview: 0 });
@@ -578,25 +582,102 @@ export default function App() {
     []);
   buildContext.cm = () => cmRef.current;
 
-  // ---- AI 修复 ----
-  const aiFix = async () => {
+  // ---- AI 修复（串行队列：勾选/全部 → 逐条发送，单条含超时+退避重试，随时可停止）----
+  const MAX_FIX_PER_RUN = 40;
+  const FIX_TIMEOUT_MS = 90_000;
+  const FIX_MAX_RETRY = 2;
+
+  const toggleSel = useCallback((id) => {
+    setSelIds(prev => {
+      if (fixRun && fixRun.active) return prev; // 修复进行中锁定选择，避免队列与勾选错位
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }, [fixRun]);
+
+  const toggleSelAll = useCallback((on) => {
+    if (fixRun && fixRun.active) return;
+    setSelIds(on ? new Set(editorIssues.map(d => d.id)) : new Set());
+  }, [fixRun, editorIssues]);
+
+  const startFix = async (requested) => {
+    if (fixRun && fixRun.active) return;              // 并发守卫：一轮没跑完不再起第二轮
     const L = getLang();
     const channel = channels.filter(c => c.id === activeChannelId)[0];
     if (!channel) { setSettingsOpen(true); alert(tr(L, 'app.needChannel')); return; }
     if (!isTexLike) { flash(tr(L, 'app.onlyTexAiFix')); return; }
-    const issues = editorIssues.slice(0, 20);
-    if (!issues.length) { flash(tr(L, 'app.noFixable')); return; }
-    setAiBusy(true);
+
+    // 勾选优先，未勾选则修全部；render 类无行号上下文不参与
+    const pool = (requested && requested.length ? requested : editorIssues).filter(d => d.src !== 'render');
+    if (!pool.length) { flash(tr(L, 'app.noFixable')); return; }
+    const issues = pool.slice(0, MAX_FIX_PER_RUN);
+    if (pool.length > issues.length) flash(tr(L, 'app.aiFixTooMany', { n: MAX_FIX_PER_RUN }));
+
+    const lines = activeValue.split('\n');
+    const tasks = issues.map((d, i) => ({ id: d.id, index: i, meta: d, prompt: aiFixIssuePrompt({ issues: [d], lines }) }));
+    const taskById = {};
+    tasks.forEach(t => { taskById[t.id] = t; });
+
+    const ctrl = new AbortController();
+    fixCtrlRef.current = ctrl;
+    const per = {};
+    issues.forEach(d => { per[d.id] = { status: 'queued' }; });
+    setFixRun({ active: true, total: tasks.length, done: 0, per });
     setChatOpen(true); setPanelOpen(false);
-    const prompt = aiFixPrompt({ issues, doc: activeValue, channel });
-    setChatMessages(ms => ms.concat([{ role: 'user', content: tr(L, 'app.aiFixReq'), ctxNote: '🛠 ' + tr(L, 'app.nIssues', { n: issues.length }) }, { role: 'assistant', content: '', reasoning: '' }]));
+
+    // 每条各自占用一对气泡；按 fixId 定位，别的消息插入也不会串台
+    const ensureBubble = (task) => setChatMessages(ms => {
+      if (ms.some(m => m.fixId === task.id)) return ms;
+      const d = task.meta;
+      const label = tr(L, 'app.fixIssueN', {
+        n: task.index + 1, total: tasks.length,
+        line: d.line != null ? d.line + 1 : '?', msg: d.msg
+      });
+      return ms.concat([{ role: 'user', content: label }, { role: 'assistant', content: '', reasoning: '', fixId: task.id }]);
+    });
+    const patchMsg = (id, fn) => setChatMessages(ms => ms.map(m => m.fixId === id ? fn(m) : m));
+
     try {
-      const r = await llm.chat(channel, [{ role: 'user', content: prompt }], { temperature: 0.2 });
-      setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, content: r.content, reasoning: r.reasoning || '', usage: r.usage || null } : m));
-    } catch (e) {
-      setChatMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content ? { ...m, content: tr(L, 'app.aiFixFailed', { msg: e.message || e }) } : m));
-    } finally { setAiBusy(false); }
+      const results = await runFixQueue({
+        tasks,
+        signal: ctrl.signal,
+        maxRetry: FIX_MAX_RETRY,
+        baseDelay: 800,
+        invoke: (task, { signal }) => llm.chat(channel, [{ role: 'user', content: task.prompt }], {
+          stream: true, signal, timeoutMs: FIX_TIMEOUT_MS,
+          onDelta: (c) => patchMsg(task.id, m => ({ ...m, content: m.content + c })),
+          onReasoning: (c) => patchMsg(task.id, m => ({ ...m, reasoning: (m.reasoning || '') + c })),
+        }),
+        onUpdate: (id, patch) => {
+          if (patch.status === 'fixing' || patch.status === 'retrying') ensureBubble(taskById[id]);
+          if (patch.status === 'failed') patchMsg(id, m => ({ ...m, content: (m.content ? m.content + '\n\n' : '') + tr(L, 'app.aiFixFailed', { msg: patch.error || '' }) }));
+          if (patch.status === 'cancelled') patchMsg(id, m => m.content ? m : { ...m, content: tr(L, 'app.aiFixCancelled') });
+          setFixRun(prev => {
+            if (!prev) return prev;
+            const next = { ...prev.per, [id]: patch };
+            const done = Object.values(next).filter(s => s.status === 'done' || s.status === 'failed' || s.status === 'cancelled').length;
+            return { ...prev, per: next, done };
+          });
+        }
+      });
+      let ok = 0, fail = 0, cancel = 0;
+      for (const id in results) {
+        const s = results[id].status;
+        if (s === 'done') ok++; else if (s === 'failed') fail++; else if (s === 'cancelled') cancel++;
+      }
+      flash(tr(L, 'app.aiFixSummary', { ok, fail, cancel }));
+    } finally {
+      fixCtrlRef.current = null;
+      setFixRun(prev => prev ? { ...prev, active: false } : prev);
+    }
   };
+
+  const stopFix = () => {
+    if (fixCtrlRef.current) fixCtrlRef.current.abort();
+  };
+
+  const aiBusy = !!(fixRun && fixRun.active);
 
   // ---- AI 修复（单问题：编辑器诊断红橙点点击，预填提示词到对话输入框）----
   const aiFixIssue = (issue, list) => {
@@ -738,7 +819,7 @@ export default function App() {
         engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} onCancelCompile={doCancelCompile} builtinStatus={builtinStatus}
         downloadPdf={compileResult?.ok && compileResult.tabId === activeTab?.id ? downloadCurrentPdf : null}
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
-        onAiFix={aiFix}
+        onAiFix={() => startFix(editorIssues)}
         syncScroll={syncScroll} setSyncScroll={setSyncScroll}
         zoom={zoom} onZoom={setZoomClamped}
         onHelp={openHelp}
@@ -776,7 +857,13 @@ export default function App() {
                 onDismiss={d => dismissIssues([d.id])}
                 onClear={() => dismissIssues(visibleIssues.map(d => d.id))}
                 onJump={(d) => jumpToLine(d.line)}
-                onAiFix={aiFix} aiBusy={aiBusy}
+                onAiFix={() => startFix(selIds.size ? editorIssues.filter(d => selIds.has(d.id)) : editorIssues)}
+                aiBusy={aiBusy}
+                selected={selIds}
+                onToggle={toggleSel}
+                onToggleAll={toggleSelAll}
+                fixRun={fixRun}
+                onStop={stopFix}
               />
             )}
           </div>
@@ -938,6 +1025,7 @@ export default function App() {
         onBeforeApply={() => snapshot(tr(getLang(), 'hist.beforeAi'), 'manual', true)}
         messages={chatMessages}
         setMessages={setChatMessages}
+        externalBusy={aiBusy}
       />
 
       <DialogHost />

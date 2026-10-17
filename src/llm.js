@@ -51,6 +51,20 @@ export function matchPreset(channel) {
 
 // ---------------- 渠道存取 ----------------
 
+// 采样温度归一：空/非法 → null（不发送该参数）；否则夹到 0–2
+export function normTemperature(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(2, Math.max(0, n)) : null;
+}
+
+// 实际发送的温度：请求级 opts 优先，其次渠道配置，都没有则 undefined（跟随模型默认）
+function resolveTemperature(channel, opts) {
+  if (opts && opts.temperature !== undefined && opts.temperature !== null) return opts.temperature;
+  const ct = channel && channel.temperature;
+  return ct === null || ct === undefined ? undefined : ct;
+}
+
 export function loadChannels() {
   try {
     const arr = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
@@ -60,7 +74,9 @@ export function loadChannels() {
         ...c,
         protocol: c.protocol === 'anthropic' ? 'anthropic' : 'openai',
         // 0 = 按模型自动推断窗口；旧版按字符的 contextLimit 已废弃
-        ctxWindow: +c.ctxWindow || 0
+        ctxWindow: +c.ctxWindow || 0,
+        // 采样温度：null = 不发送该参数、跟随模型默认（GLM 等思考模型只接受特定值，留空最稳）
+        temperature: normTemperature(c.temperature)
       };
       delete next.contextLimit;
       return next;
@@ -80,6 +96,7 @@ export function newChannel() {
     chatModel: 'paperlite-mock',
     embedModel: '',
     cot: false,
+    temperature: null,
     ctxWindow: 0
   };
 }
@@ -159,7 +176,8 @@ function chatOpenAI(channel, messages, opts) {
   // 摘要这类机械任务不需要推理：GLM-4.5 / Z1 系支持显式关闭，能省下十几秒
   if (opts.noReasoning && /glm-4\.5|glm-z1|glm4\.5/i.test(body.model)) body.thinking = { type: 'disabled' };
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
-  if (opts.temperature !== undefined) body.temperature = opts.temperature;
+  const temp = resolveTemperature(channel, opts);
+  if (temp !== undefined) body.temperature = temp;
   if (channel.cot) {
     body.messages = [
       { role: 'system', content: t('ai.systemCoT') },
@@ -193,17 +211,76 @@ function chatAnthropic(channel, messages, opts) {
   if (channel.cot && !opts.noReasoning) {
     body.thinking = { type: 'enabled', budget_tokens: 4000 };
     if (body.max_tokens <= 4000) body.max_tokens = 8000;
-  } else if (opts.temperature !== undefined) {
-    body.temperature = opts.temperature;
+  } else {
+    const temp = resolveTemperature(channel, opts);
+    if (temp !== undefined) body.temperature = temp;
   }
 
   return parseAnthropicStream(anthropicUrl(channel, 'messages'), channel, body, opts);
 }
 
 export async function chat(channel, messages, opts = {}) {
-  return protocolOf(channel) === 'anthropic'
-    ? chatAnthropic(channel, messages, opts)
-    : chatOpenAI(channel, messages, opts);
+  // 统一异常归类，供上层判断「能否重试」；timeoutMs 存在时把超时与外部取消合并到同一个 signal。
+  // 只在显式传入 timeoutMs 时才设超时定时器：普通对话是长时间流式，不能被整体掐断。
+  const timeoutMs = opts.timeoutMs;
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = timeoutMs ? setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs) : null;
+  const onExternal = () => ctrl.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) ctrl.abort();
+    else opts.signal.addEventListener('abort', onExternal);
+  }
+  const o = { ...opts, signal: ctrl.signal };
+  try {
+    return protocolOf(channel) === 'anthropic'
+      ? await chatAnthropic(channel, messages, o)
+      : await chatOpenAI(channel, messages, o);
+  } catch (err) {
+    throw normalizeError(err, { timedOut, externallyAborted: !!(opts.signal && opts.signal.aborted) });
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener('abort', onExternal);
+  }
+}
+
+// 把 fetch/SSE 抛出的异常规约为带 code 的错误：cancelled|timeout|rate|server|network|client
+// 用户取消仍沿用 name='AbortError'，兼容既有 `e.name !== 'AbortError'` 判断，同时补 code 供队列区分。
+function normalizeError(err, { timedOut, externallyAborted }) {
+  if (err && err.__llm) return err;               // postJson 已归类（含 status / retryAfterMs）
+  if (externallyAborted) {
+    const e = new Error(t('llm.cancelled')); e.name = 'AbortError'; e.code = 'cancelled'; e.__llm = true; return e;
+  }
+  if (err && err.name === 'AbortError') {
+    const e = new Error(timedOut ? t('llm.timeout') : t('llm.cancelled'));
+    e.code = timedOut ? 'timeout' : 'cancelled'; e.__llm = true;
+    if (!timedOut) e.name = 'AbortError';
+    return e;
+  }
+  const e = err instanceof Error ? err : new Error(String(err));
+  e.code = 'network'; e.__llm = true;
+  return e;
+}
+
+// 429 常带 Retry-After(-ms)，优先按服务端建议退避，避免盲重试继续撞限流
+function retryAfterMs(headers) {
+  try {
+    const ms = headers.get('retry-after-ms');
+    if (ms) { const n = parseFloat(ms); if (!Number.isNaN(n)) return Math.max(0, Math.round(n)); }
+    const s = headers.get('retry-after');
+    if (s) {
+      const n = parseFloat(s);
+      if (!Number.isNaN(n)) return Math.max(0, Math.round(n * 1000));
+      const d = Date.parse(s);
+      if (!Number.isNaN(d)) return Math.max(0, d - Date.now());
+    }
+  } catch (e) { /* Headers 不可用则忽略 */ }
+  return 0;
+}
+
+export function isRetryable(err) {
+  const code = err && err.code;
+  return code === 'timeout' || code === 'network' || code === 'rate' || code === 'server';
 }
 
 // ---- 请求 + 解析（两种协议各自归一化 usage，缺字段时返回 null 由界面降级估算） ----
@@ -219,7 +296,15 @@ async function postJson(u, channel, body, opts) {
     OPTIONAL_FIELDS.forEach(f => { delete body[f]; });
     r = await send();
   }
-  if (!r.ok) throw new Error('HTTP ' + r.status + '：' + (await r.text()).slice(0, 200));
+  if (!r.ok) {
+    const text = (await r.text().catch(() => '')).slice(0, 200);
+    const e = new Error('HTTP ' + r.status + '：' + text);
+    e.status = r.status;
+    e.code = r.status === 429 ? 'rate' : (r.status >= 500 || r.status === 408) ? 'server' : 'client';
+    e.retryAfterMs = retryAfterMs(r.headers);
+    e.__llm = true;
+    throw e;
+  }
   return r;
 }
 
