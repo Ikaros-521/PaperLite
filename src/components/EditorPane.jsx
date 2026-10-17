@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { tr, getLang } from '../i18n.js';
 import CodeMirror from 'codemirror';
 import 'codemirror/mode/stex/stex';
@@ -20,20 +20,18 @@ import 'codemirror/mode/dockerfile/dockerfile';
 import 'codemirror/addon/edit/closebrackets';
 import 'codemirror/addon/edit/matchbrackets';
 import 'codemirror/addon/selection/active-line';
-import 'codemirror/addon/dialog/dialog';
-import 'codemirror/addon/dialog/dialog.css';
-import 'codemirror/addon/search/searchcursor';
-import 'codemirror/addon/search/search';
-import { cmPhrases } from '../cmPhrases.js';
+import FindReplace from './FindReplace.jsx';
 
 /* CodeMirror 5 封装：单一编辑器实例 + 每 Tab 一个 CodeMirror.Doc（swapDoc 切换，
  * 各文件独立撤销历史与光标）。mode 由 Doc 创建时指定。
+ * 查找/替换用自带的 FindReplace 面板（addon 的对话框没有跳转按钮与匹配计数）。
  * 诊断：行号左侧 gutter 红橙点（点击触发 AI 修复）+ 行内波浪线（VSCode 风格）。 */
-export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue }) {
+export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq }) {
   const hostRef = useRef(null);
   const cmRef = useRef(null);
   const marksRef = useRef([]);
-  const langRef = useRef(null);
+  const [cmInst, setCmInst] = useState(null);
+  const [findOpen, setFindOpen] = useState(false);
   const cb = useRef({});
   cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue };
 
@@ -48,15 +46,11 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       styleActiveLine: true,
       extraKeys: {
         'Ctrl-S': () => { cb.current.onSave && cb.current.onSave(); return false; },
-        'Cmd-S': () => { cb.current.onSave && cb.current.onSave(); return false; },
-        'Ctrl-F': 'find',
-        'Cmd-F': 'find',
-        'Ctrl-Shift-F': 'replace',
-        'Cmd-Alt-F': 'replace'
-      },
-      phrases: cmPhrases(getLang())
+        'Cmd-S': () => { cb.current.onSave && cb.current.onSave(); return false; }
+      }
     });
     cmRef.current = cm;
+    setCmInst(cm);
     // 关闭隐藏 textarea 的拼写检查：Chromium 会把拼写红线“透”到可见行上，造成假报错
     const inp = cm.getInputField();
     inp.setAttribute('spellcheck', 'false');
@@ -88,12 +82,8 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     }
   }, [doc]);
 
-  // 切语言时同步查找/替换对话框文案（phrase() 每次调用都读 options.phrases）
-  useEffect(() => {
-    const cm = cmRef.current;
-    const L = getLang();
-    if (cm && langRef.current !== L) { langRef.current = L; cm.setOption('phrases', cmPhrases(L)); }
-  });
+  // App 的 Ctrl+F / Ctrl+Shift+F 与「编辑 → 查找替换」都通过 findReq 递增来唤起面板
+  useEffect(() => { if (findReq) setFindOpen(true); }, [findReq]);
 
   // 诊断标记：按行分组（错误优先），gutter 圆点可点击触发 AI 修复，行内画波浪线
   useEffect(() => {
@@ -150,5 +140,13 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     };
   }, [diagnostics, doc]);
 
-  return <div id="editorPane"><div id="editorHost" ref={hostRef} /></div>;
+  return (
+    <div id="editorPane">
+      <div id="editorHost" ref={hostRef} />
+      {cmInst && doc && (
+        <FindReplace cm={cmInst} doc={doc} open={findOpen} request={findReq}
+          onClose={() => { setFindOpen(false); cmInst.focus(); }} />
+      )}
+    </div>
+  );
 }

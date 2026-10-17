@@ -153,6 +153,10 @@ export default function App() {
   const valueRef = useRef(activeValue);
   valueRef.current = activeValue;
 
+  // 唤起编辑器内查找/替换面板：seq 递增让同一个模式也能重新聚焦并全选输入框
+  const [findReq, setFindReq] = useState(null);
+  const reqFind = useCallback((mode) => setFindReq(r => ({ seq: (r ? r.seq : 0) + 1, mode })), []);
+
   const activeTab = tabs.filter(t => t.id === activeId)[0] || tabs[0];
   const activeKind = activeTab ? activeTab.kind : 'tex';
   const isTexLike = activeKind === 'tex' || activeKind === 'draft';
@@ -511,14 +515,10 @@ export default function App() {
         e.preventDefault();
         setViewMode(e.key === '1' ? 'edit' : e.key === '2' ? 'split' : 'preview');
       }
-      // 焦点不在编辑器时，Ctrl+F 原本会走浏览器查找——统一交给编辑器内查找
-      if (mod && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F') && !e.target.closest?.('.CodeMirror')) {
+      // 查找/替换统一走编辑器内面板：焦点在不在编辑器里都同一个入口
+      if (mod && !e.altKey && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault();
-        const c = cm(); if (c) { c.focus(); c.execCommand('find'); }
-      }
-      if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
-        e.preventDefault();
-        const c = cm(); if (c) { c.focus(); c.execCommand('replace'); }
+        reqFind(e.shiftKey ? 'replace' : 'find');
       }
       const editorFocused = e.target.closest?.('.CodeMirror');
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tB', null, { markdown: isMd }); }
@@ -738,7 +738,8 @@ export default function App() {
             if (!c) return;
             if (op === 'undo') c.undo();
             else if (op === 'redo') c.redo();
-            else if (op === 'find' || op === 'replace' || op === 'selectAll') c.execCommand(op);
+            else if (op === 'selectAll') c.execCommand(op);
+            else if (op === 'find' || op === 'replace') { reqFind(op); return; }
             c.focus();
           },
           tool: (id, value) => {
@@ -887,6 +888,7 @@ export default function App() {
               onSave={saveActive}
               diagnostics={editorIssues}
               onFixIssue={aiFixIssue}
+              findReq={findReq}
             />
           ) : (
             <div className="binary-note">
@@ -1085,6 +1087,8 @@ export default function App() {
                     ['Ctrl+Alt+N', t('help.k6')],
                     ['Ctrl+F', t('help.k10')],
                     ['Ctrl+Shift+F', t('help.k11')],
+                    ['Enter / Shift+Enter', t('help.k12')],
+                    ['Alt+Enter / Esc', t('help.k13')],
                     ['Ctrl+Enter', t('help.k7')],
                     ['Ctrl+P', t('help.k8')],
                     ['Ctrl+1 / 2 / 3', t('help.k9')],
