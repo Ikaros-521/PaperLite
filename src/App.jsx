@@ -425,7 +425,7 @@ export default function App() {
     const t0 = performance.now();
     let r;
     try { r = renderLatex(deferred, {}); }
-    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + String(e && e.message || e) + '</div>', meta: {}, warnings: [String(e)], diagrams: [], stats: countOf(deferred), headings: [] }; }
+    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + String(e && e.message || e) + '</div>', meta: {}, warnings: [{ msg: String(e && e.message || e), line: null }], diagrams: [], stats: countOf(deferred), headings: [] }; }
     lastRenderMs = performance.now() - t0;
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -460,7 +460,6 @@ export default function App() {
   }), [activeTab?.doc]);
   const dismissed = dismissedIssues?.tabId === activeTab?.id ? dismissedIssues.fps : [];
   const visibleIssues = allIssues.filter(d => !dismissed.includes(fpOf(d)));
-  const editorIssues = visibleIssues.filter(d => d.src !== 'render');
   const dismissIssues = ids => setDismissedIssues({
     tabId: activeTab?.id,
     fps: [...new Set([...dismissed, ...visibleIssues.filter(d => ids.includes(d.id)).map(fpOf)])]
@@ -603,8 +602,8 @@ export default function App() {
 
   const toggleSelAll = useCallback((on) => {
     if (fixRun && fixRun.active) return;
-    setSelIds(on ? new Set(editorIssues.map(d => d.id)) : new Set());
-  }, [fixRun, editorIssues]);
+    setSelIds(on ? new Set(visibleIssues.map(d => d.id)) : new Set());
+  }, [fixRun, visibleIssues]);
 
   const startFix = async (requested) => {
     if (fixRun && fixRun.active) return;              // 并发守卫：一轮没跑完不再起第二轮
@@ -613,8 +612,8 @@ export default function App() {
     if (!channel) { setSettingsOpen(true); alert(tr(L, 'app.needChannel')); return; }
     if (!isTexLike) { flash(tr(L, 'app.onlyTexAiFix')); return; }
 
-    // 勾选优先，未勾选则修全部；render 类无行号上下文不参与
-    const pool = (requested && requested.length ? requested : editorIssues).filter(d => d.src !== 'render');
+    // 勾选优先，未勾选则修全部
+    const pool = requested && requested.length ? requested : visibleIssues;
     if (!pool.length) { flash(tr(L, 'app.noFixable')); return; }
     const issues = pool.slice(0, MAX_FIX_PER_RUN);
     if (pool.length > issues.length) flash(tr(L, 'app.aiFixTooMany', { n: MAX_FIX_PER_RUN }));
@@ -825,7 +824,7 @@ export default function App() {
         engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} onCancelCompile={doCancelCompile} builtinStatus={builtinStatus}
         downloadPdf={compileResult?.ok && compileResult.tabId === activeTab?.id ? downloadCurrentPdf : null}
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
-        onAiFix={() => startFix(editorIssues)}
+        onAiFix={() => startFix(visibleIssues)}
         syncScroll={syncScroll} setSyncScroll={setSyncScroll}
         zoom={zoom} onZoom={setZoomClamped}
         onHelp={openHelp}
@@ -863,7 +862,7 @@ export default function App() {
                 onDismiss={d => dismissIssues([d.id])}
                 onClear={() => dismissIssues(visibleIssues.map(d => d.id))}
                 onJump={(d) => jumpToLine(d.line)}
-                onAiFix={() => startFix(selIds.size ? editorIssues.filter(d => selIds.has(d.id)) : editorIssues)}
+                onAiFix={() => startFix(selIds.size ? visibleIssues.filter(d => selIds.has(d.id)) : visibleIssues)}
                 aiBusy={aiBusy}
                 selected={selIds}
                 onToggle={toggleSel}
@@ -891,7 +890,7 @@ export default function App() {
               onInit={(c) => { cmRef.current = c; setCmReady(x => x + 1); }}
               onScrollRatio={handleScrollRatio}
               onSave={saveActive}
-              diagnostics={editorIssues}
+              diagnostics={visibleIssues}
               onFixIssue={aiFixIssue}
               findReq={findReq}
             />

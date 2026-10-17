@@ -38,7 +38,7 @@ ok(res.html.includes('[1]'), '引用回填 [1]');
 ok(res.html.includes('mermaid-block'), 'mermaid 块');
 ok(res.html.includes('footnotes'), '脚注');
 ok(res.diagrams.length === 1, '1 个 tikz 图');
-ok(res.warnings.length === 0, '零警告, got: ' + res.warnings.slice(0, 5).join(' | '));
+ok(res.warnings.length === 0, '零警告, got: ' + res.warnings.slice(0, 5).map(w => w.msg).join(' | '));
 ok(res.headings.length === 8 && res.headings.every(h => h.offset > 0), '大纲 8 条且含偏移: ' + JSON.stringify(res.headings.map(h => [h.text, h.offset])));
 
 // ---------- 源码区间回切 ----------
@@ -66,7 +66,7 @@ const dg2 = res2.diagrams[0];
 ok(res2.diagrams.length === 1 && dg2.nodes.length >= 6, 'flow 节点数 >= 6, got ' + (dg2 ? dg2.nodes.length : 0));
 ok(dg2.svg.includes(' Q '), 'bend 曲线');
 ok((dg2.svg.match(/marker-end/g) || []).length >= 6, '箭头数 >= 6');
-ok(res2.warnings.length === 0, 'flow 零警告, got: ' + res2.warnings.slice(0, 5).join(' | '));
+ok(res2.warnings.length === 0, 'flow 零警告, got: ' + res2.warnings.slice(0, 5).map(w => w.msg).join(' | '));
 
 // ---------- blank / 颜色 ----------
 console.log('== blank / 颜色 ==');
@@ -164,7 +164,7 @@ const ieeeVars = resolveLayout('IEEEtran', ['journal']).vars;
 ok(ieeeVars['--doc-scale'] === '0.9' && ieeeVars['--doc-page-w'] === '830px', '版式变量输出: ' + JSON.stringify(ieeeVars));
 
 const ieeeRes = renderLatex(samples.ieee);
-ok(ieeeRes.warnings.length === 0, 'IEEE 示例零警告, got: ' + ieeeRes.warnings.slice(0, 5).join(' | '));
+ok(ieeeRes.warnings.length === 0, 'IEEE 示例零警告, got: ' + ieeeRes.warnings.slice(0, 5).map(w => w.msg).join(' | '));
 ok(ieeeRes.html.includes('<div class="doc-cols">'), '正文进入跨栏后的双栏容器');
 ok(ieeeRes.html.trimEnd().endsWith('</div>'), '双栏容器闭合');
 ok(ieeeRes.html.includes('doc-heads'), '\\markboth 渲染为期刊页眉');
@@ -182,7 +182,7 @@ ok(confRes.html.includes('au-columns'), '会议模式作者分栏类名');
 const ieeeLower = renderLatex('\\documentclass[journal]{IEEEtran}\\begin{document}\\markboth{Left}{\\MakeLowercase{\\textit{Et Al.}} Author}\\maketitle\\section{A}x\\end{document}');
 ok(ieeeLower.html.includes('<em>et al.</em> Author'), '\\MakeLowercase 变小写但不破坏标签: ' + (ieeeLower.meta.heads || {}).right);
 const silentRes = renderLatex('\\documentclass[journal]{IEEEtran}\\begin{document}\\IEEEoverridecommandlockouts\\IEEEpubid{2026\\$ IEEE}\\IEEEpubidadjcol\\section{A}\\IEEEPARstart{O}{ne}\\end{document}');
-ok(silentRes.warnings.length === 0, 'IEEE 声明命令不产生「不支持的命令」警告: ' + silentRes.warnings.join(' | '));
+ok(silentRes.warnings.length === 0, 'IEEE 声明命令不产生「不支持的命令」警告: ' + silentRes.warnings.map(w => w.msg).join(' | '));
 const unknownCls = renderLatex('\\documentclass[11pt]{acmsmart}\n\\begin{document}\\section{A}正文\\end{document}');
 ok(unknownCls.meta.layout.family === 'other' && unknownCls.meta.layout.basePt === 11, '未知文档类退化但不报错，字号选项仍生效');
 
@@ -193,7 +193,7 @@ const ruleRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \end{tabularx}
 \begin{tabular}[t]{cc}\toprule H & I \\ \cmidrule(r){1-2} J & K \\ \bottomrule\end{tabular}
 \end{document}`);
-ok(ruleRes.warnings.length === 0, 'tabularx / [t] / \\cmidrule 零警告: ' + ruleRes.warnings.join(' | '));
+ok(ruleRes.warnings.length === 0, 'tabularx / [t] / \\cmidrule 零警告: ' + ruleRes.warnings.map(w => w.msg).join(' | '));
 ok((ruleRes.html.match(/r-toprule/g) || []).length === 2, '两种表格都识别行首 \\toprule');
 ok((ruleRes.html.match(/r-bottomrule/g) || []).length === 2, '表尾 \\bottomrule 附加到最后一行');
 ok(/<tr class="[^"]*\bcl\b/.test(ruleRes.html), '\\cmidrule 归入 cl 横线类');
@@ -202,10 +202,10 @@ const strayRes = renderLatex(String.raw`\documentclass{article}\begin{document}�
 ok(strayRes.warnings.length === 0 && !strayRes.html.includes('toprule'), '表格线命令落在正文里静默忽略: ' + strayRes.html);
 const apRes = renderLatex(String.raw`\documentclass{article}\begin{document}\section{Body}\label{s1}\appendix
 \section{Proof}\label{p1}\subsection{Case}\end{document}`);
-ok(apRes.warnings.length === 0, '\appendix 零警告: ' + apRes.warnings.join(' | '));
+ok(apRes.warnings.length === 0, '\appendix 零警告: ' + apRes.warnings.map(w => w.msg).join(' | '));
 ok(JSON.stringify(apRes.headings.map(h => h.num)) === '[1,"A","A.1"]', '附录章节改用字母编号: ' + JSON.stringify(apRes.headings.map(h => h.num)));
 const boxRes = renderLatex(String.raw`\documentclass{article}\begin{document}等式 \mbox{$a=b$} 不断行，诸如此类 \dots 与 \ldots 都省略。数学里 $\mbox{文字}+x$ 排正体。\end{document}`);
-ok(boxRes.warnings.length === 0, '\mbox / \dots 零警告: ' + boxRes.warnings.join(' | '));
+ok(boxRes.warnings.length === 0, '\mbox / \dots 零警告: ' + boxRes.warnings.map(w => w.msg).join(' | '));
 ok(boxRes.html.includes('<span class="mbox"><span class="katex">'), '\mbox 内容照常渲染（含数学）: ' + (boxRes.html.match(/<span class="mbox">[^<]*/) || [''])[0]);
 ok(!/class="math-error"/.test(boxRes.html) && !boxRes.html.includes('$\\mbox{文字}+x$'), '数学里的 \\mbox 按 \\text 渲染，不报公式错误');
 ok(boxRes.html.includes('\u2026') && !boxRes.html.includes('\\dots'), '\dots / \ldots 渲染为省略号');
@@ -213,7 +213,7 @@ const verbRes = renderLatex(String.raw`\documentclass{article}\begin{document}\s
 用 \verb|%|、\verb*{a  b} 与 \verb+\LaTeX+，表格里的 \verb|&| 不分列。
 \begin{tabular}{cc}\verb|&| & ok \\ \end{tabular}
 \end{document}`);
-ok(verbRes.warnings.length === 0, '\verb 零警告: ' + verbRes.warnings.join(' | '));
+ok(verbRes.warnings.length === 0, '\verb 零警告: ' + verbRes.warnings.map(w => w.msg).join(' | '));
 ok(verbRes.html.includes('<code class="verb">%</code>'), '\verb 定界符内的 % 不当注释');
 ok(verbRes.html.includes('<code class="verb">a\u2423\u2423b</code>'), '\verb* 显示可见空格');
 ok(verbRes.html.includes('<code class="verb">\\LaTeX</code>'), '\verb 内容按字面显示，不展开命令');
@@ -225,19 +225,19 @@ console.log('== 补齐命令（第二批）==');
 const liRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 用 \lstinline{fontspec} 与 \lstinline[language=C]|int x; // 注释| 两种写法。
 \end{document}`);
-ok(liRes.warnings.length === 0, '\lstinline 零警告: ' + liRes.warnings.join(' | '));
+ok(liRes.warnings.length === 0, '\lstinline 零警告: ' + liRes.warnings.map(w => w.msg).join(' | '));
 ok(liRes.html.includes('<code class="verb">fontspec</code>') && liRes.html.includes('<code class="verb">int x; // 注释</code>'),
   '\lstinline 带选项与花括号定界符都取字面: ' + (liRes.html.match(/<code class="verb">[^<]*<\/code>/g) || []).join(''));
 const fbRes = renderLatex(String.raw`\documentclass{article}\begin{document}\fbox{带框} 与 \hbox{连写} 和 \mbox{不换行}\end{document}`);
 ok(fbRes.warnings.length === 0 && fbRes.html.includes('<span class="fbox">带框</span>') && (fbRes.html.match(/class="mbox"/g) || []).length === 2,
-  '\fbox 加边框、\hbox 等同 \mbox: ' + fbRes.warnings.join(' | '));
+  '\fbox 加边框、\hbox 等同 \mbox: ' + fbRes.warnings.map(w => w.msg).join(' | '));
 const refRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \begin{figure}\caption{图一}\label{f:1}\end{figure}
 \begin{table}\begin{tabular}{cc}a&b\end{tabular}\caption{表一}\label{t:1}\end{table}
 如\figref{f:1}、\tabref{t:1}与\autoref{t:1}所示。\begin{thebibliography}{9}\bibitem{k}文献\end{thebibliography}
 据~\cite{k}、\parencite{k}、\textcite{k}。
 \end{document}`);
-ok(refRes.warnings.length === 0, '\figref / \tabref / \parencite 零警告: ' + refRes.warnings.join(' | '));
+ok(refRes.warnings.length === 0, '\figref / \tabref / \parencite 零警告: ' + refRes.warnings.map(w => w.msg).join(' | '));
 ok(refRes.html.includes('图&nbsp;1') && refRes.html.includes('表&nbsp;1'), '\figref/\tabref 带图/表前缀');
 ok((refRes.html.match(/class="cite">\[1\]/g) || []).length === 3, '三种引用命令都回填 [1]: ' + (refRes.html.match(/class="cite">[^<]*</g) || []).join(''));
 const tplRes = renderLatex(String.raw`\documentclass{ctexart}
@@ -245,7 +245,7 @@ const tplRes = renderLatex(String.raw`\documentclass{ctexart}
 \begin{document}\maketitle\begin{abstract}本文……。
 \end{abstract}用 \hologo{XeLaTeX} 编译，\version{0.1}\printbibliography[heading=bibintoc, title=\ebibname]
 \end{document}`);
-ok(tplRes.warnings.length === 0, '模板命令零警告: ' + tplRes.warnings.join(' | '));
+ok(tplRes.warnings.length === 0, '模板命令零警告: ' + tplRes.warnings.map(w => w.msg).join(' | '));
 ok(/<div class="abstract">[\s\S]*关键词[：:][\s\S]*图论/.test(tplRes.html), '导言 \keywords 落在摘要内: ' + (tplRes.html.match(/关键词[^<]*[^]*/) || [''])[0].slice(0, 40));
 ok(tplRes.html.includes('mailto:z@x.edu'), '\email 渲染为邮件链接');
 ok(tplRes.html.includes('doc-institute') && (tplRes.html.match(/某大学/g) || []).length === 1, '\institute 在 \author 内时只显示一次');
@@ -257,7 +257,7 @@ const wideRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \begin{tabular*}{\textwidth}{ccc}\toprule A & B & C \\ \midrule 1 & 2 & 3 \\ \bottomrule\end{tabular*}
 \end{document}`);
 ok(wideRes.warnings.length === 0 && wideRes.html.includes('<table class="tabular" style="width:100%">') && wideRes.html.includes('r-toprule'),
-  'tabular* 按列格式排版并占满宽度: ' + wideRes.warnings.join(' | '));
+  'tabular* 按列格式排版并占满宽度: ' + wideRes.warnings.map(w => w.msg).join(' | '));
 const ltRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \begin{longtable}{cc}\caption{长表}\label{lt}\toprule 头 & 目 \\ \midrule \endfirsthead
 \toprule 续 & 头 \\ \endhead
@@ -267,7 +267,7 @@ const ltRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \end{longtable}
 跨页表见 \tabref{lt}。
 \end{document}`);
-ok(ltRes.warnings.length === 0, 'longtable 零警告: ' + ltRes.warnings.join(' | '));
+ok(ltRes.warnings.length === 0, 'longtable 零警告: ' + ltRes.warnings.map(w => w.msg).join(' | '));
 ok((ltRes.html.match(/<tr/g) || []).length === 4, '首份表头 + 3 行表体（重复表头与表脚只留一份）: ' + (ltRes.html.match(/<tr[^>]*>/g) || []).join(''));
 ok(ltRes.html.includes('表&nbsp;1：长表') && ltRes.html.includes('见 1') || ltRes.html.includes('表&nbsp;1'), 'longtable 题注按表编号');
 const apEnvRes = renderLatex(String.raw`\documentclass{article}\begin{document}\section{正文}\begin{appendix}\section{附录}\end{appendix}\end{document}`);
@@ -277,7 +277,7 @@ const verbEnvRes = renderLatex('\\documentclass{article}\\begin{document}\n\\beg
 ok(verbEnvRes.warnings.length === 0 && verbEnvRes.html.includes('% 行内注释保留') && verbEnvRes.html.includes('// % 也保留'),
   '逐字环境内的 % 不再被当注释抹掉: ' + verbEnvRes.html.replace(/<[^>]*>/g, '').trim());
 const fixtureRes = renderLatex(readFileSync(new URL('../test/fixtures/elegantpaper-demo.tex', import.meta.url), 'utf8'));
-ok(fixtureRes.warnings.length === 0, 'elegantpaper 示例零警告: ' + fixtureRes.warnings.slice(0, 5).join(' | '));
+ok(fixtureRes.warnings.length === 0, 'elegantpaper 示例零警告: ' + fixtureRes.warnings.slice(0, 5).map(w => w.msg).join(' | '));
 
 // ---------- 换行的可选间距 \\[<dim>] ----------
 console.log('== 换行间距 \\\\ [<dim>] ==');
@@ -289,7 +289,7 @@ ok(brkKeep.includes('[见注]'), '非长度参数不吞掉，保留原文: ' + b
 const brkRow = renderLatex(String.raw`\documentclass{ctexart}\begin{document}\begin{tabular}{cc}A & B \\[6pt] C & D\end{tabular}\end{document}`).html;
 ok(/<tr[^>]*style="--rg:7\.98px"/.test(brkRow) && !brkRow.includes('[6pt]'), '表格行距落到下一行且不留字面量: ' + brkRow);
 const brkOffset = renderLatex(String.raw`\documentclass{ctexart}\begin{document}\begin{tabular}{cc}A & B \\[6pt] C & D\end{tabular}\end{document}`);
-ok(brkOffset.warnings.length === 0, '带间距的表格不产生渲染警告: ' + brkOffset.warnings.join(' | '));
+ok(brkOffset.warnings.length === 0, '带间距的表格不产生渲染警告: ' + brkOffset.warnings.map(w => w.msg).join(' | '));
 
 // ---------- 排版语法的静态检测 ----------
 console.log('== 排版语法检测 ==');
@@ -357,11 +357,21 @@ ok(currentCompileErrors(compiled, 1, '\\unknown').length === 1, '当前文件与
 ok(currentCompileErrors(compiled, 1, 'fixed').length === 0, '修改源码后不再显示旧编译错误');
 ok(currentCompileErrors(compiled, 2, '\\unknown').length === 0, '相同源码的另一文件不继承错误');
 ok(currentCompileErrors(null, 1, '').length === 0, '无编译结果时不显示编译错误');
-const issues = collectIssues([{ line: 1, msg: 'brace', severity: 'error' }], ['render'], [compileError]);
-ok(issues.map(d => d.src).join(',') === 'compile,lint,render', '统一收集全部诊断并保留来源');
-ok(new Set(issues.map(d => d.id)).size === 3, '每条提示独立标识，可逐条忽略');
+const issues = collectIssues(
+  [{ line: 1, msg: '引用了未定义的标签', severity: 'warn', kind: 'ref' }],
+  [{ msg: '环境 xyz 按普通内容处理', line: 4, kind: 'env' }, { msg: '与静态检查同类的引用提示', line: 1, kind: 'ref' }, { msg: '渲染中断', line: null }],
+  [compileError]
+);
+ok(issues.map(d => d.src).join(',') === 'compile,lint,render,render', '统一收集全部诊断并保留来源');
+ok(!issues.some(d => d.msg === '与静态检查同类的引用提示'), '同一行同一类问题只留静态检查那条');
+ok(issues.some(d => d.src === 'render' && d.line === 4), '渲染警告带行号，问题栏才能给出「第 N 行」并跳转');
+ok(new Set(issues.map(d => d.id)).size === 4, '每条提示独立标识，可逐条忽略');
 const remaining = issues.filter(d => d.id !== issues[0].id);
-ok(remaining.length === 2 && remaining.filter(d => d.line != null).length === 1, '忽略编译错误时计数和行内标记同步移除');
+ok(remaining.length === 3 && remaining.filter(d => d.line != null).length === 2, '忽略编译错误时计数和行内标记同步移除');
+// 引擎侧：警告要落在出问题的那一行，而不是整篇
+const warnRes = renderLatex('\\documentclass{article}\n\\begin{document}\n正文 \\zzUnknown 正文\n见 \\ref{missing}。\n\\end{document}');
+ok(warnRes.warnings.some(w => w.kind === 'command' && w.line === 2), '不支持的命令落在自己的行: ' + JSON.stringify(warnRes.warnings));
+ok(warnRes.warnings.some(w => w.kind === 'ref' && w.line === 3), '未定义引用落在 \\ref 所在行: ' + JSON.stringify(warnRes.warnings));
 
 console.log('== 上下文预算（token 口径）==');
 ok(C.inferWindow('claude-sonnet-4-5') === 200000, 'Claude 200k');
@@ -418,7 +428,7 @@ for (const text of ['Abstract', 'Contents', 'References', 'Figure&nbsp;1: ', 'Ta
   ok(englishPreview.html.includes(text), '英文预览包含 ' + text);
 }
 ok(!/[\u4e00-\u9fff]/.test(englishPreview.html), 'ctex 文档的英文预览无内置中文文案');
-ok(englishPreview.warnings.some(w => w.includes('Undefined reference')), '英文引用诊断');
+ok(englishPreview.warnings.some(w => w.msg.includes('Undefined reference')), '英文引用诊断');
 setLang('zh');
 const chinesePreview = renderLatex(bilingualSource);
 for (const text of ['摘要', '目录', '参考文献', '图&nbsp;1：', '表&nbsp;1：', '无标题文档']) {

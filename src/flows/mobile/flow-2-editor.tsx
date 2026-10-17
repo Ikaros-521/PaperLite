@@ -144,7 +144,7 @@ function Screen2_RichPreview({
         <NoticeBar
           color="alert"
           wrap
-          content={t('mb.ed.approxSkipped', { n: result.warnings.length, example: result.warnings[0] })}
+          content={t('mb.ed.approxSkipped', { n: result.warnings.length, example: result.warnings[0]?.msg })}
         />
       )}
       <PreviewPane

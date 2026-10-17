@@ -11,9 +11,8 @@ export default function DiagnosticsPanel({
   const t = useT();
   const all = issues;
   const errs = all.filter(d => d.severity === 'error').length;
-  const fixable = all.filter(d => d.src !== 'render');          // render 类无行号上下文，不可选
-  const selCount = fixable.reduce((n, d) => n + (selected && selected.has(d.id) ? 1 : 0), 0);
-  const allSelected = fixable.length > 0 && selCount === fixable.length;
+  const selCount = all.reduce((n, d) => n + (selected && selected.has(d.id) ? 1 : 0), 0);
+  const allSelected = all.length > 0 && selCount === all.length;
   const someSelected = selCount > 0 && !allSelected;
   const running = !!(fixRun && fixRun.active);
   const per = (fixRun && fixRun.per) || {};
@@ -31,17 +30,15 @@ export default function DiagnosticsPanel({
               </>
             ) : (
               <>
-                {fixable.length > 0 && (
-                  <label className="diag-all" title={t('diag.fixSelTip')}>
-                    <input type="checkbox" checked={allSelected}
-                      ref={el => { if (el) el.indeterminate = someSelected; }}
-                      onChange={e => onToggleAll && onToggleAll(e.target.checked)} />
-                    <span>{t('diag.selectAll')}</span>
-                  </label>
-                )}
+                <label className="diag-all" title={t('diag.fixSelTip')}>
+                  <input type="checkbox" checked={allSelected}
+                    ref={el => { if (el) el.indeterminate = someSelected; }}
+                    onChange={e => onToggleAll && onToggleAll(e.target.checked)} />
+                  <span>{t('diag.selectAll')}</span>
+                </label>
                 <button className="btn sm" onClick={onClear} title={t('diag.dismissTip')}>{t('diag.clear')}</button>
-                <button className="btn sm" disabled={aiBusy || !fixable.length} onClick={onAiFix} title={t('diag.fixSelTip')}>
-                  {selCount > 0 ? t('diag.fixSelected', { n: selCount }) : t('diag.fixAll', { n: fixable.length })}
+                <button className="btn sm" disabled={aiBusy || !all.length} onClick={onAiFix} title={t('diag.fixSelTip')}>
+                  {selCount > 0 ? t('diag.fixSelected', { n: selCount }) : t('diag.fixAll', { n: all.length })}
                 </button>
               </>
             )}
@@ -51,7 +48,6 @@ export default function DiagnosticsPanel({
       {dismissedCount > 0 && <div className="diag-note">{t('diag.hidden', { n: dismissedCount })} <button className="btn sm" onClick={onRestore}>{t('diag.restore')}</button></div>}
       {all.length > 0 && !running && <div className="diag-note">{t('diag.dismissTip')}</div>}
       {all.map(d => {
-        const canFix = d.src !== 'render';
         const st = per[d.id];
         return (
           <div
@@ -68,16 +64,14 @@ export default function DiagnosticsPanel({
               }
             }}
           >
-            {canFix ? (
-              <input
-                className="diag-check" type="checkbox"
-                checked={!!(selected && selected.has(d.id))}
-                disabled={running}
-                aria-label={t('diag.fix') + ': ' + d.msg}
-                onClick={e => e.stopPropagation()}
-                onChange={() => onToggle && onToggle(d.id)}
-              />
-            ) : <span className="diag-check ph" />}
+            <input
+              className="diag-check" type="checkbox"
+              checked={!!(selected && selected.has(d.id))}
+              disabled={running}
+              aria-label={t('diag.fix') + ': ' + d.msg}
+              onClick={e => e.stopPropagation()}
+              onChange={() => onToggle && onToggle(d.id)}
+            />
             <span className="diag-sev">{d.severity === 'error' ? '✖' : '⚠'}</span>
             <span className="diag-msg">{d.msg}</span>
             {st && (

@@ -11,6 +11,7 @@ import { readDocumentclass, resolveLayout, FALLBACK } from './classLayout.js';
  *  - 宏 (\newcommand) 预扫描后在文本/数学片段中按需展开。
  *  - 交叉引用 / 引文 / 脚注 / 目录 先用占位符，渲染结束后统一回填。
  * 返回 { html, meta, warnings, diagrams, stats, headings }
+ *   warnings: [{ msg, line, kind }]，line 为 0 起源码行号（定位不到时为 null）
  */
 
 
@@ -206,7 +207,8 @@ function expandMacros(text, macros, depth) {
 }
 
 // ---------------- 数学 ----------------
-function renderMath(tex, display, ctx, macrosForKatex) {
+// at：公式起点在源码中的绝对偏移，KaTeX 抛错时用它定位行
+function renderMath(tex, display, ctx, macrosForKatex, at) {
   var html;
   try {
     html = katex.renderToString(tex, {
@@ -215,7 +217,7 @@ function renderMath(tex, display, ctx, macrosForKatex) {
     });
   } catch (e) {
     html = '<span class="math-error" title="' + esc(e.message || '') + '">' + esc(tex) + '</span>';
-    ctx.warn(t('render.mathError', { msg: String(e.message || '').slice(0, 80) }));
+    ctx.warn(t('render.mathError', { msg: String(e.message || '').slice(0, 80) }), at, 'math');
   }
   return html;
 }
@@ -252,11 +254,26 @@ function renderLatex(srcRaw, opts) {
     footnotes: [],
     meta: { title: '', author: '', date: null, twocolumn: false, ctex: false, layout: FALLBACK, authorBlocks: [], thanks: [], heads: null, notice: '', keywords: '', institute: '' },
     diagrams: [],      // { id, svg, nodes, tikzsetRanges, wrapperId }
-    warn: function (m) { if (ctx.warnings.length < 60) ctx.warnings.push(m); }
+    refPos: {},        // ref key -> 引用处绝对偏移，供「未定义引用」回落到行号
+    // off 为源码绝对偏移：警告只有挂上行号，问题栏才能给出「第 N 行」并点击跳转
+    warn: function (m, off, kind) {
+      if (ctx.warnings.length >= 60) return;
+      ctx.warnings.push({ msg: m, line: off == null ? null : lineOf(off), kind: kind || null });
+    }
   };
 
   var src = String(srcRaw || '').replace(/\r\n?/g, '\n');
-  src = blankComments(src);
+  src = blankComments(src);   // 等长抹除注释，偏移与行号仍对得上源码
+  var lineStarts = null;       // 无警告的渲染不必付这次全文扫描
+  function lineOf(off) {
+    if (!lineStarts) {
+      lineStarts = [0];
+      for (var k = 0; k < src.length; k++) if (src.charCodeAt(k) === 10) lineStarts.push(k + 1);
+    }
+    var lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (lineStarts[mid] <= off) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
   var macros = scanMacros(src);
   ctx.macros = macros;
   var katexMacros = {};
@@ -288,9 +305,12 @@ function renderLatex(srcRaw, opts) {
   if (ctx._colsMarked) html = html.replace('@@COLS@@', '<div class="doc-cols">') + '</div>';
 
   // ---- 回填 ----
+  var refSeen = {};
   html = html.replace(/@@R:([^@]*)@@/g, function (_, key) {
     if (ctx.labels[key] !== undefined) return esc(ctx.labels[key]);
-    ctx.warn(t('render.undefinedRef', { key }));
+    // 同一个 key 可能被引用多次，按出现次序取各自的出处
+    var n = refSeen[key] = (refSeen[key] || 0) + 1;
+    ctx.warn(t('render.undefinedRef', { key }), (ctx.refPos[key] || [])[n - 1], 'ref');
     return '<span class="bad-ref">?</span>';
   });
   html = html.replace(/@@C:([^@]*)@@/g, function (_, key) {
@@ -500,13 +520,13 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
         var e = findMathEnd(str, i + 2, '$$');
         if (e > 0) {
           flushP();
-          tokens.push({ block: true, html: '<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e), ctx.macros, 0), true, ctx, katexMacrosOf(ctx)) + '</div>' });
+          tokens.push({ block: true, html: '<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e), ctx.macros, 0), true, ctx, katexMacrosOf(ctx), base + i) + '</div>' });
           i = e + 2; continue;
         }
       } else if (str.charAt(i + 1) && str.charAt(i + 1) !== '$') {
         var e2 = findMathEnd(str, i + 1, '$');
         if (e2 > 0) {
-          inlineBuf += renderMath(expandMacros(str.slice(i + 1, e2), ctx.macros, 0), false, ctx, katexMacrosOf(ctx));
+          inlineBuf += renderMath(expandMacros(str.slice(i + 1, e2), ctx.macros, 0), false, ctx, katexMacrosOf(ctx), base + i);
           i = e2 + 1; continue;
         }
       }
@@ -515,14 +535,14 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
       var e3 = findMathEnd(str, i + 2, '\\]');
       if (e3 > 0) {
         flushP();
-        tokens.push({ block: true, html: '<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e3), ctx.macros, 0), true, ctx, katexMacrosOf(ctx)) + '</div>' });
+        tokens.push({ block: true, html: '<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e3), ctx.macros, 0), true, ctx, katexMacrosOf(ctx), base + i) + '</div>' });
         i = e3 + 2; continue;
       }
     }
     if (c === '\\' && str.substr(i, 2) === '\\(') {
       var e4 = findMathEnd(str, i + 2, '\\)');
       if (e4 > 0) {
-        inlineBuf += renderMath(expandMacros(str.slice(i + 2, e4), ctx.macros, 0), false, ctx, katexMacrosOf(ctx));
+        inlineBuf += renderMath(expandMacros(str.slice(i + 2, e4), ctx.macros, 0), false, ctx, katexMacrosOf(ctx), base + i);
         i = e4 + 2; continue;
       }
     }
@@ -544,7 +564,7 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
       var cmdM = str.slice(i).match(/^\\([A-Za-z]+)\*?/);
       if (cmdM) {
         var r = handleCommand(cmdM[1], str, i, ctx, base, tokens, flushP);
-        if (r === null) { ctx.warn(t('render.unsupportedCommand', { name: cmdM[1] })); inlineBuf += esc(cmdM[0]); i += cmdM[0].length; continue; }
+        if (r === null) { ctx.warn(t('render.unsupportedCommand', { name: cmdM[1] }), base + i, 'command'); inlineBuf += esc(cmdM[0]); i += cmdM[0].length; continue; }
         if (typeof r === 'number') { i = r; continue; }
         i = r.next; if (r.html !== undefined) { if (r.block) { flushP(); tokens.push({ block: true, html: r.html }); } else inlineBuf += r.html; }
         continue;
@@ -602,6 +622,12 @@ function envAt(str, i) {
   if (str.slice(i, i + 7) !== '\\begin{') return null;
   var env = findEnv(str, i);
   return env;
+}
+
+// 引用占位符记下出处偏移：回填不到编号时，警告才知道该挂在哪一行
+function refPlaceholder(ctx, at, key) {
+  (ctx.refPos[key] || (ctx.refPos[key] = [])).push(at);
+  return '@@R:' + key + '@@';
 }
 
 // ---------------- 命令处理 ----------------
@@ -699,18 +725,18 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'underlinebar': return null;
 
     // ---- 引用 ----
-    case 'ref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '@@R:' + g1.text.trim() + '@@' };
+    case 'ref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: refPlaceholder(ctx, base + i, g1.text.trim()) };
     case 'autoref': case 'cref': case 'Cref': {
       g1 = G(afterName); if (!g1) return null;
       var pre2 = name === 'Cref' ? esc(t('render.figure')) + ' ' : '';
-      return { next: g1.end + 1, html: pre2 + '@@R:' + g1.text.trim() + '@@' };
+      return { next: g1.end + 1, html: pre2 + refPlaceholder(ctx, base + i, g1.text.trim()) };
     }
     case 'figref': case 'tabref': {
       // elegantpaper 一类模板的带前缀引用：\figref → 图 n、\tabref → 表 n
       g1 = G(afterName); if (!g1) return null;
-      return { next: g1.end + 1, html: esc(t(name === 'figref' ? 'render.figure' : 'render.table')) + '&nbsp;@@R:' + g1.text.trim() + '@@' };
+      return { next: g1.end + 1, html: esc(t(name === 'figref' ? 'render.figure' : 'render.table')) + '&nbsp;' + refPlaceholder(ctx, base + i, g1.text.trim()) };
     }
-    case 'eqref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: esc(t('render.equation')) + '&nbsp;(@@R:' + g1.text.trim() + '@@)' };
+    case 'eqref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: esc(t('render.equation')) + '&nbsp;(' + refPlaceholder(ctx, base + i, g1.text.trim()) + ')' };
     case 'cite': case 'citep': case 'citet': case 'citealp': case 'parencite': case 'autocite': case 'textcite': {
       o1 = readOpt(str, afterName);
       var pos = o1 ? o1.closeIdx + 1 : afterName;
@@ -981,11 +1007,11 @@ function renderEnv(env, ctx, absInnerStart) {
       var noNum = /\\notag|\\nonumber/.test(tex);
       tex = tex.replace(/\\notag|\\nonumber/g, '');
       if (/^(align|flalign|alignat)$/.test(env.name.replace('*',''))) {
-        body2 = renderMath('\\begin{aligned}' + tex.replace(/&/g, '&').replace(/\n/g, ' \\\\ ') + '\\end{aligned}', true, ctx, katexMacrosOf(ctx));
+        body2 = renderMath('\\begin{aligned}' + tex.replace(/&/g, '&').replace(/\n/g, ' \\\\ ') + '\\end{aligned}', true, ctx, katexMacrosOf(ctx), base);
       } else if (env.name.indexOf('gather') === 0) {
-        body2 = renderMath('\\begin{gathered}' + tex + '\\end{gathered}', true, ctx, katexMacrosOf(ctx));
+        body2 = renderMath('\\begin{gathered}' + tex + '\\end{gathered}', true, ctx, katexMacrosOf(ctx), base);
       } else {
-        body2 = renderMath(tex, true, ctx, katexMacrosOf(ctx));
+        body2 = renderMath(tex, true, ctx, katexMacrosOf(ctx), base);
       }
       var num2 = '';
       if (numbered && !noNum) {
@@ -1065,7 +1091,7 @@ function renderEnv(env, ctx, absInnerStart) {
       if (env.name === 'tabular') return renderTabular(inner, ctx, base);
       if (env.name === 'tabularx' || env.name === 'tabular*') return renderTabular(inner, ctx, base, true, 'width:100%');
       // 数学环境出现在文本流中（少见），直接交给 KaTeX
-      return '<div class="equation">' + renderMath('\\begin{' + env.name + '}' + inner + '\\end{' + env.name + '}', true, ctx, katexMacrosOf(ctx)) + '</div>';
+      return '<div class="equation">' + renderMath('\\begin{' + env.name + '}' + inner + '\\end{' + env.name + '}', true, ctx, katexMacrosOf(ctx), base) + '</div>';
     }
 
     case 'longtable': {
@@ -1114,7 +1140,7 @@ function renderEnv(env, ctx, absInnerStart) {
       return renderFlow(inner, ctx, base, false);
 
     case 'split': case 'aligned': case 'gathered':
-      return '<div class="equation">' + renderMath('\\begin{' + env.name + '}' + inner + '\\end{' + env.name + '}', true, ctx, katexMacrosOf(ctx)) + '</div>';
+      return '<div class="equation">' + renderMath('\\begin{' + env.name + '}' + inner + '\\end{' + env.name + '}', true, ctx, katexMacrosOf(ctx), base) + '</div>';
 
     case 'IEEEkeywords':
       return '<div class="ieee-keywords"><span class="kw-label">' + esc(t('render.indexTerms')) + esc(t('render.termsSep')) + '</span>' + renderFlow(inner, ctx, base, false) + '</div>';
@@ -1141,7 +1167,7 @@ function renderEnv(env, ctx, absInnerStart) {
     }
 
     default: {
-      ctx.warn(t('render.environmentFallback', { name: env.name }));
+      ctx.warn(t('render.environmentFallback', { name: env.name }), base, 'env');
       return '<div class="env-unknown" data-env="' + esc(env.name) + '">' + renderFlow(inner, ctx, base, false) + '</div>';
     }
   }
@@ -1359,7 +1385,7 @@ function renderTikzEnv(env, ctx, absInnerStart) {
     ctx.diagrams.push({ id: did, svg: res.svg, nodes: res.nodes, tikzsetRanges: ctx.tikzsetRanges, warnings: res.warnings || [] });
     return w;
   } catch (e) {
-    ctx.warn(t('render.tikzError', { msg: e.message || e }));
+    ctx.warn(t('render.tikzError', { msg: e.message || e }), absInnerStart, 'tikz');
     return '<div class="render-error">' + esc(t('render.tikzError', { msg: String(e.message || e) })) + '</div>';
   }
 }
