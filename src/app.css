@@ -683,22 +683,26 @@ body.cp-dragging::before {
 
 #previewScroll { flex: 1; overflow: auto; padding: 22px 14px 60px; }
 #paper {
-  background: var(--doc-paper); max-width: 830px; margin: 0 auto;
+  background: var(--doc-paper); max-width: var(--doc-page-w, 830px); margin: 0 auto;
   padding: 56px 64px; min-height: 900px;
   box-shadow: 0 1px 3px rgba(var(--doc-shadow-rgb), .14), 0 14px 36px rgba(var(--doc-shadow-rgb), .16); border-radius: 2px;
 }
-#paper.twocolumn { column-count: 2; column-gap: 34px; }
+#paper.twocolumn { column-count: 2; column-gap: var(--doc-col-gap, 34px); }
 #paper.twocolumn > * { break-inside: avoid-column; }
 
 /* ---------- 论文排版 ---------- */
 .paper {
   font-family: "Noto Serif SC", "Source Han Serif SC", "Times New Roman", Georgia, "SimSun", serif;
-  font-size: 15.5px; line-height: 1.72; color: var(--doc-ink);
+  font-size: calc(15.5px * var(--doc-scale, 1)); line-height: 1.72; color: var(--doc-ink);
 }
 .paper p { margin: .55em 0; text-indent: 2em; }
 .paper h1.doc-title { font-size: 23px; text-align: center; margin: .2em 0 .8em; text-indent: 0; }
 .paper .doc-author { text-align: center; text-indent: 0; white-space: pre-line; }
 .paper .doc-date { text-align: center; color: var(--doc-soft); margin-bottom: 1.6em; text-indent: 0; }
+.paper .doc-institute { text-align: center; color: var(--doc-soft); text-indent: 0; font-size: .95em; }
+.paper .doc-keywords { margin: .5em 0 0; text-indent: 0; font-size: .95em; }
+.paper .doc-keywords .kw-label { font-weight: 700; }
+.paper .fbox { border: 1px solid var(--doc-ink); padding: 0 .28em; }
 .paper .abstract {
   margin: 0 1.2em 1.4em; padding: .6em 1.1em; background: var(--doc-block-bg);
   border: 1px solid var(--doc-edge); font-size: .9em; text-indent: 0;
@@ -718,9 +722,9 @@ body.cp-dragging::before {
 .paper figure.float { margin: 1.1em auto; text-align: center; text-indent: 0; max-width: 100%; overflow-x: auto; }
 .paper figure.float figcaption { font-size: .88em; color: var(--doc-cap); margin-top: .5em; }
 .paper img.includegraphics { max-width: 100%; border: 1px dashed var(--doc-img-edge); padding: 4px; background: var(--doc-img-bg); }
-.paper table.tabular { border-collapse: collapse; margin: .9em auto; font-size: .92em; max-width: 100%; }
+.paper table.tabular { border-collapse: collapse; margin: .9em auto; font-size: .92em; max-width: 100%; --rg: 0px; }
 .paper table.tabular td p { margin: 0; overflow-wrap: anywhere; }
-.paper table.tabular td { padding: .32em .85em; text-align: center; }
+.paper table.tabular td { padding: calc(.32em + var(--rg)) .85em; text-align: center; }
 .paper table.tabular td.ta-l { text-align: left; }
 .paper table.tabular td.ta-r { text-align: right; }
 .paper table.tabular td.vline { border-left: 1px solid var(--doc-vline); }
@@ -729,6 +733,9 @@ body.cp-dragging::before {
 .paper table.tabular tr.r-midrule td { border-top: .9px solid var(--doc-ink); }
 .paper table.tabular tr.r-bottomrule td { border-bottom: 1.4px solid var(--doc-ink); }
 .paper table.tabular tr.r-hline td { border-bottom: .6px solid var(--doc-rule-soft); }
+.paper table.tabular tr.cl td { border-top: .6px solid var(--doc-rule-soft); }
+.paper .mbox { white-space: nowrap; }
+.paper code.verb { font-family: Consolas, "Courier New", monospace; white-space: pre-wrap; }
 .paper .equation { display: flex; align-items: center; margin: .8em 0; text-indent: 0; }
 .paper .equation .eq-body { flex: 1; text-align: center; overflow-x: auto; overflow-y: hidden; }
 .paper .eq-no { margin-left: 1em; color: var(--doc-cap); }
@@ -757,6 +764,69 @@ body.cp-dragging::before {
 .paper .pagebreak { height: 26px; border-bottom: 1px dashed var(--doc-pb-edge); margin: 18px 0; position: relative; }
 .paper .pagebreak::after { content: "分页"; position: absolute; right: 0; top: 4px; font-size: 11px; color: var(--doc-pb-ink); }
 .paper a { color: var(--doc-link); }
+
+/* ---------- 排版语法（\documentclass[选项]{类}） ---------- */
+/* 版式变量默认值；解析结果由 PreviewPane 内联覆盖（见 engines/classLayout.js） */
+#paper { --doc-scale: 1; --doc-page-w: 830px; --doc-col-gap: 34px; }
+
+/* 跨栏标题带 + 双栏正文（IEEEtran 期刊/会议形态） */
+.paper .doc-cols { column-count: 2; column-gap: var(--doc-col-gap); text-indent: 0; }
+.paper .doc-cols > p { text-indent: 2em; }
+.paper .doc-cols figure.float, .paper .doc-cols table.tabular,
+.paper .doc-cols .equation, .paper .doc-cols .diagram, .paper .doc-cols .ieee-bio { break-inside: avoid-column; }
+.paper .doc-cols h2.sec1, .paper .doc-cols h3.sec2, .paper .doc-cols h4.sec3 { break-after: avoid; }
+
+/* IEEEtran：标题带上方的期刊页眉 */
+.paper.cls-ieee .doc-heads {
+  display: flex; justify-content: space-between; gap: 1em; align-items: baseline;
+  font-size: .72em; letter-spacing: .05em; color: var(--doc-soft); text-transform: uppercase;
+  border-bottom: 1px solid var(--doc-edge); padding-bottom: .4em; margin-bottom: 1.1em; text-indent: 0;
+}
+.paper.cls-ieee .doc-heads .head-r { text-align: right; }
+.paper.cls-ieee .doc-notice { text-align: center; font-style: italic; font-size: .85em; color: var(--doc-soft); text-indent: 0; }
+.paper.cls-ieee h1.doc-title { font-size: 1.5em; font-weight: 700; }
+
+/* 作者带：期刊居中堆叠，会议等宽分栏 */
+.paper.cls-ieee .au-row { text-align: center; text-indent: 0; margin: .5em 0 .2em; }
+.paper.cls-ieee .au-block { margin: .4em 0; text-indent: 0; }
+.paper.cls-ieee .au-name { font-size: 1.06em; }
+.paper.cls-ieee .au-affil { font-size: .86em; color: var(--doc-soft); white-space: pre-line; }
+.paper.cls-ieee .au-member { font-style: italic; }
+.paper.cls-ieee .au-mark { color: var(--doc-soft); font-size: .8em; }
+.paper.cls-ieee .au-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .6em 1.4em; }
+.paper.cls-ieee .au-thanks {
+  max-width: 68ch; margin: .7em auto 1.1em; font-size: .74em; font-style: italic;
+  color: var(--doc-soft); text-indent: 0;
+}
+.paper.cls-ieee .au-thanks p { text-indent: 0; margin: .2em 0; }
+
+/* 摘要与索引术语：跨栏、无框、标签与正文同行 */
+.paper.cls-ieee .ieee-abstract, .paper.cls-ieee .ieee-keywords {
+  max-width: 90%; margin: .9em auto; font-size: .88em; text-indent: 0;
+  border: 0; background: none; padding: 0;
+}
+.paper.cls-ieee h2.sec1 .secnum::after { content: "."; }
+.paper.cls-ieee .abs-label, .paper.cls-ieee .kw-label { font-weight: 700; font-style: italic; }
+.paper.cls-ieee .ieee-abstract p, .paper.cls-ieee .ieee-keywords p { display: inline; text-indent: 0; margin: 0; }
+
+/* 章节标题：IEEE 一级居中全大写，二三级斜体 */
+.paper.cls-ieee h2.sec1 { font-size: 1.02em; text-transform: uppercase; letter-spacing: .03em; text-align: center; margin: 1.3em 0 .55em; }
+.paper.cls-ieee h3.sec2 { font-size: .98em; font-style: italic; text-align: center; margin: 1em 0 .4em; }
+.paper.cls-ieee h4.sec3 { font-size: .95em; font-weight: 400; font-style: italic; margin: .9em 0 .3em; }
+
+/* \IEEEPARstart 首字下沉 + 首词小型大写（沉到约两行，与 IEEE 版式一致） */
+.paper.cls-ieee .ieeepar-c { float: left; font-size: 2.75em; line-height: .78; font-weight: 700; padding: .06em .1em 0 0; }
+.paper.cls-ieee .ieeepar-w { font-variant: small-caps; }
+
+/* 作者简介与证明 */
+.paper.cls-ieee figure.ieee-bio { margin: 1.1em 0; text-align: left; text-indent: 0; }
+.paper.cls-ieee figure.ieee-bio .bio-photo { float: left; width: 74px; margin: 0 .9em .4em 0; }
+.paper.cls-ieee figure.ieee-bio .bio-photo img { width: 100%; border: 1px solid var(--doc-img-edge); background: var(--doc-img-bg); }
+.paper.cls-ieee figure.ieee-bio .bio-name { font-weight: 700; font-variant: small-caps; }
+.paper.cls-ieee figure.ieee-bio .bio-text { font-size: .86em; }
+.paper.cls-ieee figure.ieee-bio .bio-text p { text-indent: 2em; margin: .3em 0; }
+.paper.cls-ieee .proof .proof-label { font-weight: 700; }
+.paper.cls-ieee .qed { float: right; }
 
 /* ---------- 图与交互 ---------- */
 .diagram { position: relative; display: inline-block; max-width: 100%; margin: .6em auto; text-indent: 0; }

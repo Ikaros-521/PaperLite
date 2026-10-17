@@ -142,6 +142,167 @@ ok(lintLaTeX('Formula \\\\$x$').length === 0, '换行 \\\\ 后的行内公式 $x
 ok(lintLaTeX('Formula \\\\\\$100').length === 0, '换行 \\\\ 后跟随转义 \\$ 不误报');
 ok(lintLaTeX('set \\{1, 2, 3\\}').length === 0, '转义花括号 \\{ \\} 不影响环境括号深度');
 
+// ---------- 排版语法：\documentclass[选项]{类} ----------
+console.log('== 排版语法（文档类与选项）==');
+const { readDocumentclass, resolveLayout } = await import('../src/engines/classLayout.js');
+const dcls = readDocumentclass('\\documentclass[journal]{IEEEtran}\n\\usepackage{cite}');
+ok(dcls && dcls.cls === 'IEEEtran' && dcls.options.join(',') === 'journal', '解析 \\documentclass[journal]{IEEEtran}: ' + JSON.stringify(dcls));
+ok(resolveLayout('IEEEtran', ['journal']).columns === 2, 'IEEEtran journal 默认双栏');
+ok(resolveLayout('IEEEtran', ['journal']).spanHead === true, 'IEEEtran 标题带跨栏');
+ok(resolveLayout('IEEEtran', ['journal']).classes.includes('cols-span'), 'IEEEtran 用跨栏标记而不是给容器加双栏类');
+ok(resolveLayout('IEEEtran', ['conference']).authorLayout === 'columns', '会议模式作者分栏');
+ok(resolveLayout('IEEEtran', ['technote']).columns === 1, 'technote 单栏');
+ok(resolveLayout('IEEEtran', ['onecolumn']).columns === 1, 'onecolumn 覆盖类默认双栏');
+ok(resolveLayout('IEEEtran', []).basePt === 10, 'IEEEtran 未给尺寸时按 10pt');
+ok(resolveLayout('IEEEtran', ['12pt', '8pt']).basePt === 8, '尺寸选项后者覆盖前者');
+ok(resolveLayout('article', ['twocolumn']).classes.includes('twocolumn'), 'article[twocolumn] 整页双栏');
+ok(resolveLayout('article', ['11pt']).scale < resolveLayout('article', ['12pt']).scale, '字号选项驱动 --doc-scale');
+ok(resolveLayout('ctexart', ['UTF8']).family === 'ctex', 'ctex 家族识别');
+ok(resolveLayout('IEEEtran', ['journal', 'onecolumn']).conflicts.length === 0 &&
+   resolveLayout('IEEEtran', ['onecolumn', 'twocolumn']).conflicts.length === 1, '互斥选项只在真冲突时报');
+const ieeeVars = resolveLayout('IEEEtran', ['journal']).vars;
+ok(ieeeVars['--doc-scale'] === '0.9' && ieeeVars['--doc-page-w'] === '830px', '版式变量输出: ' + JSON.stringify(ieeeVars));
+
+const ieeeRes = renderLatex(samples.ieee);
+ok(ieeeRes.warnings.length === 0, 'IEEE 示例零警告, got: ' + ieeeRes.warnings.slice(0, 5).join(' | '));
+ok(ieeeRes.html.includes('<div class="doc-cols">'), '正文进入跨栏后的双栏容器');
+ok(ieeeRes.html.trimEnd().endsWith('</div>'), '双栏容器闭合');
+ok(ieeeRes.html.includes('doc-heads'), '\\markboth 渲染为期刊页眉');
+ok(ieeeRes.html.includes('ieeepar-c') && ieeeRes.html.includes('ieeepar-w'), '\\IEEEPARstart 首字下沉 + 小型大写');
+ok(ieeeRes.html.includes('ieee-keywords'), 'IEEEkeywords 渲染为索引术语');
+ok(ieeeRes.html.includes('ieee-bio'), 'IEEEbiographynophoto 渲染为作者简介');
+ok(ieeeRes.html.includes('au-mark'), '\\IEEEauthorrefmark 渲染为上标符号');
+ok(ieeeRes.html.includes('au-thanks'), '\\thanks 渲染为标题带下的致谢');
+ok(ieeeRes.html.includes('ieee-abstract') && !ieeeRes.html.includes('<div class="abstract"><h4>'), 'IEEE 摘要不用边框块');
+ok(JSON.stringify(ieeeRes.headings.map(h => h.num)) === '["I","II","A)","1)","III","IV"]', 'IEEE 章节编号 I / A) / 1): ' + JSON.stringify(ieeeRes.headings.map(h => h.num)));
+ok(ieeeRes.meta.authorBlocks.length === 3 && ieeeRes.meta.authorBlocks[0].affils.length === 1, '作者带按 \\and 拆成 3 块: ' + ieeeRes.meta.authorBlocks.length);
+ok(ieeeRes.html.includes('Eq.&nbsp;') || ieeeRes.html.includes('式'), '\\eqref 仍可用');
+const confRes = renderLatex('\\documentclass[conference]{IEEEtran}\\begin{document}\\author{\\IEEEauthorblockN{A}\\and\\IEEEauthorblockN{B}}\\maketitle\\section{Intro}Text\\end{document}');
+ok(confRes.html.includes('au-columns'), '会议模式作者分栏类名');
+const ieeeLower = renderLatex('\\documentclass[journal]{IEEEtran}\\begin{document}\\markboth{Left}{\\MakeLowercase{\\textit{Et Al.}} Author}\\maketitle\\section{A}x\\end{document}');
+ok(ieeeLower.html.includes('<em>et al.</em> Author'), '\\MakeLowercase 变小写但不破坏标签: ' + (ieeeLower.meta.heads || {}).right);
+const silentRes = renderLatex('\\documentclass[journal]{IEEEtran}\\begin{document}\\IEEEoverridecommandlockouts\\IEEEpubid{2026\\$ IEEE}\\IEEEpubidadjcol\\section{A}\\IEEEPARstart{O}{ne}\\end{document}');
+ok(silentRes.warnings.length === 0, 'IEEE 声明命令不产生「不支持的命令」警告: ' + silentRes.warnings.join(' | '));
+const unknownCls = renderLatex('\\documentclass[11pt]{acmsmart}\n\\begin{document}\\section{A}正文\\end{document}');
+ok(unknownCls.meta.layout.family === 'other' && unknownCls.meta.layout.basePt === 11, '未知文档类退化但不报错，字号选项仍生效');
+
+// ---------- 补齐的命令：\toprule 家族 / \appendix / \mbox / \dots / \verb ----------
+console.log('== 补齐命令 ==');
+const ruleRes = renderLatex(String.raw`\documentclass{article}\begin{document}
+\begin{tabularx}{\linewidth}{lXr}\toprule A & B & C \\ \midrule 1 & 2 & 3 \\ \bottomrule
+\end{tabularx}
+\begin{tabular}[t]{cc}\toprule H & I \\ \cmidrule(r){1-2} J & K \\ \bottomrule\end{tabular}
+\end{document}`);
+ok(ruleRes.warnings.length === 0, 'tabularx / [t] / \\cmidrule 零警告: ' + ruleRes.warnings.join(' | '));
+ok((ruleRes.html.match(/r-toprule/g) || []).length === 2, '两种表格都识别行首 \\toprule');
+ok((ruleRes.html.match(/r-bottomrule/g) || []).length === 2, '表尾 \\bottomrule 附加到最后一行');
+ok(/<tr class="[^"]*\bcl\b/.test(ruleRes.html), '\\cmidrule 归入 cl 横线类');
+ok(/<td class="ta-r"><p>C<\/p>/.test(ruleRes.html), 'tabularx 的 X 列不再挤掉后续列: ' + (ruleRes.html.match(/<tr class="r-toprule">.*?<\/tr>/s) || [''])[0]);
+const strayRes = renderLatex(String.raw`\documentclass{article}\begin{document}正文 \toprule 继续 \hline 结束 \cline{1-2}\end{document}`);
+ok(strayRes.warnings.length === 0 && !strayRes.html.includes('toprule'), '表格线命令落在正文里静默忽略: ' + strayRes.html);
+const apRes = renderLatex(String.raw`\documentclass{article}\begin{document}\section{Body}\label{s1}\appendix
+\section{Proof}\label{p1}\subsection{Case}\end{document}`);
+ok(apRes.warnings.length === 0, '\appendix 零警告: ' + apRes.warnings.join(' | '));
+ok(JSON.stringify(apRes.headings.map(h => h.num)) === '[1,"A","A.1"]', '附录章节改用字母编号: ' + JSON.stringify(apRes.headings.map(h => h.num)));
+const boxRes = renderLatex(String.raw`\documentclass{article}\begin{document}等式 \mbox{$a=b$} 不断行，诸如此类 \dots 与 \ldots 都省略。数学里 $\mbox{文字}+x$ 排正体。\end{document}`);
+ok(boxRes.warnings.length === 0, '\mbox / \dots 零警告: ' + boxRes.warnings.join(' | '));
+ok(boxRes.html.includes('<span class="mbox"><span class="katex">'), '\mbox 内容照常渲染（含数学）: ' + (boxRes.html.match(/<span class="mbox">[^<]*/) || [''])[0]);
+ok(!/class="math-error"/.test(boxRes.html) && !boxRes.html.includes('$\\mbox{文字}+x$'), '数学里的 \\mbox 按 \\text 渲染，不报公式错误');
+ok(boxRes.html.includes('\u2026') && !boxRes.html.includes('\\dots'), '\dots / \ldots 渲染为省略号');
+const verbRes = renderLatex(String.raw`\documentclass{article}\begin{document}\section{含 \verb|foo| 的标题}
+用 \verb|%|、\verb*{a  b} 与 \verb+\LaTeX+，表格里的 \verb|&| 不分列。
+\begin{tabular}{cc}\verb|&| & ok \\ \end{tabular}
+\end{document}`);
+ok(verbRes.warnings.length === 0, '\verb 零警告: ' + verbRes.warnings.join(' | '));
+ok(verbRes.html.includes('<code class="verb">%</code>'), '\verb 定界符内的 % 不当注释');
+ok(verbRes.html.includes('<code class="verb">a\u2423\u2423b</code>'), '\verb* 显示可见空格');
+ok(verbRes.html.includes('<code class="verb">\\LaTeX</code>'), '\verb 内容按字面显示，不展开命令');
+ok(/<td><p><code class="verb">&amp;<\/code><\/p><\/td><td><p>ok/.test(verbRes.html), '\verb|&| 不被当成列分隔符: ' + (verbRes.html.match(/<tr[^>]*>.*?<\/tr>/s) || [''])[0]);
+ok(verbRes.html.includes('<h2 id="h-0" class="sec1"><span class="secnum">1</span> 含 <code class="verb">foo</code> 的标题</h2>'), '标题内的 \verb 照常排版');
+
+// ---------- 第二批：\lstinline / \fbox / 引用与模板命令 / 表格环境 ----------
+console.log('== 补齐命令（第二批）==');
+const liRes = renderLatex(String.raw`\documentclass{article}\begin{document}
+用 \lstinline{fontspec} 与 \lstinline[language=C]|int x; // 注释| 两种写法。
+\end{document}`);
+ok(liRes.warnings.length === 0, '\lstinline 零警告: ' + liRes.warnings.join(' | '));
+ok(liRes.html.includes('<code class="verb">fontspec</code>') && liRes.html.includes('<code class="verb">int x; // 注释</code>'),
+  '\lstinline 带选项与花括号定界符都取字面: ' + (liRes.html.match(/<code class="verb">[^<]*<\/code>/g) || []).join(''));
+const fbRes = renderLatex(String.raw`\documentclass{article}\begin{document}\fbox{带框} 与 \hbox{连写} 和 \mbox{不换行}\end{document}`);
+ok(fbRes.warnings.length === 0 && fbRes.html.includes('<span class="fbox">带框</span>') && (fbRes.html.match(/class="mbox"/g) || []).length === 2,
+  '\fbox 加边框、\hbox 等同 \mbox: ' + fbRes.warnings.join(' | '));
+const refRes = renderLatex(String.raw`\documentclass{article}\begin{document}
+\begin{figure}\caption{图一}\label{f:1}\end{figure}
+\begin{table}\begin{tabular}{cc}a&b\end{tabular}\caption{表一}\label{t:1}\end{table}
+如\figref{f:1}、\tabref{t:1}与\autoref{t:1}所示。\begin{thebibliography}{9}\bibitem{k}文献\end{thebibliography}
+据~\cite{k}、\parencite{k}、\textcite{k}。
+\end{document}`);
+ok(refRes.warnings.length === 0, '\figref / \tabref / \parencite 零警告: ' + refRes.warnings.join(' | '));
+ok(refRes.html.includes('图&nbsp;1') && refRes.html.includes('表&nbsp;1'), '\figref/\tabref 带图/表前缀');
+ok((refRes.html.match(/class="cite">\[1\]/g) || []).length === 3, '三种引用命令都回填 [1]: ' + (refRes.html.match(/class="cite">[^<]*</g) || []).join(''));
+const tplRes = renderLatex(String.raw`\documentclass{ctexart}
+\title{标题}\author{张三\email{z@x.edu}\institute{某大学}}\keywords{图论, \LaTeX{}}
+\begin{document}\maketitle\begin{abstract}本文……。
+\end{abstract}用 \hologo{XeLaTeX} 编译，\version{0.1}\printbibliography[heading=bibintoc, title=\ebibname]
+\end{document}`);
+ok(tplRes.warnings.length === 0, '模板命令零警告: ' + tplRes.warnings.join(' | '));
+ok(/<div class="abstract">[\s\S]*关键词[：:][\s\S]*图论/.test(tplRes.html), '导言 \keywords 落在摘要内: ' + (tplRes.html.match(/关键词[^<]*[^]*/) || [''])[0].slice(0, 40));
+ok(tplRes.html.includes('mailto:z@x.edu'), '\email 渲染为邮件链接');
+ok(tplRes.html.includes('doc-institute') && (tplRes.html.match(/某大学/g) || []).length === 1, '\institute 在 \author 内时只显示一次');
+ok(tplRes.html.includes('XeLaTeX') && !tplRes.html.includes('\\version') && !tplRes.html.includes('bibintoc'),
+  '\hologo 出文字，\version/\printbibliography 参数不外泄');
+const kwBody = renderLatex(String.raw`\documentclass{article}\begin{document}正文\keywords{甲, 乙}后文\end{document}`);
+ok(kwBody.warnings.length === 0 && /<div class="doc-keywords">/.test(kwBody.html), '正文里的 \keywords 就地成块');
+const wideRes = renderLatex(String.raw`\documentclass{article}\begin{document}
+\begin{tabular*}{\textwidth}{ccc}\toprule A & B & C \\ \midrule 1 & 2 & 3 \\ \bottomrule\end{tabular*}
+\end{document}`);
+ok(wideRes.warnings.length === 0 && wideRes.html.includes('<table class="tabular" style="width:100%">') && wideRes.html.includes('r-toprule'),
+  'tabular* 按列格式排版并占满宽度: ' + wideRes.warnings.join(' | '));
+const ltRes = renderLatex(String.raw`\documentclass{article}\begin{document}
+\begin{longtable}{cc}\caption{长表}\label{lt}\toprule 头 & 目 \\ \midrule \endfirsthead
+\toprule 续 & 头 \\ \endhead
+\midrule \endfoot
+\bottomrule \endlastfoot
+1 & 2 \\ 3 & 4 \\ 5 & 6 \\
+\end{longtable}
+跨页表见 \tabref{lt}。
+\end{document}`);
+ok(ltRes.warnings.length === 0, 'longtable 零警告: ' + ltRes.warnings.join(' | '));
+ok((ltRes.html.match(/<tr/g) || []).length === 4, '首份表头 + 3 行表体（重复表头与表脚只留一份）: ' + (ltRes.html.match(/<tr[^>]*>/g) || []).join(''));
+ok(ltRes.html.includes('表&nbsp;1：长表') && ltRes.html.includes('见 1') || ltRes.html.includes('表&nbsp;1'), 'longtable 题注按表编号');
+const apEnvRes = renderLatex(String.raw`\documentclass{article}\begin{document}\section{正文}\begin{appendix}\section{附录}\end{appendix}\end{document}`);
+ok(apEnvRes.warnings.length === 0 && JSON.stringify(apEnvRes.headings.map(h => h.num)) === '[1,"A"]',
+  '\begin{appendix} 环境同样切换字母编号: ' + JSON.stringify(apEnvRes.headings.map(h => h.num)));
+const verbEnvRes = renderLatex('\\documentclass{article}\\begin{document}\n\\begin{verbatim}\nx = 1  % 行内注释保留\n\\end{verbatim}\n\\begin{lstlisting}[language=C]\nchar c = 0x25; // % 也保留\n\\end{lstlisting}\n\\end{document}');
+ok(verbEnvRes.warnings.length === 0 && verbEnvRes.html.includes('% 行内注释保留') && verbEnvRes.html.includes('// % 也保留'),
+  '逐字环境内的 % 不再被当注释抹掉: ' + verbEnvRes.html.replace(/<[^>]*>/g, '').trim());
+const fixtureRes = renderLatex(readFileSync(new URL('../test/fixtures/elegantpaper-demo.tex', import.meta.url), 'utf8'));
+ok(fixtureRes.warnings.length === 0, 'elegantpaper 示例零警告: ' + fixtureRes.warnings.slice(0, 5).join(' | '));
+
+// ---------- 换行的可选间距 \\[<dim>] ----------
+console.log('== 换行间距 \\\\ [<dim>] ==');
+const brkTitle = renderLatex(String.raw`\documentclass{ctexart}\begin{document}\title{\textbf{甲}\\[0.5cm]\large 乙\\[-3pt]丙}\maketitle\end{document}`).html;
+ok(!brkTitle.includes('[0.5cm]') && !brkTitle.includes('[-3pt]'), '换行后的长度参数不再当正文显示: ' + brkTitle);
+ok(/margin-top:18\.9px/.test(brkTitle) && /margin-top:-3\.99px/.test(brkTitle), '0.5cm→18.9px、-3pt→-3.99px 间距: ' + brkTitle);
+const brkKeep = renderLatex(String.raw`\documentclass{ctexart}\begin{document}\title{甲 \\[见注] 乙}\maketitle\end{document}`).html;
+ok(brkKeep.includes('[见注]'), '非长度参数不吞掉，保留原文: ' + brkKeep);
+const brkRow = renderLatex(String.raw`\documentclass{ctexart}\begin{document}\begin{tabular}{cc}A & B \\[6pt] C & D\end{tabular}\end{document}`).html;
+ok(/<tr[^>]*style="--rg:7\.98px"/.test(brkRow) && !brkRow.includes('[6pt]'), '表格行距落到下一行且不留字面量: ' + brkRow);
+const brkOffset = renderLatex(String.raw`\documentclass{ctexart}\begin{document}\begin{tabular}{cc}A & B \\[6pt] C & D\end{tabular}\end{document}`);
+ok(brkOffset.warnings.length === 0, '带间距的表格不产生渲染警告: ' + brkOffset.warnings.join(' | '));
+
+// ---------- 排版语法的静态检测 ----------
+console.log('== 排版语法检测 ==');
+const dupCls = lintLaTeX('\\documentclass{IEEEtran}\n\\begin{document}\n\\documentclass[conference]{IEEEtran}\n\\end{document}');
+ok(dupCls.some(d => d.kind === 'class' && d.line === 2 && d.severity === 'error'), '重复 \\documentclass 定位到第 3 行: ' + JSON.stringify(dupCls.filter(d => d.kind === 'class')));
+const conflict = lintLaTeX('\\documentclass[onecolumn,twocolumn]{IEEEtran}\n\\begin{document}x\\end{document}');
+ok(conflict.some(d => d.kind === 'class' && d.line === 0 && d.severity === 'warn'), '互斥选项给出行级警告');
+ok(lintLaTeX('\\documentclass[journal]{IEEEtran}\n\\begin{document}x\\end{document}').filter(d => d.kind === 'class').length === 0, '合法选项不警告');
+ok(lintLaTeX(samples.ieee).filter(d => d.kind === 'class').length === 0, 'IEEE 示例无文档类诊断');
+setLang('en');
+ok(lintLaTeX('\\documentclass[twocolumn,onecolumn]{IEEEtran}').some(d => d.kind === 'class' && /mutually exclusive/.test(d.msg)), '英文选项冲突文案');
+setLang('zh');
+
 // ---------- 主题皮肤 ----------
 console.log('== 主题皮肤 ==');
 const readSrc = f => readFileSync(new URL('../src/' + f, import.meta.url), 'utf8');
