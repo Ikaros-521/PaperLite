@@ -520,6 +520,11 @@ export default function App() {
         e.preventDefault();
         reqFind(e.shiftKey ? 'replace' : 'find');
       }
+      // VSCode 习惯的 Ctrl+H：浏览器把它留给了「历史记录」，抢得到就生效，抢不到仍可用 Ctrl+Shift+F
+      if (mod && !e.altKey && (e.key === 'h' || e.key === 'H')) {
+        e.preventDefault();
+        reqFind('replace');
+      }
       const editorFocused = e.target.closest?.('.CodeMirror');
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tB', null, { markdown: isMd }); }
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'i' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tI', null, { markdown: isMd }); }
@@ -1086,7 +1091,7 @@ export default function App() {
                   {[['Ctrl+S', t('help.k1')],
                     ['Ctrl+Alt+N', t('help.k6')],
                     ['Ctrl+F', t('help.k10')],
-                    ['Ctrl+Shift+F', t('help.k11')],
+                    ['Ctrl+H / Ctrl+Shift+F', t('help.k11')],
                     ['Enter / Shift+Enter', t('help.k12')],
                     ['Alt+Enter / Esc', t('help.k13')],
                     ['Ctrl+Enter', t('help.k7')],
