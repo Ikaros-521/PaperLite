@@ -8,6 +8,10 @@
    作用域 .pl-mobile 由 App Shell 挂在根容器上，桌面界面不受污染。
    ========================================================================== */
 
+/* Token 映射挂在 body 上，不只挂在 .pl-mobile 上：
+   Popup / Dialog / ActionSheet / Toast 默认 portal 到 document.body，落在 .pl-mobile 子树之外，
+   只写容器的话这些浮层会退回 antd 自带的纯白底 + #333 字 + 默认蓝（六套皮肤全部失效）。 */
+body,
 .pl-mobile {
   --adm-color-primary: var(--accent);
   --adm-color-success: var(--ok);
@@ -20,9 +24,18 @@
   --adm-color-border: var(--line);
   --adm-color-box: var(--chrome);
   --adm-color-background: var(--paper);
+  /* Selector 未选项、SearchBar 输入底与进度条轨道都读 fill-content，
+     勾选项读 wathet；这两个不映射的话深色皮肤下会是浅底配浅色字。 */
+  --adm-color-fill-content: var(--hover);
+  --adm-color-wathet: var(--bubble-user);
+  /* 深色皮肤的 --accent 是亮蓝，antd 给实心按钮/勾选/徽标写死白字只有 2.5:1；
+     桌面 .btn.primary 用的是 --on-accent，这里同一口径。 */
+  --adm-color-text-light-solid: var(--on-accent);
   --adm-font-family: inherit;
   --adm-tag-border-radius: 4px;
+}
 
+.pl-mobile {
   color: var(--ink);
   background: var(--desk);
   font-size: 14px;
@@ -113,6 +126,35 @@
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line-soft);
   background: var(--chrome);
+}
+
+/* ---------- 编译进行中：遮罩上必须放不透明卡片 ----------
+   .adm-mask-content 是 static + auto 高度，所以面板上的 height:100% 不生效，
+   内容会贴在屏幕顶部压住导航栏与文件名（390×844 实测只有 146px 高）；
+   又因为没有底色，浅色皮肤下 --ink 直接压在 55% 黑遮罩上，和透出来的稿子重影。 */
+.pl-compile-mask .adm-mask-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.pl-compile-card {
+  width: min(340px, 100%);
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 18px 48px rgba(var(--shadow-rgb), .35);
+}
+
+.pl-compile-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ---------- FAB：antd-mobile 无 FloatButton，自实现；触控 56px ---------- */
@@ -213,6 +255,20 @@
 
 .adm-nav-bar-right .adm-button {
   min-width: 44px;
+}
+
+/* NoticeBar 的 info / alert 变体把底色写死成浅蓝 #d0e4ff 与浅橙 #fff9ed，
+   深色皮肤下就是一块亮斑；换成皮肤自带的高亮底（badge-bg / flash）与对应强调字色。 */
+.adm-notice-bar.adm-notice-bar-info {
+  --background-color: var(--badge-bg);
+  --border-color: var(--line-soft);
+  --text-color: var(--accent);
+}
+
+.adm-notice-bar.adm-notice-bar-alert {
+  --background-color: var(--flash);
+  --border-color: var(--line-soft);
+  --text-color: var(--warn);
 }
 
 /* ---------- 顶栏标题与保存态 ---------- */

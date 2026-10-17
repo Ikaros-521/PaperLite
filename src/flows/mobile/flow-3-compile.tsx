@@ -190,18 +190,9 @@ function Screen2_Compiling({
   const t = useT()
 
   return (
-    <Mask visible disableBodyScroll>
-      <div
-        style={{
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          padding: '0 28px',
-          color: 'var(--ink)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <Mask visible opacity="thick" disableBodyScroll className="pl-compile-mask">
+      <div className="pl-compile-card">
+        <div className="pl-compile-top">
           <SpinLoading color="primary" />
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600 }}>{t('mb.cp.runningTitle')}</div>
