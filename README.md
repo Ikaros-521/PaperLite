@@ -204,7 +204,9 @@ Pages 是纯静态托管，`fetch('/api/health')` 会 404，应用据此把引�
 
 ## 支持的 LaTeX 子集
 
-结构：`\documentclass`(ctexart/article/twocolumn)、`\title \author \date \maketitle`、`abstract`、`section` 系列（自动编号、`*` 不编号）、`tableofcontents`、`\newpage`
+结构：`\documentclass[选项]{类}`（排版语法：`twocolumn`/`onecolumn`、`8pt…20pt`、`a4paper`/`letterpaper` 等选项驱动预览的双栏、字号与纸宽；ctexart/article/report 与 `IEEEtran` 的 journal/conference/technote 模式已建模）、`\title \author \date \maketitle`、`abstract`、`section` 系列（自动编号、`*` 不编号）、`tableofcontents`、`\newpage`
+
+期刊排版：`\documentclass[journal]{IEEEtran}` 在预览里就是 IEEE 杂志版式——跨栏标题带 + 双栏正文、`\markboth` 期刊页眉、`\authorblockN`/`\authorblockA`/`\and`/`\IEEEauthorrefmark`/`\thanks` 作者带、`\IEEEPARstart` 首字下沉与首词小型大写、`IEEEkeywords` 索引术语、`IEEEbiography`/`IEEEbiographynophoto` 作者简介、`IEEEeqnarray`/`IEEEproof`；章节编号按 IEEE 用 I / A) / 1)。内置 XeLaTeX 已收录 `IEEEtran.cls`（V1.8b）与 `cite.sty`，同一篇文档在 GitHub Pages 纯静态托管下也能编译成真 PDF。
 
 文本：`\textbf \emph \underline \texttt \footnote \cite \ref \eqref \autoref \label \url \href`、列表、`quote/center`、`verbatim/lstlisting`、`~ --- ``...'' \% \& \# \_`、换行 `\\` 及其间距参数 `\\[0.5cm]`（表格行 `\\[6pt]` 同样生效）
 

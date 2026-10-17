@@ -49,6 +49,8 @@ export const DOC_ZH = {
   'mb.doc.tplFlowNote': 'TikZ 决策框 + Mermaid 块',
   'mb.doc.tplBlankName': '空白文档',
   'mb.doc.tplBlankNote': '仅导言区',
+  'mb.doc.tplIeeeName': 'IEEE 杂志示例',
+  'mb.doc.tplIeeeNote': 'IEEEtran[journal] 双栏排版',
 };
 
 export const DOC_EN = {
@@ -101,4 +103,6 @@ export const DOC_EN = {
   'mb.doc.tplFlowNote': 'TikZ decision boxes + Mermaid blocks',
   'mb.doc.tplBlankName': 'Blank document',
   'mb.doc.tplBlankNote': 'Preamble only',
+  'mb.doc.tplIeeeName': 'IEEE journal sample',
+  'mb.doc.tplIeeeNote': 'IEEEtran[journal], two-column layout',
 };

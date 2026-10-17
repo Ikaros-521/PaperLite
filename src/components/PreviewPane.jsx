@@ -270,6 +270,11 @@ export default function PreviewPane({
 
   const statusKey = { loading: 'app.engineLoading', warming: 'app.engineWarming', error: 'app.engineError' }[builtinStatus];
   const builtinLabel = t('app.builtinEngine') + (statusKey ? ' · ' + t(statusKey) : '');
+  // 排版语法解析结果（\documentclass[options]{class}）：类名 + 模式 + 栏数
+  const layout = result.meta.layout || {};
+  const layoutChip = layout.cls
+    ? layout.cls + (layout.mode ? ' · ' + layout.mode : '') + ' · ' + t(layout.columns === 2 ? 'prev.cols2' : 'prev.cols1')
+    : '';
   // 网页预览是子集近似：不点明，用户会拿它当最终排版（差异只写在 README 里没人看）
 
   return (
@@ -277,6 +282,7 @@ export default function PreviewPane({
       <div id="previewBar">
         <span className="pb-title">{t('prev.title')}</span>
         {result.isMd && <span className="pb-chip">Markdown</span>}
+        {layoutChip && <span className="pb-chip" title={t('prev.layoutTip')}>{layoutChip}</span>}
         <label className="pb-toggle" title={t('prev.syncTip')}>
           <input type="checkbox" checked={syncScroll} onChange={e => onSyncToggle(e.target.checked)} /> {t('prev.sync')}
         </label>
@@ -309,8 +315,8 @@ export default function PreviewPane({
           <div
             id="paper"
             ref={paperRef}
-            className={'paper' + (result.isMd ? ' md-view' : '') + (result.meta.twocolumn ? ' twocolumn' : '') + (result.meta.ctex ? ' ctex' : '')}
-            style={{ zoom }}
+            className={'paper' + (result.isMd ? ' md-view' : '') + (layout.classes ? ' ' + layout.classes : (result.meta.twocolumn ? ' twocolumn' : '') + (result.meta.ctex ? ' ctex' : ''))}
+            style={{ zoom, ...layout.vars }}
             dangerouslySetInnerHTML={{ __html: result.html }}
           />
         </div>

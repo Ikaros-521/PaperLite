@@ -25,7 +25,8 @@ xurl infwarerr siunitx physics cancel jknapltx rsfs stmaryrd wasysym wasy wasy-t
 upquote xunicode xltxtra tipa kvoptions etex-pkg everysel everyshi filehook
 hopatch ifoddpage lineno multido newfloat bigfoot ragged2e realscripts svn-prov
 translations translator varwidth zref algorithms algorithmicx ntheorem unicode-math lm-math latex-fonts cm
-abstract hologo appendix biblatex bibtex tex-gyre babel babel-english hyphen-base svg pdfpages pdflscape koma-script transparent'''.split()
+abstract hologo appendix biblatex bibtex tex-gyre babel babel-english hyphen-base svg pdfpages pdflscape koma-script transparent
+ieeetran cite'''.split()
 # These bundles support other engines too. Import their XeTeX runtime files,
 # without pulling platform binaries or the entire pTeX/LuaTeX font ecosystem.
 BUNDLES = ['latex', 'ctex', 'xecjk', 'fontspec', 'l3kernel', 'l3packages', 'lm']

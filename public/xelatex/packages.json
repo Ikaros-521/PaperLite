@@ -154,6 +154,13 @@
     "sha256": "b57d82165cd7d1de554f6fa0579f54c0e0be86ee5623f05406a74c345ebc436c"
   },
   {
+    "name": "cite",
+    "revision": "36428",
+    "license": "other-free",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/cite.tar.xz",
+    "sha256": "d5502343225d720d617e00fd7a533085bfb2a3564b25a8ccfdb3a4eaccdbf09f"
+  },
+  {
     "name": "cleveref",
     "revision": "61719",
     "license": "lppl1.2",
@@ -411,6 +418,13 @@
     "license": "see package headers",
     "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/hyphen-base.tar.xz",
     "sha256": "65490a2b32ab125772671016c88aa39f710b2357d84dd8dd1a7623daa24bdf5a"
+  },
+  {
+    "name": "ieeetran",
+    "revision": "59672",
+    "license": "lppl1.3",
+    "archive": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2022/tlnet-final/archive/ieeetran.tar.xz",
+    "sha256": "04b2045aa69f52ce4cee3fae8657e6666d48bbf74c0792a7f776717c75cdc97b"
   },
   {
     "name": "ifoddpage",

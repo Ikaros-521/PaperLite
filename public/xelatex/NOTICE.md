@@ -104,6 +104,16 @@ TeX Gyre 字体、abstract、hologo、appendix、biblatex 及依赖一并收录�
 这份文档没有有效引用键及配套 `.bib` 文件，能生成 PDF，但不会生成参考文献条目；
 需要完整 biblatex/biber 文献处理时，仍须使用提供 Biber 的编译环境。
 
+`repo/xetex/26/IEEEtran.cls`（V1.8b，2015-08-26）与 `IEEEtrantools.sty`、
+`cite.sty` 取自 TL2022 冻结存档的 `archive/ieeetran.tar.xz`、`archive/cite.tar.xz`，
+类文件未修改，来源、revision 与 SHA-256 记录于 `packages.json`
+（ieeetran 为 LPPL 1.3，cite 目录许可标记为 other-free，其宏包本体允许在 LPPL
+条件下分发）。收录后 `\documentclass[journal]{IEEEtran}` 与
+`\documentclass[conference]{IEEEtran}` 可直接在浏览器内编译成双栏 PDF，
+内置 IEEE 模板即走这条路径；双栏的分栏与 `\balance` 结尾对齐以编译结果为准。
+BibTeX 样式 `IEEEtran.bst` 等一并收录，但本引擎不含 bibtex/biber 可执行文件，
+需要真实文献处理时仍须使用提供它们的编译环境。
+
 也可用同一测试管线编译本地文件，第二个参数可选，用于保存生成的 PDF：
 
 ```sh

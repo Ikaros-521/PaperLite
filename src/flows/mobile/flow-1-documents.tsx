@@ -80,6 +80,7 @@ const TEMPLATES = [
   { id: 'demo', nameKey: 'mb.doc.tplDemoName', noteKey: 'mb.doc.tplDemoNote', text: samples.demo },
   { id: 'flow', nameKey: 'mb.doc.tplFlowName', noteKey: 'mb.doc.tplFlowNote', text: samples.flow },
   { id: 'blank', nameKey: 'mb.doc.tplBlankName', noteKey: 'mb.doc.tplBlankNote', text: samples.blank },
+  { id: 'ieee', nameKey: 'mb.doc.tplIeeeName', noteKey: 'mb.doc.tplIeeeNote', text: samples.ieee },
 ]
 
 /**

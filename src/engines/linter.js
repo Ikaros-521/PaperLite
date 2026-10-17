@@ -3,6 +3,7 @@
  * 文案经 i18n 模块级 t() 输出（App 渲染时同步当前语言；Node 测试默认中文）。
  */
 import { t } from '../i18n.js';
+import { resolveLayout } from './classLayout.js';
 
 export function lintLaTeX(src) {
   const out = [];
@@ -123,6 +124,19 @@ export function lintLaTeX(src) {
       const line = lineAt(m.index);
       out.push({ line, msg: t('lint.itemOutside'), severity: 'warn', kind: 'item' });
     }
+  }
+
+  // 6) 文档类与排版选项：\documentclass 只能有一个，互斥选项要指出
+  const clsRe = /\\documentclass\s*(?:\[[^\]]*\])?\s*\{[^{}]*\}/g;
+  const clsHits = [];
+  while ((m = clsRe.exec(clean))) clsHits.push(m);
+  clsHits.slice(1).forEach(cm => out.push({ line: lineAt(cm.index), msg: t('lint.dupDocumentclass'), severity: 'error', kind: 'class' }));
+  if (clsHits.length) {
+    const cm = clsHits[0];
+    const om = cm[0].match(/\[([^\]]*)\]/);
+    const options = (om ? om[1] : '').split(',').map(s => s.trim()).filter(Boolean);
+    const lay = resolveLayout((cm[0].match(/\{([^{}]*)\}/) || [, ''])[1].trim(), options);
+    lay.conflicts.forEach(c => out.push({ line: lineAt(cm.index), msg: t('lint.classOptionConflict', { a: c.a, b: c.b }), severity: 'warn', kind: 'class' }));
   }
 
   // 去重 & 排序（按行）

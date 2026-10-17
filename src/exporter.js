@@ -34,10 +34,15 @@ export function exportPDF(contentHtml, meta) {
   const w = window.open('', '_blank');
   if (!w) { alert(t('exp.popupBlocked')); return; }
   const title = meta && meta.title ? meta.title.replace(/<[^>]*>/g, '') : t('exp.docTitle');
+  // 排版语法（\documentclass[选项]{类}）解析出的类名与变量要一起带进打印窗口，
+  // 否则预览看到的双栏/字号在导出 PDF 里全丢
+  const layout = (meta && meta.layout) || {};
+  const paperCls = 'paper' + (layout.classes ? ' ' + layout.classes : (meta && meta.twocolumn ? ' twocolumn' : ''));
+  const paperVars = Object.keys(layout.vars || {}).map(k => k + ':' + layout.vars[k]).join(';');
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
     collectStyleTags() +
     '<style>' + PRINT_CSS + '</style></head><body class="print-body">' +
-    '<div class="paper">' + contentHtml + '</div></body></html>';
+    '<div class="' + esc(paperCls) + '"' + (paperVars ? ' style="' + esc(paperVars) + '"' : '') + '>' + contentHtml + '</div></body></html>';
   w.document.open(); w.document.write(html); w.document.close();
   let tries = 0;
   (function goPrint() {
@@ -105,7 +110,29 @@ export const PRINT_CSS = [
   '@page { size: A4; margin: 2.2cm 2.2cm 2.4cm; }',
   'html, body { margin: 0; padding: 0; }',
   'body { font-family: "Noto Serif SC","Source Han Serif SC","Times New Roman",Georgia,"SimSun",serif; color: #111; font-size: 12pt; line-height: 1.65; }',
-  '.paper { max-width: 100%; margin: 0 auto; }',
+  '.paper { max-width: 100%; margin: 0 auto; --doc-scale: 1; --doc-col-gap: 1.5em; font-size: calc(12pt * var(--doc-scale)); }',
+  // 排版语法：双栏与 IEEEtran 版式（与 app.css 的预览规则同一套类名）
+  '.paper.twocolumn, .paper .doc-cols { column-count: 2; column-gap: var(--doc-col-gap); text-indent: 0; }',
+  '.paper .doc-cols figure.float, .paper .doc-cols table.tabular, .paper .doc-cols .equation, .paper .doc-cols .ieee-bio { break-inside: avoid-column; }',
+  '.paper .doc-cols h2.sec1, .paper .doc-cols h3.sec2, .paper .doc-cols h4.sec3 { break-after: avoid; }',
+  '.cls-ieee .doc-heads { display: flex; justify-content: space-between; font-size: 8.5pt; text-transform: uppercase; border-bottom: 0.5pt solid #999; padding-bottom: .3em; margin-bottom: 1em; }',
+  '.cls-ieee h1.doc-title { font-size: 1.4em; text-align: center; }',
+  '.cls-ieee .au-row { text-align: center; } .cls-ieee .au-affil { font-size: .86em; color: #333; white-space: pre-line; }',
+  '.cls-ieee .au-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(150pt, 1fr)); gap: .5em 1.2em; }',
+  '.cls-ieee .au-thanks { font-size: 8pt; font-style: italic; text-align: center; margin: .6em 0 1em; }',
+  '.cls-ieee .ieee-abstract, .cls-ieee .ieee-keywords { max-width: 92%; margin: .7em auto; font-size: 10pt; border: 0; background: none; padding: 0; }',
+  '.cls-ieee h2.sec1 .secnum::after { content: "."; }',
+  '.cls-ieee .ieee-abstract p, .cls-ieee .ieee-keywords p { display: inline; text-indent: 0; margin: 0; }',
+  '.cls-ieee .abs-label, .cls-ieee .kw-label { font-weight: 700; font-style: italic; }',
+  '.cls-ieee h2.sec1 { font-size: 1em; text-transform: uppercase; text-align: center; letter-spacing: .03em; }',
+  '.cls-ieee h3.sec2 { font-style: italic; text-align: center; font-size: 1em; }',
+  '.cls-ieee .ieeepar-c { float: left; font-size: 2.75em; line-height: .78; font-weight: 700; padding-right: .08em; }',
+  '.cls-ieee .ieeepar-w { font-variant: small-caps; }',
+  '.cls-ieee figure.ieee-bio { break-inside: avoid; }',
+  '.cls-ieee figure.ieee-bio .bio-photo { float: left; width: 68pt; margin: 0 10pt 6pt 0; }',
+  '.cls-ieee figure.ieee-bio .bio-name { font-weight: 700; font-variant: small-caps; }',
+  '.cls-ieee figure.ieee-bio .bio-text { font-size: 10pt; }',
+  '.cls-ieee .qed { float: right; }',
   'p { margin: .5em 0; text-indent: 2em; }',
   'h1.doc-title { font-size: 17pt; text-align: center; margin: .3em 0 .8em; }',
   '.doc-author { text-align: center; } .doc-date { text-align: center; color: #444; margin-bottom: 1.4em; }',

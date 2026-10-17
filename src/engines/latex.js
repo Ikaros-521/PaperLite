@@ -361,7 +361,6 @@ function parsePreamble(pre, ctx, fullSrc) {
   var dcls = readDocumentclass(pre);
   var layout = dcls ? resolveLayout(dcls.cls, dcls.options) : FALLBACK;
   ctx.meta.layout = layout;
-  ctx.meta.cls = layout.cls;
   ctx.meta.ctex = layout.family === 'ctex';
   ctx.meta.twocolumn = layout.columns === 2;
   if (layout.family === 'ieee') {

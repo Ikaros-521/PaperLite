@@ -638,8 +638,14 @@ body,
 .pl-mobile #paper {
   max-width: 100%;
   padding: 22px 16px;
-  /* 近似排版与纸面预览同一档字号，切档时不会出现「预览变大了正文没变」 */
-  font-size: var(--pl-font, 15px);
+  /* 近似排版与纸面预览同一档字号，切档时不会出现「预览变大了正文没变」；再按 \documentclass 的字号选项缩放 */
+  font-size: calc(var(--pl-font, 15px) * var(--doc-scale, 1));
+}
+
+/* 窄屏不拆双栏：390px 下每栏不足 160px，行首行尾挤成竖条；双栏留给真编译 */
+.pl-mobile #paper.twocolumn,
+.pl-mobile .paper .doc-cols {
+  column-count: 1;
 }
 
 /* 编辑区跟阅读区同档；桌面仍是 app.css 的 14px，不受影响 */
