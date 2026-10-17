@@ -206,7 +206,7 @@ Pages 是纯静态托管，`fetch('/api/health')` 会 404，应用据此把引�
 
 结构：`\documentclass`(ctexart/article/twocolumn)、`\title \author \date \maketitle`、`abstract`、`section` 系列（自动编号、`*` 不编号）、`tableofcontents`、`\newpage`
 
-文本：`\textbf \emph \underline \texttt \footnote \cite \ref \eqref \autoref \label \url \href`、列表、`quote/center`、`verbatim/lstlisting`、`~ --- ``...'' \% \& \# \_`
+文本：`\textbf \emph \underline \texttt \footnote \cite \ref \eqref \autoref \label \url \href`、列表、`quote/center`、`verbatim/lstlisting`、`~ --- ``...'' \% \& \# \_`、换行 `\\` 及其间距参数 `\\[0.5cm]`（表格行 `\\[6pt]` 同样生效）
 
 浮动体：`figure/figure*/table/table*` + `\includegraphics`（`width=0.8\textwidth` 与 base64）、`\caption` 自动编号、三线表
 
