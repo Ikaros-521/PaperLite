@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listDir, removeEntry, renameEntry, canRename, createFile, createDirectory } from '../fs.js';
+import { validName } from '../fileActions.js';
 import { infoFor } from '../fileTypes.js';
 import { useLang, useT } from '../useI18n.js';
 import { showAlert as alert, showConfirm, showPrompt } from '../dialogs.js';
@@ -93,6 +94,7 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
     if (!dir) return;
     const name = await showPrompt(t('ft.newFilePrompt'));
     if (!name) return;
+    if (!validName(name)) { alert(t('app.badFileName')); return; }
     try {
       await createFile(dir, name);
       refresh(dirPath);
@@ -106,6 +108,7 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
     if (!dir) return;
     const name = await showPrompt(t('ft.newDirPrompt'));
     if (!name) return;
+    if (!validName(name)) { alert(t('app.badFileName')); return; }
     try { await createDirectory(dir, name); refresh(dirPath); }
     catch (e) { alert(t('ft.createFailed', { msg: e.message || e })); }
   };
@@ -113,6 +116,7 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
   const doRename = async (entry) => {
     const name = await showPrompt(t('ft.renamePrompt'), entry.name);
     if (!name || name === entry.name) return;
+    if (!validName(name)) { alert(t('app.badFileName')); return; }
     try {
       await renameEntry(entry.handle, name);
       const parent = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : '';

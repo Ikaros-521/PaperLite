@@ -114,3 +114,11 @@ export function clearHistory(key) {
   if (key !== undefined) delete all[key];
   return persistHistory(key === undefined ? {} : all);
 }
+
+// 跨标签页：另一窗口写入历史时本页缓存立即失效。否则两个窗口各自持有旧快照，
+// 后写的一方会用 read-modify-write 整体覆盖、静默抹掉对方刚记的版本
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', e => {
+    if (!e.key || e.key === HISTORY_KEY) { cachedRaw = undefined; cachedStore = undefined; }
+  });
+}

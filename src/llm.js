@@ -84,7 +84,10 @@ export function loadChannels() {
   } catch (e) { return []; }
 }
 export function saveChannels(list) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+  // 配额满/隐私模式下保存会抛：静默吞掉等于让用户改的渠道与 API Key 无声丢失，
+  // 至少留一条 console 证据供排查（UI 侧无独立保存按钮可挂提示）
+  try { localStorage.setItem(LS_KEY, JSON.stringify(list)); }
+  catch (e) { console.warn('[paperlite] 渠道配置保存失败（localStorage 不可用或已满）：', e); }
 }
 export function newChannel() {
   return {

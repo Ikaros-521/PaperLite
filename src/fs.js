@@ -83,8 +83,17 @@ function idb() {
     req.onerror = () => reject(req.error);
   });
 }
+// 连接复用：每次调用都 open 且从不 close，频繁切换目录会累积打开的 IDB 连接
+// （Safari/旧内核有并发 open 上限，超了会 onerror → 根句柄「存不上」）
+let dbPromise = null;
+function idbOnce() {
+  if (!dbPromise) {
+    dbPromise = idb().catch(e => { dbPromise = null; throw e; });
+  }
+  return dbPromise;
+}
 async function tx(mode, fn) {
-  const db = await idb();
+  const db = await idbOnce();
   return new Promise((resolve, reject) => {
     const t = db.transaction(STORE, mode);
     const req = fn(t.objectStore(STORE));

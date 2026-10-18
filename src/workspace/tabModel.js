@@ -80,12 +80,15 @@ export function persistDrafts(tabs) {
   localStorage.setItem(LS_DRAFTS, JSON.stringify(draftsOf(tabs)));
 }
 
-/** 落盘成功后推进 saved；只动 saved 不动 dirty —— ● 仍表示「没落到磁盘文件」，关标签照旧要确认 */
-export function markDraftsStored(tabs) {
+/** 落盘成功后推进 saved；只动 saved 不动 dirty —— ● 仍表示「没落到磁盘文件」，关标签照旧要确认。
+ *  persisted（draftId → 已落盘文本）由调用方在写入 localStorage 的那一刻捕获：
+ *  更新器在渲染期才执行，那时重读 doc 可能拿到更新的内容，制造一个
+ *  beforeunload 不设防的丢稿窗口。 */
+export function markDraftsStored(tabs, persisted) {
   let changed = false;
   const next = tabs.map(x => {
     if (x.kind !== 'draft' || !x.doc) return x;
-    const value = x.doc.getValue();
+    const value = persisted && persisted.has(x.draftId) ? persisted.get(x.draftId) : x.doc.getValue();
     if (x.saved === value && x.browserStored && !x.saveError) return x;
     changed = true;
     // 时间戳随内容推进；落盘读的是上一轮数组，最多滞后一个防抖周期（<1s），列表展示可接受

@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { listDir } from '../src/fs.js';
 import { extOf, infoFor, isTextEditable } from '../src/fileTypes.js';
 import { showAlert, showConfirm, showPrompt, currentDialog, finishDialog, subscribeDialogs } from '../src/dialogs.js';
+import { validName } from '../src/fileActions.js';
 
 // Execute the component's hooks and handlers against an in-memory filesystem.
 const source = readFileSync(new URL('../src/components/FileTree.jsx', import.meta.url), 'utf8');
@@ -32,6 +33,7 @@ const FileTree = vm.runInNewContext(component, {
     });
   },
   useT: () => translate, useLang: () => 'zh',
+  validName,
   listDir: async handle => { reads.push(handle.name); return listDir(handle); },
   createFile: (dir, name) => dir.getFileHandle(name, { create: true }),
   createDirectory: (dir, name) => dir.getDirectoryHandle(name, { create: true }),

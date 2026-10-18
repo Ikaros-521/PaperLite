@@ -61,9 +61,13 @@ export function useWorkspace(ui) {
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
-        persistDrafts(tabsRef.current);
+        const snap = tabsRef.current;
+        persistDrafts(snap);
         draftsWarnedRef.current = false;
-        setTabs(markDraftsStored);
+        // 在写入的那一刻捕获各草稿的已落盘内容：渲染期执行 markDraftsStored 时
+        // 重读 doc 会拿到更新的值，saved 被超前推进后 beforeunload 就不再设防
+        const persisted = new Map(snap.filter(x => x.kind === 'draft' && x.doc).map(x => [x.draftId, x.doc.getValue()]));
+        setTabs(ts => markDraftsStored(ts, persisted));
       } catch (e) {
         setTabs(ts => ts.map(x => x.kind === 'draft' ? { ...x, saveError: tr(getLang(), 'app.draftSaveFailed') } : x));
         if (!draftsWarnedRef.current) {
@@ -84,10 +88,19 @@ export function useWorkspace(ui) {
   }, [tabs]);
 
   // ---- 版本历史快照 ----
+  // 失败只在历史对话框页脚常驻；超限文档（>1M 字符）每次快照都失败，对话框外
+  // 也要 flash 一次，否则用户以为历史一直在积累。恢复成功后允许再次提醒。
+  const histWarnedRef = useRef(false);
   const noteHistory = useCallback(result => {
     setHistoryError(result.ok ? '' : tr(getLang(), 'hist.storageError'));
     // 超上限淘汰旧版本是静默的（README 记为有意取舍），但用户必须看得见被清了几条
     if (result.ok && result.dropped) flashRef.current(tr(getLang(), 'hist.dropped', { n: result.dropped }));
+    if (!result.ok && !histWarnedRef.current) {
+      histWarnedRef.current = true;
+      flashRef.current(tr(getLang(), 'hist.storageError'));
+    } else if (result.ok) {
+      histWarnedRef.current = false;
+    }
     setHistoryTick(n => n + 1);
   }, []);
 
@@ -178,7 +191,7 @@ export function useWorkspace(ui) {
     const input = await prompt(t('app.newFilePrompt'), base.replace('.tex', (n > 1 ? n : '') + '.tex'));
     if (!input) return;
     const name = input.trim();
-    if (!name || /[\\/:*?"<>|]/.test(name)) { alertBox(t('app.badFileName')); return; }
+    if (!validName(name)) { alertBox(t('app.badFileName')); return; }
     const info = infoFor(name);
     const tab = makeTab({ name, path: t('app.unsavedPath') + '/' + name, kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
     setTabs(ts => ts.concat([tab])); setActiveId(tab.id); setActiveValue('');
@@ -402,19 +415,22 @@ export function useWorkspace(ui) {
   const renameTab = useCallback((id, name) => {
     const trimmed = String(name || '').trim();
     if (!trimmed) return false;
+    if (!validName(trimmed)) { alertBox(t('app.badFileName')); return false; }
     setTabs(ts => {
       const next = ts.map(x => x.id === id ? { ...x, name: trimmed, path: x.kind === 'draft' ? x.path : trimmed } : x);
       try { persistDrafts(next); } catch (e) { /* 自动保存会再报 */ }
       return next;
     });
     return true;
-  }, []);
+  }, [alertBox, t]);
 
   /** 落盘成功后推进 saved（Ctrl+S 的浏览器路径） */
   const persistNow = useCallback(() => {
     try {
-      persistDrafts(tabsRef.current);
-      setTabs(markDraftsStored);
+      const snap = tabsRef.current;
+      persistDrafts(snap);
+      const persisted = new Map(snap.filter(x => x.kind === 'draft' && x.doc).map(x => [x.draftId, x.doc.getValue()]));
+      setTabs(ts => markDraftsStored(ts, persisted));
       return true;
     } catch (e) {
       setTabs(ts => ts.map(x => x.kind === 'draft' ? { ...x, saveError: tr(getLang(), 'app.draftSaveFailed') } : x));
