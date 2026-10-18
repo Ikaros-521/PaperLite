@@ -9,7 +9,7 @@
 // 数据源 = 共享工作区的真实 CodeMirror Doc + 桌面同一套渲染引擎
 // =============================================
 
-import { type CSSProperties, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionSheet,
   Button,
@@ -107,6 +107,7 @@ function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
         doc={tab.doc as never}
         onChange={(doc: never, value: string) => ws.onDocChange(doc, value)}
         onInit={(cm: unknown) => { ws.cmRef.current = cm }}
+        spellcheck={tab.kind === 'tex' || tab.kind === 'draft' || tab.kind === 'md'}
       />
     </div>
   )
@@ -128,9 +129,11 @@ function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
 function Screen2_RichPreview({
   result,
   onLongPress,
+  onJumpOff,
 }: {
   result: ReturnType<typeof renderLatex> & { isMd?: boolean }
   onLongPress: () => void
+  onJumpOff: (offset: number) => void
 }) {
   const { handlers, consumeClick } = useLongPress(onLongPress)
   const t = useT()
@@ -154,6 +157,7 @@ function Screen2_RichPreview({
         syncScroll={false}
         onSyncToggle={() => {}}
         onScrollRatio={() => {}}
+        onJumpOff={onJumpOff}
         selection={{ did: 0, sel: null }}
         engines={[]}
         engine="builtin"
@@ -494,10 +498,10 @@ export function Flow2_Workspace() {
     replaceSelection: (text: string, select?: string) => void
     setCursor: (pos: { line: number; ch: number }) => void
     scrollIntoView: (range: unknown, margin?: number) => void
+    posFromIndex: (offset: number) => { line: number; ch: number }
     undo: () => void
     redo: () => void
     focus: () => void
-    doc: { lineAt: (offset: number) => { lineNumber: number } }
   } | null
 
   const value = tab?.doc ? tab.doc.getValue() : ''
@@ -546,17 +550,41 @@ export function Flow2_Workspace() {
     instance.focus()
   }
 
-  const jumpToOffset = (offset: number) => {
+  // 预览/大纲点击跳转：切回源码屏时编辑器才重新挂载，先把目标存下再等实例就位——
+  // 直接拿旧实例会落空（卸载时 cmRef 已置空），且 StrictMode 双挂载下 onInit 早于 swapDoc，
+  // 刚挂载的实例还是空 Doc，所以以「真实内容换入」为准，轮询最多 2 秒
+  const pendingJumpRef = useRef<{ offset?: number; line?: number } | null>(null)
+  const applyPendingJump = (instance: NonNullable<ReturnType<typeof cm>>) => {
+    const pending = pendingJumpRef.current
+    if (!pending) return
+    let line = pending.line
+    if (line == null && typeof pending.offset === 'number') {
+      try { line = instance.posFromIndex(Math.min(pending.offset, instance.getValue().length)).line } catch { line = undefined }
+    }
+    pendingJumpRef.current = null
+    if (line == null) return
+    line = Math.max(0, line)
+    instance.setCursor({ line, ch: 0 })
+    instance.scrollIntoView({ line, ch: 0 }, 120)
+    instance.focus()
+  }
+  const attemptPendingJump = (tries = 0) => {
+    const pending = pendingJumpRef.current
+    if (!pending) return
     const instance = cm()
-    if (!instance) return
-    const line = instance.doc.lineAt(offset).lineNumber
+    const docReady = !instance ? false
+      : pending.offset == null ? true
+      : pending.offset === 0 || instance.getValue().length > 0
+    if (instance && docReady) { applyPendingJump(instance); return }
+    if (tries < 40) setTimeout(() => attemptPendingJump(tries + 1), 50)
+    else pendingJumpRef.current = null
+  }
+
+  const jumpToOffset = (offset: number) => {
+    pendingJumpRef.current = { offset }
     setView('source')
     setOutlineOpen(false)
-    requestAnimationFrame(() => {
-      instance.setCursor({ line, ch: 0 })
-      instance.scrollIntoView({ line, ch: 0 }, 120)
-      instance.focus()
-    })
+    attemptPendingJump()
   }
 
   const runTool = (id: string) => {
@@ -572,15 +600,9 @@ export function Flow2_Workspace() {
   }
 
   const jumpToLine = (lineZeroBased: number) => {
+    pendingJumpRef.current = { line: lineZeroBased }
     setView('source')
-    requestAnimationFrame(() => {
-      const instance = cm()
-      if (!instance) return
-      const line = Math.max(0, lineZeroBased)
-      instance.setCursor({ line, ch: 0 })
-      instance.scrollIntoView({ line, ch: 0 }, 120)
-      instance.focus()
-    })
+    attemptPendingJump()
   }
 
   const errCount = issues.filter(i => i.severity === 'error').length
@@ -641,7 +663,7 @@ export function Flow2_Workspace() {
 
       {view === 'source'
         ? <Screen1_SourceEditor tab={tab} />
-        : <Screen2_RichPreview result={result as never} onLongPress={() => setPreviewMenu(true)} />}
+        : <Screen2_RichPreview result={result as never} onLongPress={() => setPreviewMenu(true)} onJumpOff={jumpToOffset} />}
 
       <div className="pl-toolbelt" data-keyboard={keyboard > 0}>
         <div className="pl-scroll-x">

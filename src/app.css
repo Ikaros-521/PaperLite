@@ -488,6 +488,26 @@ body.cp-dragging::before {
 .pl-diag-warn-text {
   background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><path d='M0 2.6 L1.5 0.4 L3 2.6 L4.5 0.4 L6 2.6' fill='none' stroke='%23e0952a' stroke-width='0.9'/></svg>") repeat-x left bottom / 6px 3px;
 }
+/* 拼写检查：蓝波浪，与诊断的红/橙区分开；data-URI 同理取固定色值 */
+.pl-spell {
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><path d='M0 2.6 L1.5 0.4 L3 2.6 L4.5 0.4 L6 2.6' fill='none' stroke='%234f83cc' stroke-width='0.9'/></svg>") repeat-x left bottom / 6px 3px;
+  padding-bottom: 2px;
+}
+
+/* ---------- \ref / \cite 补全弹层（show-hint 换肤到主题变量） ---------- */
+.CodeMirror-hints {
+  position: absolute; z-index: 130; overflow-y: auto; max-height: 260px; min-width: 160px; max-width: 360px;
+  padding: 4px; margin: 0; list-style: none;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px;
+  box-shadow: 0 10px 28px rgba(var(--shadow-rgb), .18);
+  font-size: 13px; font-family: inherit;
+}
+.CodeMirror-hint {
+  margin: 0; padding: 6px 10px; border-radius: 4px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: var(--ink);
+}
+li.CodeMirror-hint-active { background: rgba(var(--accent-rgb), .14); color: var(--ink); }
 
 /* ---------- 编译 PDF / 日志 ---------- */
 .pb-compile { display: flex; gap: 4px; align-items: center; }

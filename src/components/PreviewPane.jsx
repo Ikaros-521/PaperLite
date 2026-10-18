@@ -9,7 +9,7 @@ let mermaidSeq = 0;
 
 /* 预览面板：HTML 注入 + Mermaid 懒加载 + 图工具条 + 节点选中联动 + 编译栏 */
 export default function PreviewPane({
-  result, selection, onSelectNode, onSelMermaid, onScrollRatio, zoom, onZoom,
+  result, selection, onSelectNode, onSelMermaid, onJumpOff, onScrollRatio, zoom, onZoom,
   panelOpen, onTogglePanel, syncScroll, onSyncToggle,
   engines, engine, setEngine, compiling, onCompile, onCancelCompile, hasCompile, builtinStatus,
   onOpenSettings, onOpenChat, assetDir, assetTabs = []
@@ -253,11 +253,21 @@ export default function PreviewPane({
       return;
     }
     const g = e.target && e.target.closest ? e.target.closest('.tk-node, .tk-label') : null;
-    if (!g) return;
-    const sidx = g.getAttribute('data-sidx');
-    const host = g.closest('.diagram');
-    const did = host ? +(host.getAttribute('data-did') || 0) : 0;
-    if (sidx !== null) onSelectNode(did, +sidx);
+    if (g) {
+      const sidx = g.getAttribute('data-sidx');
+      const host = g.closest('.diagram');
+      const did = host ? +(host.getAttribute('data-did') || 0) : 0;
+      if (sidx !== null) onSelectNode(did, +sidx);
+      return;
+    }
+    // 普通内容：就近找带 data-off 的块级元素，回跳编辑器对应源码行。
+    // 图节点选中优先（上面已 return）；划选文本时不动（用户在复制）
+    if (!onJumpOff) return;
+    if (e.target.closest && e.target.closest('a, button, select, input, textarea')) return;
+    const sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    const offEl = e.target.closest ? e.target.closest('[data-off]') : null;
+    if (offEl) onJumpOff(+offEl.getAttribute('data-off'));
   };
 
   const handleScroll = () => {

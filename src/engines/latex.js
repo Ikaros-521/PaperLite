@@ -20,6 +20,15 @@ function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// 给块级输出的根标签注入 data-off（源码绝对偏移），预览点击据此回跳源码行。
+// @@占位符@@ 前缀（@@COLS@@ 等）跳过，注到第一个真实标签；没有标签则原样返回
+function withOff(html, off) {
+  if (off == null) return html;
+  var m = String(html).match(/^((?:@@[A-Z]+@@)*)<([a-zA-Z][a-zA-Z0-9]*)/);
+  if (!m) return html;
+  return m[1] + '<' + m[2] + ' data-off="' + off + '"' + String(html).slice(m[0].length);
+}
+
 // \verb、\verb*、\lstinline（可带 [选项]）：i 指向反斜杠，命中返回 { next, content, star }，否则 null。
 // 定界符不能是字母或 *；LaTeX 要求同一字符收尾，但 \verb{…} / \lstinline{…} 是常见写法，
 // 故括号类定界符允许配对的另一个收尾。收尾不在同一行时按普通命令处理，
@@ -487,15 +496,18 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
   var tokens = [];  // {block:bool, html}
   var i = 0, n = str.length;
   var inlineBuf = '';
+  var paraStart = null;  // 当前段落起始的源码绝对偏移，写入 <p data-off> 供预览点击回跳
+  function touch() { if (paraStart === null) paraStart = base + i; }
   function flushP() {
     if (inlineMode) {
       if (inlineBuf.replace(/<[^>]*>/g, '').trim() || inlineBuf.trim()) tokens.push({ block: false, html: inlineBuf });
       inlineBuf = '';
       return;
     }
-    if (inlineBuf.replace(/<[^>]*>/g, '').trim()) tokens.push({ block: false, html: '<p>' + inlineBuf + '</p>' });
+    if (inlineBuf.replace(/<[^>]*>/g, '').trim()) tokens.push({ block: false, html: '<p' + (paraStart != null ? ' data-off="' + paraStart + '"' : '') + '>' + inlineBuf + '</p>' });
     else if (inlineBuf.trim()) tokens.push({ block: false, html: inlineBuf });
     inlineBuf = '';
+    paraStart = null;
   }
 
   while (i < n) {
@@ -520,13 +532,13 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
         var e = findMathEnd(str, i + 2, '$$');
         if (e > 0) {
           flushP();
-          tokens.push({ block: true, html: '<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e), ctx.macros, 0), true, ctx, katexMacrosOf(ctx), base + i) + '</div>' });
+          tokens.push({ block: true, html: withOff('<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e), ctx.macros, 0), true, ctx, katexMacrosOf(ctx), base + i) + '</div>', base + i) });
           i = e + 2; continue;
         }
       } else if (str.charAt(i + 1) && str.charAt(i + 1) !== '$') {
         var e2 = findMathEnd(str, i + 1, '$');
         if (e2 > 0) {
-          inlineBuf += renderMath(expandMacros(str.slice(i + 1, e2), ctx.macros, 0), false, ctx, katexMacrosOf(ctx), base + i);
+          touch(); inlineBuf += renderMath(expandMacros(str.slice(i + 1, e2), ctx.macros, 0), false, ctx, katexMacrosOf(ctx), base + i);
           i = e2 + 1; continue;
         }
       }
@@ -535,14 +547,14 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
       var e3 = findMathEnd(str, i + 2, '\\]');
       if (e3 > 0) {
         flushP();
-        tokens.push({ block: true, html: '<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e3), ctx.macros, 0), true, ctx, katexMacrosOf(ctx), base + i) + '</div>' });
+        tokens.push({ block: true, html: withOff('<div class="equation">' + renderMath(expandMacros(str.slice(i + 2, e3), ctx.macros, 0), true, ctx, katexMacrosOf(ctx), base + i) + '</div>', base + i) });
         i = e3 + 2; continue;
       }
     }
     if (c === '\\' && str.substr(i, 2) === '\\(') {
       var e4 = findMathEnd(str, i + 2, '\\)');
       if (e4 > 0) {
-        inlineBuf += renderMath(expandMacros(str.slice(i + 2, e4), ctx.macros, 0), false, ctx, katexMacrosOf(ctx), base + i);
+        touch(); inlineBuf += renderMath(expandMacros(str.slice(i + 2, e4), ctx.macros, 0), false, ctx, katexMacrosOf(ctx), base + i);
         i = e4 + 2; continue;
       }
     }
@@ -552,7 +564,7 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
       var probe = envAt(str, i);
       if (probe) {
         flushP();
-        tokens.push({ block: true, html: renderEnv(probe, ctx, base + probe.innerStart) });
+        tokens.push({ block: true, html: withOff(renderEnv(probe, ctx, base + probe.innerStart), base + i) });
         i = probe.outerEnd; continue;
       }
     }
@@ -560,13 +572,15 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
     // 命令
     if (c === '\\') {
       var vb = verbAt(str, i);
-      if (vb) { inlineBuf += renderVerb(vb); i = vb.next; continue; }
+      if (vb) { touch(); inlineBuf += renderVerb(vb); i = vb.next; continue; }
       var cmdM = str.slice(i).match(/^\\([A-Za-z]+)\*?/);
       if (cmdM) {
         var r = handleCommand(cmdM[1], str, i, ctx, base, tokens, flushP);
-        if (r === null) { ctx.warn(t('render.unsupportedCommand', { name: cmdM[1] }), base + i, 'command'); inlineBuf += esc(cmdM[0]); i += cmdM[0].length; continue; }
+        if (r === null) { ctx.warn(t('render.unsupportedCommand', { name: cmdM[1] }), base + i, 'command'); touch(); inlineBuf += esc(cmdM[0]); i += cmdM[0].length; continue; }
+        var cmdOff = base + i;
         if (typeof r === 'number') { i = r; continue; }
-        i = r.next; if (r.html !== undefined) { if (r.block) { flushP(); tokens.push({ block: true, html: r.html }); } else inlineBuf += r.html; }
+        if (r.html !== undefined && !r.block) touch();
+        i = r.next; if (r.html !== undefined) { if (r.block) { flushP(); tokens.push({ block: true, html: withOff(r.html, cmdOff) }); } else inlineBuf += r.html; }
         continue;
       }
       // \{ \} \\ \% 等
@@ -574,20 +588,20 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
         var brk = breakSpace(str, i + 2);
         // \\[<dim>] 的额外间距用零高块元素的 margin-top 表达，负值可上移
         var brHtml = '<br/>' + (brk ? '<span class="brk-space" style="display:block;height:0;margin-top:' + brk.css + '"></span>' : '');
-        if (inlineMode) inlineBuf += brHtml;
-        else { flushP(); tokens.push({ block: true, html: brHtml }); }
+        if (inlineMode) { touch(); inlineBuf += brHtml; }
+        else { flushP(); tokens.push({ block: true, html: withOff(brHtml, base + i) }); }
         i = brk ? brk.next : i + 2; continue;
       }
       var sp = str.substr(i, 2);
-      if (sp === '\\%' || sp === '\\&' || sp === '\\#' || sp === '\\_' || sp === '\\$') { inlineBuf += esc(sp[1]); i += 2; continue; }
-      if (sp === '\\{' || sp === '\\}') { inlineBuf += esc(sp[1]); i += 2; continue; }
+      if (sp === '\\%' || sp === '\\&' || sp === '\\#' || sp === '\\_' || sp === '\\$') { touch(); inlineBuf += esc(sp[1]); i += 2; continue; }
+      if (sp === '\\{' || sp === '\\}') { touch(); inlineBuf += esc(sp[1]); i += 2; continue; }
       i++; continue;
     }
 
     // 文本（展开宏 → 排版细节）
     var next = i + 1;
     while (next < n && '$\\%\n'.indexOf(str.charAt(next)) < 0) next++;
-    inlineBuf += typesetText(expandMacros(str.slice(i, next), ctx.macros, 0));
+    touch(); inlineBuf += typesetText(expandMacros(str.slice(i, next), ctx.macros, 0));
     i = next;
   }
   flushP();
@@ -1285,6 +1299,7 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle) {
       return;
     }
     var cells = splitTopLevel(t, '&').map(function (c2, ci) {
+      var lead = c2.text.length - c2.text.replace(/^\s+/, '').length;  // trim 掉的前导空白要补进偏移，回跳才落得到单元格行
       var raw = c2.text.trim();
       var span = 1;
       var mc = raw.match(/\\multicolumn\{(\d+)\}\s*\{[^}]*\}\s*\{/);
@@ -1293,7 +1308,7 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle) {
         var mcBe = braceEnd(raw, raw.indexOf('{', mc.index + mc[0].length - 1));
         raw = mcBe > 0 ? raw.slice(mc.index + mc[0].length, mcBe) + raw.slice(mcBe + 1) : raw;
       }
-      var cell = renderFlow(raw, ctx, base + bodyStart + rr.start + consumed + c2.start, false);
+      var cell = renderFlow(raw, ctx, base + bodyStart + rr.start + consumed + c2.start + lead, false);
       var cls = [];
       if (cols.rules[ci]) cls.push('vline');
       if (cols.align[ci] === 'l') cls.push('ta-l');

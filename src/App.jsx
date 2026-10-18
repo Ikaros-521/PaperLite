@@ -24,6 +24,7 @@ import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
+import { collectLabels, collectBibKeys } from './projectIndex.js';
 
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
@@ -119,8 +120,8 @@ export default function App() {
   });
   const [zoom, setZoom] = useState(1);
   const [editorSettings, setEditorSettings] = useState(() => {
-    try { const s = JSON.parse(localStorage.getItem('paperlite.editor-settings') || '{}'); return { fontSize: [12,14,16,18,20].includes(s.fontSize) ? s.fontSize : 14, lineWrapping: s.lineWrapping !== false, syncScroll: s.syncScroll !== false }; }
-    catch { return { fontSize: 14, lineWrapping: true, syncScroll: true }; }
+    try { const s = JSON.parse(localStorage.getItem('paperlite.editor-settings') || '{}'); return { fontSize: [12,14,16,18,20].includes(s.fontSize) ? s.fontSize : 14, lineWrapping: s.lineWrapping !== false, syncScroll: s.syncScroll !== false, spellcheck: s.spellcheck !== false }; }
+    catch { return { fontSize: 14, lineWrapping: true, syncScroll: true, spellcheck: true }; }
   });
   const [syncScroll, setSyncScroll] = useState(editorSettings.syncScroll);
   const [fileDialog, setFileDialog] = useState(null);
@@ -165,11 +166,60 @@ export default function App() {
   const svgPreviewUrl = useMemo(() => isSvg && activeTab?.doc
     ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(activeValue) : null,
   [isSvg, activeTab?.doc, activeValue]);
+
   // 编译链与移动端共用同一份；换文档时 hook 内部重绑上下文，迟到响应不会贴回旧错误
   const {
     engines, engine, setEngine, builtinStatus, compiling, compileResult, setCompileResult,
     compile: runCompile, cancelCompile: doCancelCompile, retireErrors,
   } = useCompile({ t, flash, alertBox: alert }, { tabsRef, activeTab, isTexLike });
+
+  // ---- 跨文件 \ref / \cite 索引：磁盘扫描（文件夹变化/保存时）+ 打开中的标签（随输入即时）----
+  const [folderIndex, setFolderIndex] = useState({ labels: [], bibKeys: [] });
+  useEffect(() => {
+    let cancelled = false;
+    if (!rootDir) { setFolderIndex({ labels: [], bibKeys: [] }); return undefined; }
+    (async () => {
+      const labels = [], bibKeys = [];
+      let scanned = 0;
+      const walk = async (dir, depth) => {
+        if (cancelled || depth > 2 || scanned >= 30) return;
+        let entries;
+        try { entries = await fs.listDir(dir); } catch (e) { return; }
+        for (const ent of entries) {
+          if (cancelled || scanned >= 30) return;
+          if (ent.kind === 'directory') { await walk(ent.handle, depth + 1); continue; }
+          const nm = ent.name.toLowerCase();
+          const isTex = nm.endsWith('.tex'), isBib = nm.endsWith('.bib');
+          if (!isTex && !isBib) continue;
+          let text;
+          try { text = await fs.readFileText(ent.handle, 200 * 1024); } catch (e) { continue; } // 超大/二进制跳过
+          scanned++;
+          const bag = isBib ? bibKeys : labels;
+          const found = isBib ? collectBibKeys(text) : collectLabels(text);
+          for (const k of found) bag.push({ key: k.key, src: ent.name });
+        }
+      };
+      await walk(rootDir, 0);
+      if (!cancelled) setFolderIndex({ labels, bibKeys });
+    })();
+    return () => { cancelled = true; };
+  }, [rootDir, treeKey]);
+
+  // 合并优先级：当前标签 → 其他打开的标签 → 磁盘扫描结果；键去重，先到先得
+  const refCompletion = useMemo(() => {
+    const labels = [], bibKeys = [];
+    const seenL = new Set(), seenB = new Set();
+    for (const tb of tabs) {
+      if (!tb.doc) continue;
+      const text = tb.id === activeId ? activeValue : tb.doc.getValue();
+      const src = tb.id === activeId ? '' : tb.name;
+      for (const l of collectLabels(text)) if (!seenL.has(l.key)) { seenL.add(l.key); labels.push({ key: l.key, src }); }
+      for (const k of collectBibKeys(text)) if (!seenB.has(k.key)) { seenB.add(k.key); bibKeys.push({ key: k.key, src }); }
+    }
+    for (const l of folderIndex.labels) if (!seenL.has(l.key)) { seenL.add(l.key); labels.push(l); }
+    for (const k of folderIndex.bibKeys) if (!seenB.has(k.key)) { seenB.add(k.key); bibKeys.push(k); }
+    return { labels, bibKeys };
+  }, [tabs, activeId, activeValue, folderIndex]);
 
   // 桌面在这里决定"编译完看哪里"：切 PDF / 切日志，窄屏顺带切到预览
   const doCompile = async () => {
@@ -386,6 +436,15 @@ export default function App() {
         setTimeout(() => { if (sc.scrollTop === before) sc.scrollTop = Math.max(0, top); }, 120);
       }
     }
+  }, [jumpToLine]);
+
+  // ---- 预览点击回跳：data-off 是源码绝对偏移（等长抹除后仍与文档一一对应）----
+  const handleJumpOff = useCallback((off) => {
+    const c = cm();
+    if (!c || typeof off !== 'number' || off < 0) return;
+    let line = null;
+    try { line = c.posFromIndex(Math.min(off, c.getValue().length)).line; } catch (e) { line = null; }
+    if (line != null) jumpToLine(line);
   }, [jumpToLine]);
 
   // ---- 文件/模板 ----
@@ -820,7 +879,7 @@ export default function App() {
         }}
         viewMode={viewMode} setViewMode={setViewMode} latexOk={isTexLike || isMd}
         markdown={isMd} documentKey={activeId}
-        labels={[...new Set([...activeValue.replace(/(?<!\\)%[^\n]*/g, '').matchAll(/\\label\{([^}]+)\}/g)].map(match => match[1]))]}
+        labels={refCompletion.labels.map(l => l.key)}
         engines={engines} engine={engine} setEngine={setEngine} compiling={compiling} onCompile={doCompile} onCancelCompile={doCancelCompile} builtinStatus={builtinStatus}
         downloadPdf={compileResult?.ok && compileResult.tabId === activeTab?.id ? downloadCurrentPdf : null}
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
@@ -893,6 +952,8 @@ export default function App() {
               diagnostics={visibleIssues}
               onFixIssue={aiFixIssue}
               findReq={findReq}
+              spellcheck={editorSettings.spellcheck && (isTexLike || isMd)}
+              refCompletion={refCompletion}
             />
           ) : (
             <div className="binary-note">
@@ -963,6 +1024,7 @@ export default function App() {
               selection={selection}
               onSelectNode={(did, sidx) => { setSelection({ did, sel: { type: 'node', sidx } }); setPanelOpen(true); setChatOpen(false); }}
               onSelMermaid={(block, id, cur) => { setSelection({ did: 0, sel: { type: 'mermaid', block, id, cur } }); setPanelOpen(true); setChatOpen(false); }}
+              onJumpOff={handleJumpOff}
               onScrollRatio={handleScrollRatio}
               zoom={zoom} onZoom={setZoomClamped}
               panelOpen={panelOpen} onTogglePanel={() => { setPanelOpen(o => !o); setChatOpen(false); }}

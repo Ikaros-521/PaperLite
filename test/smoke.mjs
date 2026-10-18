@@ -197,7 +197,9 @@ ok(ruleRes.warnings.length === 0, 'tabularx / [t] / \\cmidrule 零警告: ' + ru
 ok((ruleRes.html.match(/r-toprule/g) || []).length === 2, '两种表格都识别行首 \\toprule');
 ok((ruleRes.html.match(/r-bottomrule/g) || []).length === 2, '表尾 \\bottomrule 附加到最后一行');
 ok(/<tr class="[^"]*\bcl\b/.test(ruleRes.html), '\\cmidrule 归入 cl 横线类');
-ok(/<td class="ta-r"><p>C<\/p>/.test(ruleRes.html), 'tabularx 的 X 列不再挤掉后续列: ' + (ruleRes.html.match(/<tr class="r-toprule">.*?<\/tr>/s) || [''])[0]);
+// data-off（预览回跳源码的偏移标注）与这些断言无关，比较前剥掉
+const stripOff = html => html.replace(/ data-off="\d+"/g, '');
+ok(/<td class="ta-r"><p>C<\/p>/.test(stripOff(ruleRes.html)), 'tabularx 的 X 列不再挤掉后续列: ' + (ruleRes.html.match(/<tr class="r-toprule">.*?<\/tr>/s) || [''])[0]);
 const strayRes = renderLatex(String.raw`\documentclass{article}\begin{document}正文 \toprule 继续 \hline 结束 \cline{1-2}\end{document}`);
 ok(strayRes.warnings.length === 0 && !strayRes.html.includes('toprule'), '表格线命令落在正文里静默忽略: ' + strayRes.html);
 const apRes = renderLatex(String.raw`\documentclass{article}\begin{document}\section{Body}\label{s1}\appendix
@@ -217,8 +219,8 @@ ok(verbRes.warnings.length === 0, '\verb 零警告: ' + verbRes.warnings.map(w =
 ok(verbRes.html.includes('<code class="verb">%</code>'), '\verb 定界符内的 % 不当注释');
 ok(verbRes.html.includes('<code class="verb">a\u2423\u2423b</code>'), '\verb* 显示可见空格');
 ok(verbRes.html.includes('<code class="verb">\\LaTeX</code>'), '\verb 内容按字面显示，不展开命令');
-ok(/<td><p><code class="verb">&amp;<\/code><\/p><\/td><td><p>ok/.test(verbRes.html), '\verb|&| 不被当成列分隔符: ' + (verbRes.html.match(/<tr[^>]*>.*?<\/tr>/s) || [''])[0]);
-ok(verbRes.html.includes('<h2 id="h-0" class="sec1"><span class="secnum">1</span> 含 <code class="verb">foo</code> 的标题</h2>'), '标题内的 \verb 照常排版');
+ok(/<td><p><code class="verb">&amp;<\/code><\/p><\/td><td><p>ok/.test(stripOff(verbRes.html)), '\verb|&| 不被当成列分隔符: ' + (verbRes.html.match(/<tr[^>]*>.*?<\/tr>/s) || [''])[0]);
+ok(stripOff(verbRes.html).includes('<h2 id="h-0" class="sec1"><span class="secnum">1</span> 含 <code class="verb">foo</code> 的标题</h2>'), '标题内的 \verb 照常排版');
 
 // ---------- 第二批：\lstinline / \fbox / 引用与模板命令 / 表格环境 ----------
 console.log('== 补齐命令（第二批）==');
@@ -246,17 +248,17 @@ const tplRes = renderLatex(String.raw`\documentclass{ctexart}
 \end{abstract}用 \hologo{XeLaTeX} 编译，\version{0.1}\printbibliography[heading=bibintoc, title=\ebibname]
 \end{document}`);
 ok(tplRes.warnings.length === 0, '模板命令零警告: ' + tplRes.warnings.map(w => w.msg).join(' | '));
-ok(/<div class="abstract">[\s\S]*关键词[：:][\s\S]*图论/.test(tplRes.html), '导言 \keywords 落在摘要内: ' + (tplRes.html.match(/关键词[^<]*[^]*/) || [''])[0].slice(0, 40));
+ok(/<div class="abstract">[\s\S]*关键词[：:][\s\S]*图论/.test(stripOff(tplRes.html)), '导言 \keywords 落在摘要内: ' + (tplRes.html.match(/关键词[^<]*[^]*/) || [''])[0].slice(0, 40));
 ok(tplRes.html.includes('mailto:z@x.edu'), '\email 渲染为邮件链接');
 ok(tplRes.html.includes('doc-institute') && (tplRes.html.match(/某大学/g) || []).length === 1, '\institute 在 \author 内时只显示一次');
 ok(tplRes.html.includes('XeLaTeX') && !tplRes.html.includes('\\version') && !tplRes.html.includes('bibintoc'),
   '\hologo 出文字，\version/\printbibliography 参数不外泄');
 const kwBody = renderLatex(String.raw`\documentclass{article}\begin{document}正文\keywords{甲, 乙}后文\end{document}`);
-ok(kwBody.warnings.length === 0 && /<div class="doc-keywords">/.test(kwBody.html), '正文里的 \keywords 就地成块');
+ok(kwBody.warnings.length === 0 && /<div class="doc-keywords">/.test(stripOff(kwBody.html)), '正文里的 \keywords 就地成块');
 const wideRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \begin{tabular*}{\textwidth}{ccc}\toprule A & B & C \\ \midrule 1 & 2 & 3 \\ \bottomrule\end{tabular*}
 \end{document}`);
-ok(wideRes.warnings.length === 0 && wideRes.html.includes('<table class="tabular" style="width:100%">') && wideRes.html.includes('r-toprule'),
+ok(wideRes.warnings.length === 0 && stripOff(wideRes.html).includes('<table class="tabular" style="width:100%">') && wideRes.html.includes('r-toprule'),
   'tabular* 按列格式排版并占满宽度: ' + wideRes.warnings.map(w => w.msg).join(' | '));
 const ltRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \begin{longtable}{cc}\caption{长表}\label{lt}\toprule 头 & 目 \\ \midrule \endfirsthead

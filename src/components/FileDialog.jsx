@@ -26,6 +26,7 @@ export default function FileDialog({ mode, onClose, name, counts, selectionCount
         </div>
         <label>{t('file.fontSize')}<select value={settings.fontSize} onChange={e => onSettings({ ...settings, fontSize: Number(e.target.value) })}>{[12, 14, 16, 18, 20].map(n => <option key={n} value={n}>{n}px</option>)}</select></label>
         <label><span>{t('file.lineWrapping')}</span><input type="checkbox" checked={settings.lineWrapping} onChange={e => onSettings({ ...settings, lineWrapping: e.target.checked })} /></label>
+        <label><span>{t('file.spellcheck')}</span><input type="checkbox" checked={settings.spellcheck !== false} onChange={e => onSettings({ ...settings, spellcheck: e.target.checked })} /></label>
         <label><span>{t('m.syncScroll')}</span><input type="checkbox" checked={settings.syncScroll} onChange={e => onSettings({ ...settings, syncScroll: e.target.checked })} /></label>
         <label>{t('file.engine')}<select value={engines.length ? engine : ''} disabled={!engines.length} onChange={e => setEngine(e.target.value)}>{engines.length ? engines.map(en => <option key={en} value={en}>{en === 'builtin' ? t('app.builtinEngine') : en}</option>) : <option value="">{t('m.noEngine')}</option>}</select></label>
       </div>}
