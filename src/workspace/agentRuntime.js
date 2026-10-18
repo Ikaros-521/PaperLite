@@ -14,11 +14,11 @@ import * as ctx from '../context.js';
 import { tr, getLang } from '../i18n.js';
 import { parseToolCalls, toolsSchema } from './agentTools.js';
 
-export const AGENT_MAX_STEPS = 8;
+export const AGENT_MAX_STEPS = 15;
 // 渐进式披露：工具结果只在最近几条保持全文，更早的衰减为一行占位
 // （模型仍知道用过什么工具、结果多大，需要时可重新调用），避免多步循环
-// 把第 1 步 read_file 的 12k 字符一路背到第 8 步。
-export const TOOL_RESULT_KEEP = 2;
+// 把第 1 步 read_file 的 12k 字符一路背到最后一步。
+export const TOOL_RESULT_KEEP = 5;
 
 // Agent 行为参数（步数上限 / 全文保留条数）随浏览器保存；常量只作默认值与钳制边界
 export const AGENT_STEPS_MAX = 50;

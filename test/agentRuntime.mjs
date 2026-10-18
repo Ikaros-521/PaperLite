@@ -103,6 +103,7 @@ await runAgentLoop({
   system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
   budget: ctxBudget.inputBudget(channel),
   maxSteps: 3,
+  keepResults: 2,   // 显式钉住保留条数：本段验证的是披露机制本身，不随默认值漂移
   execute: async () => ({ ok: true, result: 'RESULT-' + (++seq) }),
   onUpdate: list => { updates2.push(list); uiLists.push(list); },
 });
@@ -155,7 +156,7 @@ assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1 }, '越界�
 saveAgentSettings({ maxSteps: 12, keepResults: 4 });
 assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4 }, '合法值要原样读回');
 memStore['paperlite.agentSettings.v1'] = '{oops';
-assert.deepEqual(loadAgentSettings(), { maxSteps: 8, keepResults: 2 }, '损坏数据回退默认值');
+assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5 }, '损坏数据回退默认值');
 delete globalThis.localStorage;
 
 console.log('agentRuntime: all tests passed');
