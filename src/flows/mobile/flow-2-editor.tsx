@@ -41,6 +41,8 @@ import {
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import EditorPane from '../../components/EditorPane.jsx'
 import PreviewPane from '../../components/PreviewPane.jsx'
+import { collectLabels, collectBibKeys } from '../../projectIndex.js'
+import { collectUserCommands } from '../../completion.js'
 import { renderLatex } from '../../engines/latex.js'
 import { renderMarkdownFull } from '../../engines/markdown.js'
 import { lintLaTeX } from '../../engines/linter.js'
@@ -98,6 +100,35 @@ function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
   // 卸载后共享层不能再把这个实例当「当前编辑器」（AI 写回会落到已 detach 的空 Doc 上）
   useEffect(() => () => { ws.cmRef.current = null }, [])
 
+  // 与桌面同一套编辑器增强（EditorPane 本就共享）：\ref/\cite 与命令/环境/文件名补全、
+  // 打字机/语法检查读桌面同一份设置键——手机与电脑各自浏览器，互不干扰也互不依赖
+  const texLike = tab.kind === 'tex' || tab.kind === 'draft'
+  const refCompletion = useMemo(() => {
+    const labels: { key: string; src: string }[] = [], bibKeys: { key: string; src: string }[] = []
+    const seenL = new Set<string>(), seenB = new Set<string>()
+    for (const x of ws.tabs) {
+      if (!x.doc) continue
+      const text = x.id === tab.id ? (x.doc as { getValue: () => string }).getValue() : (x.doc as { getValue: () => string }).getValue()
+      const src = x.id === tab.id ? '' : x.name
+      for (const l of collectLabels(text)) if (!seenL.has(l.key)) { seenL.add(l.key); labels.push({ key: l.key, src }) }
+      for (const k of collectBibKeys(text)) if (!seenB.has(k.key)) { seenB.add(k.key); bibKeys.push({ key: k.key, src }) }
+    }
+    return { labels, bibKeys }
+  }, [ws.tabs, tab.id, tab.doc])
+  const completionPool = useMemo(() => {
+    const tex = ws.tabs.filter(x => x.kind === 'tex' || x.kind === 'draft').map(x => x.name)
+    const image = ws.tabs.filter(x => x.kind === 'image').map(x => x.name)
+    const bib = ws.tabs.filter(x => /\.bib$/i.test(x.name)).map(x => x.name)
+    return { tex, image, bib }
+  }, [ws.tabs])
+  const userCommands = useMemo(
+    () => collectUserCommands(ws.tabs.filter(x => x.doc).map(x => (x.doc as { getValue: () => string }).getValue())),
+    [ws.tabs, tab.doc],
+  )
+  const [sharedSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('paperlite.editor-settings') || '{}') } catch { return {} as Record<string, unknown> }
+  })
+
   return (
     <div className="pl-editor" data-keyboard={keyboard > 0}>
       {/* STATE: default — 真实 Doc 挂载，语法高亮/括号匹配/撤销栈全部来自 CodeMirror
@@ -107,7 +138,11 @@ function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
         doc={tab.doc as never}
         onChange={(doc: never, value: string) => ws.onDocChange(doc, value)}
         onInit={(cm: unknown) => { ws.cmRef.current = cm }}
-        spellcheck={tab.kind === 'tex' || tab.kind === 'draft' || tab.kind === 'md'}
+        spellcheck={texLike || tab.kind === 'md'}
+        grammarCheck={sharedSettings.grammarCheck === true && (texLike || tab.kind === 'md')}
+        typewriter={sharedSettings.typewriter === true}
+        refCompletion={refCompletion}
+        completion={{ texLike, pool: completionPool, userCommands }}
       />
     </div>
   )

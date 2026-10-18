@@ -10,6 +10,7 @@ import zhCN from 'antd-mobile/es/locales/zh-CN'
 import enUS from 'antd-mobile/es/locales/en-US'
 import { useWorkspace } from '../../workspace/useWorkspace.js'
 import { useCompile } from '../../workspace/useCompile.js'
+import { hasDocumentclass } from '../../mainDoc.js'
 import { buildLLMContext } from '../../workspace/chatContext.js'
 import { LangContext } from '../../useI18n.js'
 import { LS_LANG, detectLang, setLang as setModuleLang, tr } from '../../i18n.js'
@@ -150,9 +151,24 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
   // 编译链与桌面同一份实现：换引擎、预热、取消、结果与 PDF Blob 生命周期
   const activeTab = (ws.tabs as MobileTab[]).filter(x => x.id === ws.activeId)[0] || null
   const isTexLike = activeTab?.kind === 'tex' || activeTab?.kind === 'draft'
+  // 主文档入口（桌面同款语义，移动端无文件夹扫描：只看打开的标签）——
+  // 在子文件标签上编译也从带 \documentclass 的主文档走，不再把子文件当独立文档
+  const getEntry = useCallback(async () => {
+    const open = (ws.tabsRef.current as MobileTab[]).filter(x => x.doc && (x.kind === 'tex' || x.kind === 'draft'))
+    const cur = open.filter(x => x.id === ws.activeId)[0] || null
+    if (cur && hasDocumentclass(cur.doc?.getValue() || '')) return null // 当前即主文档：走默认路径
+    const main = open.filter(x => hasDocumentclass(x.doc?.getValue() || ''))[0] || null
+    if (!main) return null
+    return {
+      source: (main.doc as { getValue: () => string }).getValue(),
+      name: main.name,
+      parentDir: (main as { parentDir?: unknown }).parentDir || null,
+      entryTabId: main.id,
+    }
+  }, [ws.tabsRef, ws.activeId])
   const compileLayer = useCompile(
     { t, flash: (msg: string) => Toast.show({ content: msg }), alertBox: (msg: string) => { Dialog.alert({ title: t('dialog.alert'), content: msg, confirmText: t('mb.sh.gotIt') }) } },
-    { tabsRef: ws.tabsRef, activeTab, isTexLike, autoWarm: false },
+    { tabsRef: ws.tabsRef, activeTab, isTexLike, autoWarm: false, getEntry },
   )
 
   // ---- AI 对话：渠道、消息、上下文构造全部复用桌面实现 ----
