@@ -101,24 +101,38 @@ async function compile(body) {
 }
 
 // ---------------- HTTP ----------------
-function json(res, code, obj) {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+
+// CORS：仅放行本机开发源（vite dev server 等任意端口的 localhost/127.0.0.1）。
+// 不再回 *：任意网页都能跨源 POST /api/compile 驱动本机 TeX，等于把本机算力与
+// 文件系统暴露给访问的每个站点；同源页面（localhost:8788 自己）无 Origin 头，不受影响。
+function corsHeaders(req) {
+  const o = String(req.headers.origin || '');
+  if (!o) return {};
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(o)
+    ? { 'Access-Control-Allow-Origin': o, Vary: 'Origin' }
+    : {};
+}
+
+function json(res, code, obj, extra) {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...(extra || {}) });
   res.end(JSON.stringify(obj));
 }
 function readBody(req) {
   return new Promise((resolve) => {
     let data = '';
-    req.on('data', c => { data += c; if (data.length > 20e6) req.destroy(); });
+    // 超限时 destroy 后不会再有 'end' 事件：立即 resolve(null)，调用方回 413
+    req.on('data', c => { data += c; if (data.length > 20e6) { try { req.destroy(); } catch (e) {} resolve(null); } });
     req.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { resolve({}); } });
   });
 }
 
 const server = http.createServer(async (req, res) => {
   const url = (req.url || '/').split('?')[0];
+  const cors = corsHeaders(req);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
+      ...cors,
       'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-dangerous-direct-browser-access'
     });
@@ -129,12 +143,13 @@ const server = http.createServer(async (req, res) => {
   if (url === '/api/health' && req.method === 'GET') {
     const engines = availableEngines();
     const list = Object.keys(ENGINE_CMDS).filter(k => engines[k]);
-    return json(res, 200, { ok: true, engines: list, dvi2pdf: !!engines.dvipdfmx });
+    return json(res, 200, { ok: true, engines: list, dvi2pdf: !!engines.dvipdfmx }, cors);
   }
   if (url === '/api/compile' && req.method === 'POST') {
     const body = await readBody(req);
-    try { return json(res, 200, await compile(body)); }
-    catch (e) { return json(res, 200, { ok: false, error: String(e && e.message || e) }); }
+    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
+    try { return json(res, 200, await compile(body), cors); }
+    catch (e) { return json(res, 200, { ok: false, error: String(e && e.message || e) }, cors); }
   }
 
   // ---- LLM Mock（仅离线演示用，含 OpenAI 兼容与 Anthropic 协议）----
@@ -146,16 +161,17 @@ const server = http.createServer(async (req, res) => {
         { id: 'paperlite-mock-pro' },
         { id: 'paperlite-mock-embed' }
       ]
-    });
+    }, cors);
   }
   if (url === '/v1/chat/completions' && req.method === 'POST') {
     const body = await readBody(req);
+    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
     const last = (body.messages || []).filter(m => m.role === 'user').pop();
     const q = String(last && last.content || '');
     const reply = mockReply(q);
     const pt = reqTokens(body), ct = estTok(reply);
     if (body.stream) {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
       const deltas = reply.match(/[\s\S]{1,12}/g) || [];
       let i = 0;
       const t = setInterval(() => {
@@ -171,12 +187,13 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, {
       choices: [{ message: { content: reply } }],
       usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct }
-    });
+    }, cors);
   }
 
   // ---- Anthropic 协议 Mock（/v1/messages，供「Anthropic (Claude)」协议离线体验）----
   if (url === '/v1/messages' && req.method === 'POST') {
     const body = await readBody(req);
+    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
     const last = [...(body.messages || [])].reverse().find(m => m.role === 'user');
     const q = typeof (last && last.content) === 'string'
       ? last.content
@@ -191,7 +208,7 @@ const server = http.createServer(async (req, res) => {
     blocks.push({ type: 'text', text: reply });
 
     if (body.stream) {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
       res.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock', content: [], usage: { input_tokens: pt, output_tokens: 1 } } })}\n\n`);
       let bi = 0;
       const nextBlock = () => {
@@ -223,23 +240,25 @@ const server = http.createServer(async (req, res) => {
       id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock',
       content: blocks.map(b => b.type === 'thinking' ? { type: 'thinking', thinking: b.text } : { type: 'text', text: b.text }),
       stop_reason: 'end_turn', usage: { input_tokens: pt, output_tokens: ct }
-    });
+    }, cors);
   }
 
   if (url === '/v1/embeddings' && req.method === 'POST') {
     const body = await readBody(req);
+    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
     const data = inputs.map((t, i) => ({
       index: i,
       embedding: simpleVec(String(t))
     }));
-    return json(res, 200, { object: 'list', data });
+    return json(res, 200, { object: 'list', data }, cors);
   }
 
   // ---- 静态文件 ----
   let file = url === '/' ? '/index.html' : decodeURIComponent(url);
   file = path.normalize(path.join(ROOT, file));
-  if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
+  // 前缀必须对齐目录边界：startsWith(ROOT) 会让 normalize 出的 /dist-x 同级目录钻空子
+  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
     if (err) {
       // SPA 兜底
