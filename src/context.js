@@ -105,6 +105,12 @@ export function truncateToTokens(text, tokens, marker) {
     head = Math.floor(head * k);
     tail = Math.floor(tail * k);
   }
+  // 兜底：符号密度突变时 6 轮收缩仍可能超预算，按比例对成品硬截一次，
+  // 宁可多截也不把超预算载荷发给窄窗口渠道
+  if (estimateTokens(out) > tokens) {
+    const cut = Math.max(64, Math.floor(out.length * (tokens / estimateTokens(out)) * 0.9));
+    out = out.slice(0, cut) + mid;
+  }
   return out;
 }
 

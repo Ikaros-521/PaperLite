@@ -233,7 +233,8 @@ export default function App() {
           if (cancelled || scanned >= 30) return;
           const path = prefix + ent.name;
           if (ent.kind === 'directory') { await walk(ent.handle, depth + 1, path + '/'); continue; }
-          if (IMAGE.test(ent.name)) { imageFiles.push(path); continue; }
+          // 图片只进补全候选池：文本有 30 个上限，图片同样封顶，数千张的图库不该全量进 state
+          if (IMAGE.test(ent.name)) { if (imageFiles.length < 500) imageFiles.push(path); continue; }
           const nm = ent.name.toLowerCase();
           const isTex = nm.endsWith('.tex'), isBib = nm.endsWith('.bib'), isText = TEXT_EXTRA.test(ent.name);
           if (!isTex && !isBib && !isText) continue;

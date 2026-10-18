@@ -451,7 +451,11 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       // CodeMirror 在 mouseup 后才提交最终选区，等一拍再定位
       setTimeout(updateSelPop, 0);
     };
+    // 切走窗口（alt-tab/点别的应用）必然中断拖选：重置拖选态，
+    // 否则快捷条要等到下一次点击才恢复刷新
+    const onBlur = () => { draggingRef.current = false; };
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('blur', onBlur);
     cb.current.onInit && cb.current.onInit(cm);
     setTimeout(() => cm.refresh(), 50);
     return () => {
@@ -461,6 +465,7 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       clearTimeout(aiTimerRef.current);
       aiGenRef.current++;
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('blur', onBlur);
       // 先脱开共享 Doc（避免 StrictMode 双挂载时 “document is already in use”）
       try { cm.swapDoc(new CodeMirror.Doc('', 'stex')); } catch (e) { /* ignore */ }
       const el = cm.getWrapperElement();

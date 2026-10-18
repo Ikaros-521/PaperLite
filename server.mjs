@@ -264,12 +264,12 @@ const server = http.createServer(async (req, res) => {
       // SPA 兜底
       fs.readFile(path.join(ROOT, 'index.html'), (e2, d2) => {
         if (e2) { res.writeHead(404); return res.end('Not Found（请先 npm run build）'); }
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
         res.end(d2);
       });
       return;
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
     res.end(data);
   });
 });

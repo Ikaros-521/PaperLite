@@ -26,6 +26,8 @@ export const AGENT_KEEP_MAX = 10;
 const AGENT_CFG_KEY = 'paperlite.agentSettings.v1';
 
 function clampInt(v, min, max, dflt) {
+  // Number(null)=0 是有限数，会把 null 钳到最小值而不是走默认值——与 undefined 语义对齐
+  if (v === null || v === undefined) return dflt;
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
 }

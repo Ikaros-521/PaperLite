@@ -82,6 +82,10 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
 
   useEffect(() => () => clearTimeout(noteTimer.current), []);
 
+  // 移动端聊天是路由页：离开页面时组件卸载，进行中的流式请求若不中止，
+  // 回调会继续打到已卸载组件（桌面常驻挂载，不受影响）
+  useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
+
   // 压缩是同步等待的一次模型请求，慢渠道要让用户看到已经过了多久
   useEffect(() => {
     if (!compacting) { setCompactSecs(0); return undefined; }
