@@ -45,7 +45,8 @@ export function toolsSchema() {
 
 /* ---- 解析模型输出中的工具调用 ---- */
 
-const TOOL_BLOCK = /```tool[ \t]*\n([\s\S]*?)```/g;
+// [ \t\r]*：容忍部分网关输出的 CRLF 行尾，否则整个工具协议在该网关下静默失效
+const TOOL_BLOCK = /```tool[ \t\r]*\n([\s\S]*?)```/g;
 
 /**
  * 解析 assistant 文本里的全部工具调用块。
@@ -75,8 +76,8 @@ export function parseToolCalls(text) {
  *  流式进行中的 ```tool 块可能还没闭合，一并剥掉避免露出半截 JSON */
 export function stripToolBlocks(text) {
   return String(text || '')
-    .replace(/```tool[ \t]*\n[\s\S]*?```/g, '')
-    .replace(/```tool[ \t]*\n[\s\S]*$/g, '')
+    .replace(/```tool[ \t\r]*\n[\s\S]*?```/g, '')
+    .replace(/```tool[ \t\r]*\n[\s\S]*$/g, '')
     .trim();
 }
 
@@ -173,11 +174,15 @@ export function makeAgentExecutor(deps) {
     const fi = deps.folderIndex() || {};
     const entry = [...(fi.texFiles || []), ...(fi.bibFiles || []), ...(fi.textFiles || [])].find(f => f.path === path);
     if (entry && typeof entry.source === 'string') return ok(entry.source);
-    // 3) 直读磁盘（未进索引的文件类型）
+    // 3) 直读磁盘（未进索引的文件类型）；区分「不存在」与「读取失败」——
+    //    权限/超大/非法路径等原因如实回传，避免模型误以为文件不存在而反复重读或盲目重建
     try {
       const text = await readFromDisk(path);
       if (text != null) return ok(text);
-    } catch (e) { /* 落到统一报错 */ }
+    } catch (e) {
+      if (e && e.name === 'NotFoundError') return fail(tr(L, 'agent.errFileNotFound', { path }));
+      return fail(tr(L, 'agent.toolCrashed', { msg: (e && e.message) || e }));
+    }
     return fail(tr(L, 'agent.errFileNotFound', { path }));
   }
 

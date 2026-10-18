@@ -47,14 +47,16 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   }, [messages]);
 
   // 外部注入提示词：诊断红点预填并聚焦；划词翻译/润色自动发送（auto 为完整问题文本）。
-  // scope 顺带切换上下文范围（如划词动作强制 selection）——注意 setScope 是异步的，
-  // 自动发送当拍就要用，因此同时把 scope 作为覆盖参数传给 send，不吃旧闭包值。
+  // scope/mode 顺带切换（如划词动作强制 selection/chat）——注意 setScope/setMode 是
+  // 异步的，自动发送当拍就要用，因此把 scope 与 mode 都作为覆盖参数传给 send，不吃旧闭包值。
   useEffect(() => {
     if (inject && inject.n) {
       if (inject.scope) setScope(inject.scope);
       if (inject.mode) setMode(inject.mode);
       if (inject.auto) {
-        if (!busyRef.current && sendRef.current) sendRef.current(inject.auto, { scope: inject.scope });
+        // 对话进行中不自动发送：文本落进输入框，本轮结束后手动发送，不静默丢弃
+        if (!busyRef.current && sendRef.current) sendRef.current(inject.auto, { scope: inject.scope, mode: inject.mode });
+        else setInput(inject.auto);
         return;
       }
       setInput(inject.text || '');
@@ -234,8 +236,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
     setInput('');
     setNote('');
-    if (mode === 'agent' && agentEnv) return runAgent(q);
-    // 自动发送的注入会带 scope 覆盖（setScope 要下一拍才生效，不能吃旧闭包值）
+    // 自动发送的注入会带 scope/mode 覆盖（setScope/setMode 要下一拍才生效，不能吃旧闭包值）
+    const useMode = (opts && opts.mode) || mode;
+    if (useMode === 'agent' && agentEnv) return runAgent(q);
     const useScope = (opts && opts.scope) || scope;
     const pack = await buildContext(useScope, q, channel);
     const build = (list) => ctx.buildPayload({
@@ -370,7 +373,11 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <span className="sp-t">{t('chat.title')}</span>
         <span className="cp-head-acts">
           <button title={t('chat.settings')} onClick={onOpenSettings}>⚙</button>
-          <button title={t('chat.clear')} onClick={() => { setMessages([]); setReqUsage(null); setRealUsage(null); setNote(''); }}>{lang === 'zh' ? '清' : 'Clr'}</button>
+              <button
+                title={t('chat.clear')}
+                disabled={busy || externalBusy}
+                onClick={() => { setMessages([]); setReqUsage(null); setRealUsage(null); setNote(''); }}
+              >{lang === 'zh' ? '清' : 'Clr'}</button>
           {!narrow && <button title={t('chat.close')} onClick={onClose}>✕</button>}
         </span>
       </div>

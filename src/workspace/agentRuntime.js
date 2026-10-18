@@ -94,9 +94,19 @@ export async function runAgentLoop(opts) {
   const push = (m) => { list = list.concat([m]); onUpdate(list); return m; };
   const patchLast = (fn) => { list = list.slice(0, -1).concat([fn(list[list.length - 1])]); onUpdate(list); };
 
-  const build = () => ctx.buildPayload({
-    system, docHeader, doc, summaryHeader, history: historyForLlm(list, L, keep), budget,
-  }).messages;
+  // 本轮原始提问（进入循环时的最后一条普通 user 消息）。buildPayload 从最新往回
+  // 装填、装不下即弃——多步循环后最早的提问可能被整体丢掉，之后每步模型都没有
+  // 任务目标只能空转。装配后若被丢弃，在最新侧重注入：模型最后看到的即任务目标。
+  const origQ = [...list].reverse().find(m => m && m.role === 'user' && !m.kind);
+  const build = () => {
+    const built = ctx.buildPayload({
+      system, docHeader, doc, summaryHeader, history: historyForLlm(list, L, keep), budget,
+    }).messages;
+    if (origQ && !built.some(m => m && m.role === 'user' && m.content === origQ.content)) {
+      return built.concat([{ role: 'user', content: origQ.content }]);
+    }
+    return built;
+  };
 
   let usage = null;
   for (let step = 0; step <= maxSteps; step++) {
@@ -129,11 +139,23 @@ export async function runAgentLoop(opts) {
       ok: false,
       result: tr(L, 'agent.errBadBlock', { raw }),
     }));
-    if ((!calls.length && !badErrs.length) || last) return { usage };
+    if (last) {
+      // 收口步不再执行工具：为已解析的调用补一条未执行回执，UI 不渲染悬空的
+      // 「工具调用」卡片，模型侧也不会误以为调用已执行过
+      for (const c of calls) {
+        push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false, content: tr(L, 'agent.stepLimitTool') });
+      }
+      return { usage };
+    }
+    if (!calls.length && !badErrs.length) return { usage };
 
     // 执行工具：调用卡片信息直接挂在结果消息上（assistant 正文里的 ```tool 块由 UI 渲染成卡片）
     for (let i = 0; i < calls.length; i++) {
       const c = calls[i];
+      // 用户已点停止：剩余工具（可能含改文档操作）不再执行，按取消收尾
+      if (signal && signal.aborted) {
+        const e = new Error('aborted'); e.name = 'AbortError'; throw e;
+      }
       push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: true, content: '' });
       const r = await execute(c.tool, c.args);
       patchLast(m => ({ ...m, running: false, ok: r.ok, content: r.result }));

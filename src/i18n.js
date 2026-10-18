@@ -511,6 +511,7 @@ export const DICT = {
     'agent.toolCrashed': '工具执行异常：{msg}', 'agent.toolTooLarge': '文件过大（超过 2MB）',
     'agent.errBadBlock': '```tool 块不是合法 JSON，请按 {"tool":"…","args":{…}} 重新输出：{raw}',
     'agent.limitNote': '（系统提示：已达到工具调用步数上限 {n} 步。请基于已获取的信息直接给出最终回答，不要再调用工具。）',
+    'agent.stepLimitTool': '（已达到步数上限，此工具调用未执行）',
     'agent.briefActive': '当前编辑：{path}（{n} 行）',
     'agent.briefOutline': '文档大纲：',
     'agent.briefSel': '当前有选中内容：{n} 字符（需要时用 read_selection 读取）',
@@ -1109,6 +1110,7 @@ export const DICT = {
     'agent.errBadBlock': 'The ```tool block is not valid JSON; re-emit it as {"tool":"…","args":{…}}: {raw}',
     'agent.limitNote': '(System note: the tool-call step limit of {n} has been reached. Give the final answer from what you ' +
       'already have; do not call tools again.)',
+    'agent.stepLimitTool': '(step limit reached; this tool call was not executed)',
     'agent.briefActive': 'Currently editing: {path} ({n} lines)',
     'agent.briefOutline': 'Outline:',
     'agent.briefSel': 'Selection present: {n} chars (use read_selection when needed)',
