@@ -925,8 +925,10 @@ export function Flow2_Workspace() {
       if (tab?.kind === 'md') return { ...renderMarkdownFull(value), isMd: true } as never
       return renderLatex(value, {}) as never
     } catch (e) {
+      // 异常消息可能回显文档内容片段，进 innerHTML 前转义
+      const escHtml = (s: unknown) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
       return {
-        html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + String((e as Error).message || e) + '</div>',
+        html: '<div class="render-error">' + escHtml(tr(getLang(), 'app.renderErr') + String((e as Error).message || e)) + '</div>',
         warnings: [], headings: [], diagrams: [], stats: { words: 0 },
       } as never
     }

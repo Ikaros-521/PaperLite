@@ -20,6 +20,17 @@ function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// 链接 scheme 白名单：\url/\href 与 KaTeX trust 共用。无 scheme（相对路径/锚点）
+// 放行；http/https/mailto/tel 放行；javascript:/data:/vbscript: 等一律清空——
+// 文档内容不可信，防止预览里的链接被点击时执行脚本。
+function safeUrl(u) {
+  var s = String(u == null ? '' : u).trim();
+  var m = s.match(/^([a-zA-Z][a-zA-Z0-9+.\-]*):/);
+  if (!m) return s;
+  var k = m[1].toLowerCase();
+  return (k === 'http' || k === 'https' || k === 'mailto' || k === 'tel') ? s : '';
+}
+
 // 给块级输出的根标签注入 data-off（源码绝对偏移），预览点击据此回跳源码行。
 // @@占位符@@ 前缀（@@COLS@@ 等）跳过，注到第一个真实标签；没有标签则原样返回
 function withOff(html, off) {
@@ -221,7 +232,9 @@ function renderMath(tex, display, ctx, macrosForKatex, at) {
   var html;
   try {
     html = katex.renderToString(tex, {
-      displayMode: !!display, throwOnError: false, strict: false, trust: true,
+      displayMode: !!display, throwOnError: false, strict: false,
+      // trust 不再全开：\href/\url 的链接经 safeUrl 白名单，其余信任场景一律拒绝
+      trust: function (c) { return !!safeUrl(c && c.url); },
       macros: macrosForKatex || {}
     });
   } catch (e) {
@@ -769,7 +782,13 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       if (g1) return g1.end + 1;
       return afterName;
     }
-    case 'url': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<a href="' + esc(g1.text) + '" target="_blank">' + esc(g1.text) + '</a>' };
+    case 'url': {
+      g1 = G(afterName); if (!g1) return null;
+      var uUrl = safeUrl(g1.text);
+      return { next: g1.end + 1, html: uUrl
+        ? '<a href="' + esc(uUrl) + '" target="_blank" rel="noopener">' + esc(g1.text) + '</a>'
+        : esc(g1.text) };
+    }
     case 'email': {
       g1 = G(afterName); if (!g1) return null;
       var addr = g1.text.trim();
@@ -797,7 +816,11 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'href': {
       g1 = G(afterName); g2 = G(g1 ? g1.end + 1 : afterName);
       if (!g1 || !g2) return null;
-      return { next: g2.end + 1, html: '<a href="' + esc(g1.text.replace(/\\([{}%#&_$])/g, '$1')) + '" target="_blank">' + renderFlow(g2.text, ctx, base + g2.start, false, true) + '</a>' };
+      var uHref = safeUrl(g1.text.replace(/\\([{}%#&_$])/g, '$1'));
+      var label = renderFlow(g2.text, ctx, base + g2.start, false, true);
+      return { next: g2.end + 1, html: uHref
+        ? '<a href="' + esc(uHref) + '" target="_blank" rel="noopener">' + label + '</a>'
+        : label };
     }
 
     // ---- 导言命令写在正文里（\begin{document} 之后的 \title/\author/\date） ----
@@ -1398,7 +1421,9 @@ function parseColspec(spec) {
     if (c === 'X' || c === 'L' || c === 'C' || c === 'R') { align[j] = c === 'C' ? 'c' : c === 'R' ? 'r' : 'l'; j++; continue; } // tabularx 列
     if (c === 'p' || c === 'm' || c === 'b') {
       var e = spec.indexOf('{', i);
-      if (e > 0) { var be = spec.indexOf('}', e); widths[j] = spec.slice(e + 1, be > 0 ? be : spec.length); }
+      // 列宽会拼进 <td style="width:...">：只接受 TeX 尺寸（texDimCss 白名单），
+      // 其余（含注入载荷）丢弃，避免列格式串逃逸出属性区
+      if (e > 0) { var be = spec.indexOf('}', e); widths[j] = texDimCss(spec.slice(e + 1, be > 0 ? be : spec.length)) || ''; }
       align[j] = 'l'; j++; continue;
     }
     if (c === '@') { // @{...} 忽略

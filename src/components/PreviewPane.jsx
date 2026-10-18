@@ -7,6 +7,11 @@ import { loadPdfLibrary, pdfOptions } from '../pdf.js';
 let mermaidInited = false;
 let mermaidSeq = 0;
 
+// 错误消息要进 innerHTML，先转义（mermaid 报错常引用出错的图源码行）
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 /* 预览面板：HTML 注入 + Mermaid 懒加载 + 图工具条 + 节点选中联动 + 编译栏 */
 export default function PreviewPane({
   result, selection, onSelectNode, onSelMermaid, onSelectTable, onJumpOff, onScrollRatio, zoom, onZoom,
@@ -81,7 +86,8 @@ export default function PreviewPane({
       if (cancelled) return;
       const mermaid = mod.default;
       if (!mermaidInited) {
-        mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', htmlLabels: false, fontFamily: 'Georgia, "Noto Serif SC", serif' });
+        // strict：SVG 输出经 DOMPurify 清洗，图源码里的 click/href 指令不再原样放行
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, fontFamily: 'Georgia, "Noto Serif SC", serif' });
         mermaidInited = true;
       }
       blocks.forEach(b => {
@@ -93,7 +99,7 @@ export default function PreviewPane({
           if (svg) { svg.style.maxWidth = '100%'; svg.removeAttribute('height'); }
           setMmdTick(x => x + 1); // innerHTML 被替换，选中高亮需要重放
         }).catch(err => {
-          b.innerHTML = '<div class="render-error">' + t('prev.mermaidErr') + ' ' + String(err && err.message || err).slice(0, 160) + '</div>';
+          b.innerHTML = '<div class="render-error">' + t('prev.mermaidErr') + ' ' + escHtml(String(err && err.message || err).slice(0, 160)) + '</div>';
           setMmdTick(x => x + 1);
         });
       });
