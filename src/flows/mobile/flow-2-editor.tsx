@@ -175,6 +175,8 @@ function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
         onInit={(cm: unknown) => { ws.cmRef.current = cm }}
         spellcheck={texLike || tab.kind === 'md'}
         grammarCheck={sharedSettings.grammarCheck === true && (texLike || tab.kind === 'md')}
+        aiProofread={sharedSettings.aiProofread === true && (texLike || tab.kind === 'md')}
+        aiChannel={(ws.channels as Array<{ id: string }> || []).filter(c => c.id === ws.activeChannelId)[0] as never}
         typewriter={sharedSettings.typewriter === true}
         refCompletion={refCompletion}
         completion={{ texLike, pool: completionPool, userCommands }}

@@ -562,6 +562,11 @@ body.cp-dragging::before {
   background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><path d='M0 2.6 L1.5 0.4 L3 2.6 L4.5 0.4 L6 2.6' fill='none' stroke='%23a76fd4' stroke-width='0.9'/></svg>") repeat-x left bottom / 6px 3px;
   padding-bottom: 2px;
 }
+/* AI 用词检测：青波浪，第三档（拼蓝 / LT紫 / AI青） */
+.pl-ai-grammar {
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><path d='M0 2.6 L1.5 0.4 L3 2.6 L4.5 0.4 L6 2.6' fill='none' stroke='%231f9e8e' stroke-width='0.9'/></svg>") repeat-x left bottom / 6px 3px;
+  padding-bottom: 2px;
+}
 
 /* ---------- \ref / \cite 补全弹层（show-hint 换肤到主题变量） ---------- */
 .CodeMirror-hints {

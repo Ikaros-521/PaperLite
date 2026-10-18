@@ -9,7 +9,7 @@
     "prebuild": "node scripts/texlive-manifest.mjs --check",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/smoke.mjs && node test/editorTools.mjs && node test/findModel.mjs && node test/history.mjs && node test/compileProject.mjs && node test/reviewRegressions.mjs && node test/fileTree.mjs && node test/documentSafety.mjs && node test/chatContext.mjs && node test/agentTools.mjs && node test/agentRuntime.mjs && node test/previewJump.mjs && node test/spellcheck.mjs && node test/projectIndex.mjs && node test/mainDoc.mjs && node test/completion.mjs && node test/citation.mjs && node test/citationSearch.mjs && node test/grammar.mjs && node test/searchIndex.mjs && node test/snippets.mjs && node test/tableMutations.mjs && node test/pdfSync.mjs",
+    "test": "node test/smoke.mjs && node test/editorTools.mjs && node test/findModel.mjs && node test/history.mjs && node test/compileProject.mjs && node test/reviewRegressions.mjs && node test/fileTree.mjs && node test/documentSafety.mjs && node test/chatContext.mjs && node test/agentTools.mjs && node test/agentRuntime.mjs && node test/previewJump.mjs && node test/spellcheck.mjs && node test/projectIndex.mjs && node test/mainDoc.mjs && node test/completion.mjs && node test/citation.mjs && node test/citationSearch.mjs && node test/grammar.mjs && node test/aiProofread.mjs && node test/searchIndex.mjs && node test/snippets.mjs && node test/tableMutations.mjs && node test/pdfSync.mjs",
     "test:xelatex": "node scripts/texlive-manifest.mjs --check && node test/xelatex.mjs",
     "tex:manifest": "node scripts/texlive-manifest.mjs",
     "tex:warm": "node scripts/texlive-manifest.mjs --check && node test/xelatex.mjs --write-warm"

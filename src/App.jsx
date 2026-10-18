@@ -143,10 +143,11 @@ export default function App() {
         autoCompile: ['off', 'save', 'idle'].includes(s.autoCompile) ? s.autoCompile : 'off',
         vimMode: s.vimMode === true,
         grammarCheck: s.grammarCheck === true,
+        aiProofread: s.aiProofread === true,
         typewriter: s.typewriter === true,
       };
     }
-    catch { return { fontSize: 14, lineWrapping: true, syncScroll: true, spellcheck: true, autoCompile: 'off', vimMode: false, grammarCheck: false, typewriter: false }; }
+    catch { return { fontSize: 14, lineWrapping: true, syncScroll: true, spellcheck: true, autoCompile: 'off', vimMode: false, grammarCheck: false, aiProofread: false, typewriter: false }; }
   });
   const [syncScroll, setSyncScroll] = useState(editorSettings.syncScroll);
   const [fileDialog, setFileDialog] = useState(null);
@@ -1295,6 +1296,8 @@ export default function App() {
               findReq={findReq}
               spellcheck={editorSettings.spellcheck && (isTexLike || isMd)}
               grammarCheck={editorSettings.grammarCheck && (isTexLike || isMd)}
+              aiProofread={editorSettings.aiProofread && (isTexLike || isMd)}
+              aiChannel={channels.filter(c => c.id === activeChannelId)[0]}
               typewriter={editorSettings.typewriter === true}
               refCompletion={refCompletion}
               completion={{ texLike: isTexLike, pool: completionPool, userCommands }}

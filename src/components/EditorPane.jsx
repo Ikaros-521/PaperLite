@@ -30,6 +30,8 @@ import 'codemirror/addon/fold/foldgutter.css';
 import { buildChecker, findTypos } from '../spellcheck.js';
 import { maskNonProse } from '../spellcheck.js';
 import { LT_ENDPOINT, CHUNK_MAX, CHUNKS_PER_RUN, splitChunks, buildRequestBody, parseMatches } from '../grammar.js';
+import { buildProofMessages, parseAIResult, proofChunks } from '../aiProofread.js';
+import { chat as llmChat } from '../llm.js';
 import { matchRefContext } from '../projectIndex.js';
 import { commandCandidates, fileCandidates, matchCommandToken, matchEnvToken, matchFileToken, envNeedsEnd, ENVIRONMENTS } from '../completion.js';
 import FindReplace from './FindReplace.jsx';
@@ -150,7 +152,7 @@ function buildLatexHint(refCompletionRef, completionRef) {
  * 查找/替换用自带的 FindReplace 面板（addon 的对话框没有跳转按钮与匹配计数）。
  * 诊断：行号左侧 gutter 红橙点（点击触发 AI 修复）+ 行内波浪线（VSCode 风格）。
  * 选中内容后在行号列旁弹出 AI 快捷条（对话 / 润色 / 翻译），动作交给上层 onSelectionAction。 */
-export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, grammarCheck, typewriter, refCompletion, completion, onImageFile, onForwardSync, onSelectionAction }) {
+export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, grammarCheck, aiProofread, aiChannel, typewriter, refCompletion, completion, onImageFile, onForwardSync, onSelectionAction }) {
   const hostRef = useRef(null);
   const cmRef = useRef(null);
   const marksRef = useRef([]);
@@ -258,6 +260,68 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     }
   }
 
+  // ---- AI 用词检测（可选、联网）：LanguageTool 查不出的搭配/可数性交给用户配置的 LLM ----
+  // 发送同样是遮罩文本（命令/公式不外发）；模型逐字引用原文片段，前端回定位画青色波浪线。
+  // 比 LT 更贵：停顿 5 秒才触发，长文按块轮转，每轮只查一块，多次停顿逐步覆盖全文
+  const aiProofEnabledRef = useRef(aiProofread === true);
+  aiProofEnabledRef.current = aiProofread === true;
+  const aiChannelRef = useRef(aiChannel || null);
+  aiChannelRef.current = aiChannel || null;
+  const aiTimerRef = useRef(null);
+  const aiGenRef = useRef(0);
+  const aiMarksRef = useRef([]);
+  const aiLastRef = useRef('');
+  const aiCursorRef = useRef(0);   // 下一块下标：内容没变时逐块推进，查完一轮就停
+  const aiFoundRef = useRef([]);   // 各块累积的结构化标记，重画时用
+  const clearAIMarks = () => {
+    aiMarksRef.current.forEach(m => { try { m.clear(); } catch (e) { /* ignore */ } });
+    aiMarksRef.current = [];
+  };
+  const drawAIMarks = () => {
+    clearAIMarks();
+    const cm = cmRef.current;
+    if (!cm) return;
+    const L = getLang();
+    for (const mk of aiFoundRef.current.slice(0, 200)) {
+      const tip = tr(L, 'gm.aiTag') + mk.msg + (mk.replacements.length ? '\n' + tr(L, 'gm.suggest') + mk.replacements.join(' / ') : '');
+      try {
+        aiMarksRef.current.push(cm.getDoc().markText(
+          { line: mk.line, ch: mk.from }, { line: mk.endLine, ch: mk.to },
+          { className: 'pl-ai-grammar', title: tip }));
+      } catch (e) { /* 行已被改短等边界忽略 */ }
+    }
+  };
+  const scheduleAIProof = () => {
+    if (!aiProofEnabledRef.current) return;
+    clearTimeout(aiTimerRef.current);
+    aiTimerRef.current = setTimeout(runAIProof, 5000);
+  };
+  async function runAIProof() {
+    const cm = cmRef.current;
+    if (!cm || !aiProofEnabledRef.current) return;
+    const channel = aiChannelRef.current;
+    if (!channel || !channel.baseUrl) return;   // 未配置渠道：静默，不打扰写作
+    const gen = ++aiGenRef.current;
+    const value = cm.getValue();
+    if (!value.trim() || value.length > 120000) { clearAIMarks(); aiFoundRef.current = []; return; }
+    if (value !== aiLastRef.current) { aiLastRef.current = value; aiCursorRef.current = 0; aiFoundRef.current = []; }
+    const masked = maskNonProse(value);
+    const chunks = proofChunks(masked);
+    if (aiCursorRef.current >= chunks.length) return;   // 全文查完：等下次修改
+    const chunk = chunks[aiCursorRef.current];
+    let marks = [];
+    try {
+      const r = await llmChat(channel, buildProofMessages(chunk.text), { maxTokens: 1600, noReasoning: true, timeoutMs: 60000 });
+      if (gen !== aiGenRef.current) return;   // 输入已变/开关已关：丢弃本轮
+      marks = parseAIResult(r.content, masked, chunk.offset);
+    } catch (e) { aiCursorRef.current = (aiCursorRef.current + 1) % Math.max(1, chunks.length); return; /* 失败静默，轮转推进避免卡在同一块 */ }
+    if (gen !== aiGenRef.current) return;
+    if (cm.getValue() !== value) { scheduleAIProof(); return; }   // 期间又改了：重排
+    aiFoundRef.current = aiFoundRef.current.concat(marks);
+    aiCursorRef.current = (aiCursorRef.current + 1) % Math.max(1, chunks.length);
+    drawAIMarks();
+  }
+
   useEffect(() => {
     const cm = CodeMirror(hostRef.current, {
       value: '',
@@ -285,6 +349,7 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     cm.on('change', () => cb.current.onChange && cb.current.onChange(cm.getDoc(), cm.getValue()));
     cm.on('change', scheduleSpell);
     cm.on('change', scheduleGrammar);
+    cm.on('change', scheduleAIProof);
     // 打字机滚动：光标（含点击定位）始终居中。cursorCoords('local') 相对编辑器盒顶，
     // 折算回内容坐标（+scrollTop）再减半屏即目标滚动位置
     cm.on('cursorActivity', () => {
@@ -393,6 +458,8 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       clearTimeout(spellTimerRef.current);
       clearTimeout(grammarTimerRef.current);
       grammarGenRef.current++;
+      clearTimeout(aiTimerRef.current);
+      aiGenRef.current++;
       window.removeEventListener('mouseup', onMouseUp);
       // 先脱开共享 Doc（避免 StrictMode 双挂载时 “document is already in use”）
       try { cm.swapDoc(new CodeMirror.Doc('', 'stex')); } catch (e) { /* ignore */ }
@@ -414,6 +481,11 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       clearGrammarMarks();
       grammarLastRef.current = '';   // 换文档：内容变了，允许立即重新检查
       scheduleGrammar();
+      clearAIMarks();
+      aiLastRef.current = '';
+      aiCursorRef.current = 0;
+      aiFoundRef.current = [];
+      scheduleAIProof();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc]);
@@ -431,6 +503,13 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     else { clearTimeout(grammarTimerRef.current); grammarGenRef.current++; clearGrammarMarks(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grammarCheck]);
+
+  // AI 用词检测开关同语法检查；关掉时游标与累积结果一并作废
+  useEffect(() => {
+    if (aiProofread) scheduleAIProof();
+    else { clearTimeout(aiTimerRef.current); aiGenRef.current++; clearAIMarks(); aiFoundRef.current = []; aiCursorRef.current = 0; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiProofread]);
 
   // App 的 Ctrl+F / Ctrl+Shift+F 与「编辑 → 查找替换」都通过 findReq 递增来唤起面板
   useEffect(() => { if (findReq) setFindOpen(true); }, [findReq]);

@@ -134,6 +134,8 @@ export const DICT = {
     'file.vimMode': 'Vim 键位（编辑器）',
     'file.grammar': '语法检查（LanguageTool，联网）',
     'file.grammarHint': '停顿约 2 秒后，把正文（已隐去命令与公式）发送到 languagetool.org 公共接口；紫色波浪线标记，悬停看替换建议。默认关闭。',
+    'file.aiProofread': 'AI 用词检测（联网，走已配置 AI 渠道）',
+    'file.aiProofreadHint': 'LanguageTool 查不出的搭配与用词问题（如 documentation→document）交给 AI 渠道补查：停顿约 5 秒后发送正文（已隐去命令与公式），青色波浪线标记，长文分块轮转覆盖全文。消耗 token，默认关闭。',
     'file.theme': '界面皮肤',
     'file.themeHint': '只换界面配色；论文纸面与导出 PDF 始终是黑字白页。',
     'theme.ink': '墨纸书斋',
@@ -219,6 +221,7 @@ export const DICT = {
     'cite.p_openalex': 'OpenAlex（全学科）',
     'cite.p_dblp': 'DBLP（计算机科学）',
     'gm.suggest': '建议替换：',
+    'gm.aiTag': 'AI · ',
     // ---- 侧栏 ----
     'side.files': '文件', 'side.outline': '大纲', 'side.search': '项目搜索', 'side.issues': '问题',
     // ---- 项目搜索面板 ----
@@ -448,6 +451,14 @@ export const DICT = {
     'ai.compactSystem': '你是对话压缩器。只输出中文要点摘要，不要复述原文、不要评价、不要新增信息。',
     'ai.compactPrompt': '请把下面的历史对话压缩成要点摘要。必须保留：已达成的结论、用户明确提出的偏好与约束、' +
       '文档结构与未完成的任务、关键术语与数字。用简洁条目输出，总长控制在 300 字内：',
+    // ---- AI 用词检测（LanguageTool 查不出的搭配/可数性一类，走用户渠道） ----
+    'ai.proofSystem': '你是严谨的中英文校对器。只指出客观错误：语法错误、搭配不当、用词错误' +
+      '（例如指单个文档应用 document 却误用 documentation、可数/不可数误用、中文量词与名词错配）。' +
+      '不评论文风、语气与个人偏好，没有把握的不报。',
+    'ai.proofUser': '校对下面的正文（可能中英混排）。只输出一个 JSON 数组，不要任何其他文字、解释或代码块标记。' +
+      '每个元素形如 {"quote":"…","message":"…","suggestions":["…"]}。规则：quote 必须是正文中逐字连续出现的' +
+      '原文片段（用于回定位，一字不差，长度 2–80 字符）；message 用中文一句话说明问题；suggestions 为 0–3 个替换写法。' +
+      '最多 12 条，按把握从高到低排列；没有问题就输出 []。\n\n正文：\n{text}',
     // ---- 划词 AI 快捷条 ----
     'selpop.chat': 'AI 对话', 'selpop.polish': '润色', 'selpop.translate': '翻译',
     'ai.selChatPre': '请基于选中内容',
@@ -730,6 +741,8 @@ export const DICT = {
     'file.vimMode': 'Vim keybindings (editor)',
     'file.grammar': 'Grammar check (LanguageTool, online)',
     'file.grammarHint': 'About 2s after typing stops, the prose (commands and math masked out) is sent to the public languagetool.org API. Purple squiggle marks; hover for fixes. Off by default.',
+    'file.aiProofread': 'AI word-choice check (online, uses your AI channel)',
+    'file.aiProofreadHint': 'Collocation and word-choice issues the public LanguageTool API misses (e.g. documentation→document) are checked by your LLM channel: prose (commands and math masked out) is sent about 5s after typing stops, marked with teal squiggles; long documents are covered chunk by chunk. Costs tokens; off by default.',
     'file.theme': 'Interface skin',
     'file.themeHint': 'Chrome only — the paper and the exported PDF stay black-on-white.',
     'theme.ink': 'Ivory Study',
@@ -813,6 +826,7 @@ export const DICT = {
     'cite.p_openalex': 'OpenAlex (all fields)',
     'cite.p_dblp': 'DBLP (computer science)',
     'gm.suggest': 'Suggested fix: ',
+    'gm.aiTag': 'AI · ',
     'side.files': 'Files', 'side.outline': 'Outline', 'side.search': 'Project search', 'side.issues': 'Issues',
     // ---- Project search panel ----
     'gs.title': 'Search in project',
@@ -1028,6 +1042,16 @@ export const DICT = {
     'ai.compactSystem': 'You are a conversation compactor. Output only a terse bullet summary; do not repeat the transcript, do not comment, do not invent facts.',
     'ai.compactPrompt': 'Compact the following conversation history into a bullet summary. Keep: conclusions reached, ' +
       'explicit user preferences and constraints, document structure and unfinished tasks, key terms and numbers. Stay under 300 words:',
+    // ---- AI proofreading (collocation/countability issues the public LanguageTool API misses) ----
+    'ai.proofSystem': 'You are a rigorous Chinese/English proofreader. Report only objective errors: grammar mistakes, ' +
+      'wrong collocations, wrong word choice (e.g. using "documentation" for a single document where "document" is correct, ' +
+      'countable/uncountable misuse, mismatched Chinese measure words). Never comment on style, tone, or preferences; ' +
+      'skip anything you are not sure about.',
+    'ai.proofUser': 'Proofread the prose below (it may mix Chinese and English). Output only a JSON array — no other text, ' +
+      'no explanation, no code fences. Each element looks like {"quote":"…","message":"…","suggestions":["…"]}. Rules: ' +
+      'quote must be a verbatim contiguous fragment of the prose (it is used to locate the span — character for character, ' +
+      '2–80 characters long); message explains the issue in one short English sentence; suggestions holds 0–3 replacements. ' +
+      'At most 12 items, ordered by confidence; output [] if nothing is wrong.\n\nProse:\n{text}',
     // ---- Selection AI quick bar ----
     'selpop.chat': 'Ask AI', 'selpop.polish': 'Polish', 'selpop.translate': 'Translate',
     'ai.selChatPre': 'Based on the selected text, ',
