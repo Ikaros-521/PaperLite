@@ -52,6 +52,7 @@ export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload,
   const [pdf, setPdf] = useState(null), [pages, setPages] = useState([]);
   const [error, setError] = useState(''), [current, setCurrent] = useState(1);
   const [zoom, setZoom] = useState('fit'), [available, setAvailable] = useState(700);
+  const [spread, setSpread] = useState(false);
   useEffect(() => {
     let task, cancelled = false;
     setPdf(null); setPages([]); setError(''); setCurrent(1);
@@ -75,7 +76,26 @@ export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload,
     observer.observe(scroll.current);
     return () => observer.disconnect();
   }, []);
-  const scale = zoom === 'fit' ? Math.max(0.1, (available - 48) / (pages[0]?.width || 612)) : zoom;
+  // Ctrl+滚轮缩放：wheel 在 React 里是被动监听，preventDefault 必须走原生非被动监听
+  const scaleRef = useRef(1);
+  useEffect(() => {
+    const el = scroll.current;
+    if (!el) return undefined;
+    const onWheel = e => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      setZoom(z => {
+        const base = z === 'fit' ? scaleRef.current : z;
+        return Math.min(4, Math.max(0.25, Math.round(base * (e.deltaY < 0 ? 1.1 : 1 / 1.1) * 100) / 100));
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+  // 双页视图按两页宽算适配缩放（+16px 列间距）
+  const fitWidth = spread ? (pages[0]?.width || 612) * 2 + 16 : (pages[0]?.width || 612);
+  const scale = zoom === 'fit' ? Math.max(0.1, (available - 48) / fitWidth) : zoom;
+  scaleRef.current = scale;
   const jump = number => {
     const next = Math.max(1, Math.min(pages.length, Number(number) || 1));
     setCurrent(next);
@@ -110,12 +130,22 @@ export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload,
       <span>{Math.round(scale * 100)}%</span>
       <button className="btn sm" disabled={!pdf} aria-label={zh ? '放大' : 'Zoom in'} onClick={() => setZoom(Math.min(4, scale + 0.15))}>＋</button>
       <button className={'btn sm' + (zoom === 'fit' ? ' on' : '')} onClick={() => setZoom('fit')}>{zh ? '适合宽度' : 'Fit width'}</button>
+      <button className={'btn sm' + (spread ? ' on' : '')} disabled={!pdf || pages.length < 2}
+        title={zh ? '双页对开（Ctrl+滚轮缩放）' : 'Two-page spread (Ctrl+scroll to zoom)'}
+        aria-pressed={spread} onClick={() => setSpread(s => !s)}>{zh ? '双页' : '2-up'}</button>
     </div>
     <div className="pdf-scroll" ref={scroll} onScroll={trackScroll} tabIndex={0}>
       {error ? <div role="alert" className="pdf-message">{zh ? 'PDF 加载失败：' : 'PDF failed to load: '}{error}</div>
         : !pdf ? <div role="status" className="pdf-message">{zh ? '正在加载 PDF…' : 'Loading PDF…'}</div>
-        : pages.map((size, i) => <PdfPage key={url + i} pdf={pdf} number={i + 1} scale={scale}
-          {...size} root={scroll} />)}
+        : spread
+          ? Array.from({ length: Math.ceil(pages.length / 2) }, (_, r) => (
+            <div className="pdf-spread-row" key={url + 'row' + r}>
+              <PdfPage key={url + (r * 2)} pdf={pdf} number={r * 2 + 1} scale={scale} {...pages[r * 2]} root={scroll} />
+              {pages[r * 2 + 1] && <PdfPage key={url + (r * 2 + 1)} pdf={pdf} number={r * 2 + 2} scale={scale} {...pages[r * 2 + 1]} root={scroll} />}
+            </div>
+          ))
+          : pages.map((size, i) => <PdfPage key={url + i} pdf={pdf} number={i + 1} scale={scale}
+            {...size} root={scroll} />)}
     </div>
   </section>;
 }

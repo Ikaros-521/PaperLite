@@ -258,7 +258,7 @@ ok(kwBody.warnings.length === 0 && /<div class="doc-keywords">/.test(stripOff(kw
 const wideRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \begin{tabular*}{\textwidth}{ccc}\toprule A & B & C \\ \midrule 1 & 2 & 3 \\ \bottomrule\end{tabular*}
 \end{document}`);
-ok(wideRes.warnings.length === 0 && stripOff(wideRes.html).includes('<table class="tabular" style="width:100%">') && wideRes.html.includes('r-toprule'),
+ok(wideRes.warnings.length === 0 && /<table class="tabular" data-tid="\d+" style="width:100%">/.test(stripOff(wideRes.html)) && wideRes.html.includes('r-toprule'),
   'tabular* 按列格式排版并占满宽度: ' + wideRes.warnings.map(w => w.msg).join(' | '));
 const ltRes = renderLatex(String.raw`\documentclass{article}\begin{document}
 \begin{longtable}{cc}\caption{长表}\label{lt}\toprule 头 & 目 \\ \midrule \endfirsthead

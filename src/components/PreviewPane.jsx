@@ -9,7 +9,7 @@ let mermaidSeq = 0;
 
 /* 预览面板：HTML 注入 + Mermaid 懒加载 + 图工具条 + 节点选中联动 + 编译栏 */
 export default function PreviewPane({
-  result, selection, onSelectNode, onSelMermaid, onJumpOff, onScrollRatio, zoom, onZoom,
+  result, selection, onSelectNode, onSelMermaid, onSelectTable, onJumpOff, onScrollRatio, zoom, onZoom,
   panelOpen, onTogglePanel, syncScroll, onSyncToggle,
   engines, engine, setEngine, compiling, onCompile, onCancelCompile, hasCompile, builtinStatus,
   onOpenSettings, onOpenChat, assetDir, assetTabs = []
@@ -121,6 +121,22 @@ export default function PreviewPane({
       bar.appendChild(mk('SVG', svg => exportSvg(svg, 'figure.svg')));
       bar.appendChild(mk('PNG', svg => exportPng(svg, 'figure.png', 2)));
       d.appendChild(bar);
+    });
+    // 表格的可视化编辑入口：悬浮在表格上方出现「✎」，点开 TablePanel（不占用表格点击——
+    // 单元格点击仍走 data-off 回跳源码行）
+    paper.querySelectorAll('table.tabular[data-tid]').forEach(tbl => {
+      if (tbl.nextElementSibling && tbl.nextElementSibling.classList.contains('tbl-tools')) return;
+      const bar = document.createElement('div');
+      bar.className = 'tbl-tools';
+      const b = document.createElement('button');
+      b.textContent = '✎';
+      b.title = t('tb.openTip');
+      b.addEventListener('click', e => {
+        e.stopPropagation();
+        if (onSelectTable) onSelectTable(+tbl.getAttribute('data-tid'));
+      });
+      bar.appendChild(b);
+      tbl.insertAdjacentElement('afterend', bar);
     });
   }, [result]);
 

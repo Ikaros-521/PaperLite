@@ -76,6 +76,7 @@ export default function Toolbar({
   engines, engine, setEngine, compiling, onCompile, onCancelCompile, downloadPdf, builtinStatus,
   channelCount, onOpenChat, onOpenSettings, onAiFix,
   syncScroll, setSyncScroll, zoom, onZoom,
+  zen, setZen, typewriter, setTypewriter, snippets, onInsertSnippet, onManageSnippets,
   onHelp, lang, setLang,
   theme, setTheme, compact, sidebarOpen, onToggleSidebar, texDocument
 }) {
@@ -145,6 +146,7 @@ export default function Toolbar({
             <Mi icon="▦" label={t('m.selectAll')} hint="Ctrl+A" close={close} onClick={editOp('selectAll')} />
             <Mi icon="⌕" label={t('m.find')} hint="Ctrl+F" close={close} onClick={editOp('find')} />
             <Mi icon="⇄" label={t('m.replace')} hint="Ctrl+H" close={close} onClick={editOp('replace')} />
+            <Mi icon="⌕⌕" label={t('m.gSearch')} close={close} onClick={actions.gSearch} />
             <MSep />
             <Mi label={t('m.aiFix')} disabled={!channelCount} close={close} onClick={onAiFix} />
           </Mb>
@@ -170,6 +172,14 @@ export default function Toolbar({
             <Mi label={t('m.mermaid')} close={close} onClick={tool('tMermaid')} />
             <MSep />
             <Mi icon="[引]" label={t('m.cite')} close={close} onClick={tool('tBib')} />
+            <Mi icon="⌕" label={t('m.citeSearch')} close={close} disabled={!texDocument} onClick={tool('tCiteSearch')} />
+            <MiSub label={t('m.mySnippets')}>
+              {(snippets || []).map(s => (
+                <Mi key={s.id} label={s.name} close={close} onClick={() => onInsertSnippet(s.content)} />
+              ))}
+              {(snippets || []).length > 0 && <MSep />}
+              <Mi icon="✎" label={t('m.manageSnippets')} close={close} onClick={onManageSnippets} />
+            </MiSub>
             <Mi icon="†" label={t('m.footnote')} close={close} onClick={tool('tFn')} />
           </Mb>
 
@@ -180,6 +190,8 @@ export default function Toolbar({
               <Mi check={viewMode === 'preview'} label={t('m.vmPreview')} close={close} onClick={() => setViewMode('preview')} />
             </MiSub>
             <Mi check={syncScroll} label={t('m.syncScroll')} close={close} onClick={() => setSyncScroll(!syncScroll)} />
+            <Mi check={typewriter} label={t('m.typewriter')} close={close} onClick={() => setTypewriter(!typewriter)} />
+            <Mi check={zen} label={t('m.zen')} hint="Esc" close={close} onClick={() => setZen(!zen)} />
             <MSep />
             <MiSub label={t('m.theme')}>
               {THEME_IDS.map(id => (

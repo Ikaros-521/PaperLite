@@ -11,6 +11,7 @@ import EditorPane from './components/EditorPane.jsx';
 import PreviewPane from './components/PreviewPane.jsx';
 import PdfViewer from './components/PdfViewer.jsx';
 import StylePanel from './components/StylePanel.jsx';
+import TablePanel from './components/TablePanel.jsx';
 import FileTree from './components/FileTree.jsx';
 import TabsBar from './components/TabsBar.jsx';
 import OutlinePanel from './components/OutlinePanel.jsx';
@@ -25,6 +26,14 @@ import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
 import { collectLabels, collectBibKeys } from './projectIndex.js';
+import { resolveMainDoc, hasDocumentclass, loadMainDocSetting, saveMainDocSetting } from './mainDoc.js';
+import { collectUserCommands } from './completion.js';
+import { insertImageFile } from './imageInsert.js';
+import { PROVIDERS, makeBibKey, entryToBibTeX, referencedBibFiles } from './citation.js';
+import CiteDialog from './components/CiteDialog.jsx';
+import GlobalSearchPanel from './components/GlobalSearchPanel.jsx';
+import { collectSearchFiles, searchInFiles } from './searchIndex.js';
+import { loadSnippets, saveSnippets } from './snippets.js';
 
 import { samples } from './engines/samples.js';
 import { downloadFile, exportTex as exportTexFile, exportPDF } from './exporter.js';
@@ -120,11 +129,27 @@ export default function App() {
   });
   const [zoom, setZoom] = useState(1);
   const [editorSettings, setEditorSettings] = useState(() => {
-    try { const s = JSON.parse(localStorage.getItem('paperlite.editor-settings') || '{}'); return { fontSize: [12,14,16,18,20].includes(s.fontSize) ? s.fontSize : 14, lineWrapping: s.lineWrapping !== false, syncScroll: s.syncScroll !== false, spellcheck: s.spellcheck !== false }; }
-    catch { return { fontSize: 14, lineWrapping: true, syncScroll: true, spellcheck: true }; }
+    try {
+      const s = JSON.parse(localStorage.getItem('paperlite.editor-settings') || '{}');
+      return {
+        fontSize: [12,14,16,18,20].includes(s.fontSize) ? s.fontSize : 14,
+        lineWrapping: s.lineWrapping !== false,
+        syncScroll: s.syncScroll !== false,
+        spellcheck: s.spellcheck !== false,
+        autoCompile: ['off', 'save', 'idle'].includes(s.autoCompile) ? s.autoCompile : 'off',
+        vimMode: s.vimMode === true,
+        grammarCheck: s.grammarCheck === true,
+        typewriter: s.typewriter === true,
+      };
+    }
+    catch { return { fontSize: 14, lineWrapping: true, syncScroll: true, spellcheck: true, autoCompile: 'off', vimMode: false, grammarCheck: false, typewriter: false }; }
   });
   const [syncScroll, setSyncScroll] = useState(editorSettings.syncScroll);
   const [fileDialog, setFileDialog] = useState(null);
+  const [citeOpen, setCiteOpen] = useState(false);
+  // 沉浸模式：隐藏全部外壳只留编辑/预览；Esc 退出。自定义片段存 localStorage
+  const [zen, setZen] = useState(false);
+  const [snippets, setSnippets] = useState(() => loadSnippets());
   const [packaging, setPackaging] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -168,39 +193,59 @@ export default function App() {
   [isSvg, activeTab?.doc, activeValue]);
 
   // 编译链与移动端共用同一份；换文档时 hook 内部重绑上下文，迟到响应不会贴回旧错误
+  // getEntry：主文档入口（多文件项目从带 \documentclass 的主文件编译，而不是当前子文件）。
+  // 真正的实现在下面（依赖 mainDoc 等状态），这里用稳定的中转函数交给 hook，避免重编 compile
+  const getEntryRef = useRef(null);
+  const getEntryTrampoline = useCallback((...args) => (getEntryRef.current ? getEntryRef.current(...args) : null), []);
+  const rootDirRef = useRef(rootDir); rootDirRef.current = rootDir;
+  const tabPath = useCallback((tb) => (rootDirRef.current && tb.kind !== 'draft' && tb.handle ? (tb.path || tb.name) : tb.name), []);
+  const tabPathRef = useRef(tabPath); tabPathRef.current = tabPath;
   const {
-    engines, engine, setEngine, builtinStatus, compiling, compileResult, setCompileResult,
+    engines, engine, setEngine, builtinStatus, compiling, compileResult, setCompileResult, pdfIsStale,
     compile: runCompile, cancelCompile: doCancelCompile, retireErrors,
-  } = useCompile({ t, flash, alertBox: alert }, { tabsRef, activeTab, isTexLike });
+  } = useCompile({ t, flash, alertBox: alert }, { tabsRef, activeTab, isTexLike, getEntry: getEntryTrampoline });
 
-  // ---- 跨文件 \ref / \cite 索引：磁盘扫描（文件夹变化/保存时）+ 打开中的标签（随输入即时）----
-  const [folderIndex, setFolderIndex] = useState({ labels: [], bibKeys: [] });
+  // ---- 跨文件 \ref / \cite 索引 + 项目文件清单（主文档解析、文件名补全、项目搜索都吃它）----
+  // 磁盘扫描（文件夹变化/保存时）+ 打开中的标签（随输入即时）
+  const [folderIndex, setFolderIndex] = useState({ labels: [], bibKeys: [], texFiles: [], imageFiles: [], bibFiles: [], textFiles: [] });
   useEffect(() => {
     let cancelled = false;
-    if (!rootDir) { setFolderIndex({ labels: [], bibKeys: [] }); return undefined; }
+    if (!rootDir) { setFolderIndex({ labels: [], bibKeys: [], texFiles: [], imageFiles: [], bibFiles: [], textFiles: [] }); return undefined; }
     (async () => {
-      const labels = [], bibKeys = [];
+      const labels = [], bibKeys = [], texFiles = [], imageFiles = [], bibFiles = [], textFiles = [];
       let scanned = 0;
-      const walk = async (dir, depth) => {
+      const IMAGE = /\.(png|jpe?g|gif|svg|eps|webp|bmp)$/i;
+      const TEXT_EXTRA = /\.(md|markdown|txt)$/i;
+      const walk = async (dir, depth, prefix = '') => {
         if (cancelled || depth > 2 || scanned >= 30) return;
         let entries;
         try { entries = await fs.listDir(dir); } catch (e) { return; }
         for (const ent of entries) {
           if (cancelled || scanned >= 30) return;
-          if (ent.kind === 'directory') { await walk(ent.handle, depth + 1); continue; }
+          const path = prefix + ent.name;
+          if (ent.kind === 'directory') { await walk(ent.handle, depth + 1, path + '/'); continue; }
+          if (IMAGE.test(ent.name)) { imageFiles.push(path); continue; }
           const nm = ent.name.toLowerCase();
-          const isTex = nm.endsWith('.tex'), isBib = nm.endsWith('.bib');
-          if (!isTex && !isBib) continue;
+          const isTex = nm.endsWith('.tex'), isBib = nm.endsWith('.bib'), isText = TEXT_EXTRA.test(ent.name);
+          if (!isTex && !isBib && !isText) continue;
           let text;
           try { text = await fs.readFileText(ent.handle, 200 * 1024); } catch (e) { continue; } // 超大/二进制跳过
           scanned++;
-          const bag = isBib ? bibKeys : labels;
-          const found = isBib ? collectBibKeys(text) : collectLabels(text);
-          for (const k of found) bag.push({ key: k.key, src: ent.name });
+          if (isBib) {
+            // source/handle 留给项目搜索：磁盘 .bib 未打开也能搜到、搜到能打开
+            bibFiles.push({ path, source: text, handle: ent.handle });
+            for (const k of collectBibKeys(text)) bibKeys.push({ key: k.key, src: ent.name });
+          } else if (isTex) {
+            // source 留给主文档解析：磁盘上的主文档没打开时编译也要拿得到内容
+            texFiles.push({ path, name: ent.name, source: text, isMain: hasDocumentclass(text), handle: ent.handle });
+            for (const l of collectLabels(text)) labels.push({ key: l.key, src: ent.name });
+          } else {
+            textFiles.push({ path, source: text, handle: ent.handle });
+          }
         }
       };
       await walk(rootDir, 0);
-      if (!cancelled) setFolderIndex({ labels, bibKeys });
+      if (!cancelled) setFolderIndex({ labels, bibKeys, texFiles, imageFiles, bibFiles, textFiles });
     })();
     return () => { cancelled = true; };
   }, [rootDir, treeKey]);
@@ -221,6 +266,151 @@ export default function App() {
     return { labels, bibKeys };
   }, [tabs, activeId, activeValue, folderIndex]);
 
+  // ---- 主文档（编译入口）：固定设置按文件夹名隔离；候选 = 打开的 tex 标签（实时内容）→ 磁盘扫描 ----
+  const [mainDocSetting, setMainDocSetting] = useState(() => loadMainDocSetting());
+  const folderKeyRef = useRef(rootDir?.name || '_tabs');
+  folderKeyRef.current = rootDir?.name || '_tabs';
+  const setPinnedMainDoc = useCallback((path) => {
+    saveMainDocSetting(folderKeyRef.current, path);
+    setMainDocSetting(loadMainDocSetting());
+  }, []);
+  const pinnedMainDoc = mainDocSetting[folderKeyRef.current] || '';
+
+  const mainDocCandidates = useMemo(() => {
+    const list = [], seen = new Set();
+    const active = tabs.filter(x => x.id === activeId)[0] || tabs[0];
+    // 活动标签排最前：同为 open 候选时优先被探测
+    for (const tb of [active, ...tabs]) {
+      if (!tb || (tb.kind !== 'tex' && tb.kind !== 'draft') || !tb.doc) continue;
+      const path = tabPath(tb);
+      if (seen.has(path)) continue;
+      seen.add(path);
+      list.push({ path, name: tb.name, source: tb.id === activeId ? activeValue : tb.doc.getValue(), open: true });
+    }
+    for (const f of folderIndex.texFiles) {
+      if (seen.has(f.path)) continue; // 已打开的标签用编辑中的内容，磁盘版本不参与
+      seen.add(f.path);
+      list.push({ path: f.path, name: f.name, source: f.source, open: false, isMain: f.isMain });
+    }
+    return list;
+  }, [tabs, activeId, activeValue, folderIndex, tabPath]);
+
+  const mainDoc = useMemo(() => resolveMainDoc({
+    pinned: pinnedMainDoc || null,
+    activePath: activeTab ? tabPath(activeTab) : null,
+    candidates: mainDocCandidates,
+  }), [pinnedMainDoc, mainDocCandidates, activeTab, tabPath]);
+  const mainDocRef = useRef(mainDoc); mainDocRef.current = mainDoc;
+
+  // 编译入口装配：打开的主文档标签用实时内容；磁盘主文档按相对路径逐段取句柄
+  const getEntry = useCallback(async () => {
+    const md = mainDocRef.current;
+    if (!md) return null;
+    if (md.open) {
+      const tb = tabsRef.current.filter(x => tabPathRef.current(x) === md.path)[0];
+      if (tb?.doc) return { source: tb.doc.getValue(), name: tb.name, parentDir: tb.parentDir || rootDirRef.current, entryTabId: tb.id };
+      return null; // 标签刚被关闭：退回当前标签，下一轮扫描会纠正
+    }
+    const root = rootDirRef.current;
+    if (!root) return null;
+    const parts = String(md.path).split('/');
+    const name = parts.pop();
+    let dir = root;
+    for (const seg of parts) {
+      try { dir = await dir.getDirectoryHandle(seg); } catch (e) { return null; }
+    }
+    try {
+      const fh = await dir.getFileHandle(name);
+      return { source: await fs.readFileText(fh, 2 * 1024 * 1024), name, parentDir: dir, entryTabId: null };
+    } catch (e) { return null; }
+  }, [tabsRef]);
+  getEntryRef.current = getEntry;
+
+  // 设置里的主文档下拉选项（按 path 去重；label 直接用相对路径）
+  const mainDocOptions = useMemo(() => {
+    const seen = new Set();
+    return mainDocCandidates.filter(c => { if (seen.has(c.path)) return false; seen.add(c.path); return true; })
+      .map(c => ({ path: c.path, label: c.path }));
+  }, [mainDocCandidates]);
+
+  // 补全池：\input / \includegraphics / \bibliography 的文件名候选（打开的标签 ∪ 磁盘扫描）
+  const completionPool = useMemo(() => {
+    const tex = [...folderIndex.texFiles.map(f => f.path)];
+    const image = [...folderIndex.imageFiles];
+    const bib = [...folderIndex.bibFiles.map(f => f.path)];
+    for (const tb of tabs) {
+      const nm = tb.name || '';
+      const path = tabPath(tb);
+      if ((tb.kind === 'tex' || tb.kind === 'draft') && !tex.includes(path)) tex.push(path);
+      if (tb.kind === 'image' && !image.includes(nm)) image.push(nm);
+      if (/\.bib$/i.test(nm) && !bib.includes(path)) bib.push(path);
+    }
+    return { tex, image, bib };
+  }, [folderIndex, tabs, tabPath]);
+  // 文档内 \newcommand 定义的命令并入命令补全候选
+  const userCommands = useMemo(() => collectUserCommands(
+    tabs.filter(x => x.doc).map(x => (x.id === activeId ? activeValue : x.doc.getValue()))
+  ), [tabs, activeId, activeValue]);
+
+  // ---- 文献检索插入：选中条目 → 生成 BibTeX 追加到 .bib 标签 + 光标处插 \cite ----
+  // 目标 .bib 优先级：文档 \bibliography/\addbibresource 引用的 → 已打开的 .bib → refs.bib（新建）
+  const insertCitation = useCallback(async (entry) => {
+    const cur = tabsRef.current.filter(x => x.id === activeId)[0];
+    if (!cur?.doc || !isTexLike) { flash(t('cite.onlyTex')); return; }
+    const taken = new Set(refCompletion.bibKeys.map(k => k.key));
+    const key = makeBibKey(entry, taken);
+    const bibtex = entryToBibTeX(entry, key);
+
+    const wanted = referencedBibFiles(cur.doc.getValue());
+    let target = null;
+    for (const w of wanted) {
+      target = tabsRef.current.find(x => x.doc && /\.bib$/i.test(x.name) && (x.name === w || x.name.endsWith('/' + w)));
+      if (target) break;
+    }
+    if (!target) target = tabsRef.current.find(x => x.doc && /\.bib$/i.test(x.name)) || null;
+
+    const backId = cur.id;
+    let prefilled = false;
+    if (!target) {
+      const name = wanted[0] || 'refs.bib';
+      if (rootDir) {
+        try {
+          const fh = await rootDir.getFileHandle(name);
+          target = await openFileTab(fh, name, rootDir);   // 磁盘已有：打开为标签（会切过去，稍后切回）
+        } catch (e) {
+          try {
+            const fh = await fs.createFile(rootDir, name);
+            await fs.writeFileText(fh, bibtex + '\n');      // 新建文件直接带上首条
+            setTreeKey(n => n + 1);
+            const info = infoFor(name);
+            target = makeTab({ name, kind: info.kind, handle: fh, parentDir: rootDir, text: bibtex + '\n', modeSpec: info.mode, saved: bibtex + '\n', historyScope: rootDir.name || '' });
+            setTabs(ts => ts.concat(target));
+            prefilled = true;
+          } catch (err) { /* 写不了盘就退回内存标签 */ }
+        }
+      }
+      if (!target && !prefilled) {
+        const info = infoFor(name);
+        target = makeTab({ name, kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
+        setTabs(ts => ts.concat(target));
+      }
+    }
+    if (!target?.doc) { flash(t('cite.noBibTarget')); return; }
+    if (!prefilled) {
+      const base = target.doc.getValue();
+      const sep = base ? (base.endsWith('\n\n') ? '' : base.endsWith('\n') ? '\n' : '\n\n') : '';
+      target.doc.replaceRange(sep + bibtex + '\n', target.doc.posFromIndex(base.length), undefined, '+input');
+      // 追加发生在未挂载的 Doc 上，不经过编辑器的 change 事件——手动补脏标记，
+      // 否则关闭标签时会跳过「未保存确认」把刚追加的条目一起丢掉
+      setTabs(ts => ts.map(x => x.doc === target.doc ? { ...x, dirty: x.doc.getValue() !== x.saved } : x));
+    }
+    // 回到原文档光标处插 \cite：直接写 Doc，不依赖当前编辑器挂载的是哪个文档
+    const pos = cur.doc.getCursor();
+    cur.doc.replaceRange('\\cite{' + key + '}', pos, pos, '+input');
+    setActiveId(backId);
+    flash(t('cite.inserted', { cmd: '\\cite{' + key + '}', file: target.name }));
+  }, [activeId, isTexLike, refCompletion, rootDir, openFileTab, flash, t]);
+
   // 桌面在这里决定"编译完看哪里"：切 PDF / 切日志，窄屏顺带切到预览
   const doCompile = async () => {
     const status = await runCompile();
@@ -234,7 +424,34 @@ export default function App() {
     }
   };
 
+  // ---- 自动编译：保存时 / 输入停顿后。quiet 模式不动视图、成功不 flash，问题栏照常反映 ----
+  const settingsRef = useRef(editorSettings); settingsRef.current = editorSettings;
+  const autoCompileNow = useCallback(() => { runCompile({ quiet: true }); }, [runCompile]);
+  const saveActiveAuto = useCallback(async () => {
+    const wasTex = isTexLike;
+    await saveActive();
+    if (settingsRef.current.autoCompile === 'save' && wasTex) autoCompileNow();
+  }, [saveActive, isTexLike, autoCompileNow]);
+  useEffect(() => {
+    if (editorSettings.autoCompile !== 'idle' || !isTexLike) return undefined;
+    const tid = setTimeout(() => {
+      if (compiling) return;
+      // 引擎还在装载/出错时不偷偷触发；首次编译必须由用户发起（内置引擎首编译要拉约 98MB 资源）
+      if (engine === 'builtin' && (builtinStatus === 'loading' || builtinStatus === 'error' || builtinStatus === 'idle')) return;
+      if (!compileResult) return; // 只「跟随」已编译过的会话
+      const md = mainDocRef.current;
+      const live = md ? md.source : activeValue;
+      if (live === compileResult.source) return; // 内容没变不重复编译
+      autoCompileNow();
+    }, 6000);
+    return () => clearTimeout(tid);
+    // activeValue 每次击键都变，effect 重跑即重置 6 秒窗口
+  }, [activeValue, editorSettings.autoCompile, isTexLike, compiling, engine, builtinStatus, compileResult, autoCompileNow]);
+
   useEffect(() => { llm.saveChannels(channels); }, [channels]);
+  // 沉浸模式：涂在 <body> 上让 CSS 隐藏全部外壳；片段变更即落盘（失败静默，编辑仍在内存）
+  useEffect(() => { document.body.classList.toggle('pl-zen', zen); }, [zen]);
+  useEffect(() => { saveSnippets(snippets); }, [snippets]);
   useEffect(() => {
     if (channels.length && !channels.some(c => c.id === activeChannelId)) setActiveChannelId(channels[0].id);
   }, [channels, activeChannelId]);
@@ -273,7 +490,17 @@ export default function App() {
     const settings = { ...editorSettings, syncScroll };
     try { localStorage.setItem('paperlite.editor-settings', JSON.stringify(settings)); } catch { /* ignore */ }
     const c = cmRef.current;
-    if (c) { c.setOption('lineWrapping', settings.lineWrapping); c.getWrapperElement().style.fontSize = settings.fontSize + 'px'; c.refresh(); }
+    if (c) {
+      c.setOption('lineWrapping', settings.lineWrapping);
+      c.getWrapperElement().style.fontSize = settings.fontSize + 'px';
+      // Vim 键位按需动态加载 addon（cm5-vim，别名接回 codemirror 包），不进主包；
+      // 关闭时立即回到默认键位
+      if (settings.vimMode) Promise.all([import('cm5-vim'), import('codemirror/addon/dialog/dialog.css')])
+        .then(() => { try { c.setOption('keyMap', 'vim'); } catch (e) { /* ignore */ } })
+        .catch(() => { /* 加载失败维持默认键位 */ });
+      else c.setOption('keyMap', 'default');
+      c.refresh();
+    }
   }, [editorSettings, syncScroll, cmReady]);
 
 
@@ -447,6 +674,32 @@ export default function App() {
     if (line != null) jumpToLine(line);
   }, [jumpToLine]);
 
+  // ---- 项目内搜索：跨打开标签（实时内容）+ 文件夹扫描（.tex/.bib/.md/.txt）----
+  const [gSearch, setGSearch] = useState({ query: '', regex: false, matchCase: false, wholeWord: false, result: null, busy: false });
+  const runGlobalSearch = useCallback(({ query, regex, matchCase, wholeWord }) => {
+    setGSearch(s => ({ ...s, busy: true }));
+    const tabsList = tabsRef.current
+      .filter(x => x.doc)
+      .map(x => ({ path: tabPath(x), name: x.name, text: x.id === activeId ? activeValue : x.doc.getValue() }));
+    const disk = [
+      ...folderIndex.texFiles.map(f => ({ path: f.path, text: f.source })),
+      ...folderIndex.bibFiles.map(f => ({ path: f.path, text: f.source })),
+      ...folderIndex.textFiles.map(f => ({ path: f.path, text: f.source })),
+    ];
+    const result = searchInFiles(collectSearchFiles(tabsList, disk), { query, regex, matchCase, wholeWord });
+    setGSearch(s => ({ ...s, busy: false, result }));
+  }, [folderIndex, activeValue, activeId, tabPath]);
+  const openSearchResult = useCallback(async (path, line) => {
+    setSidebarOpen(false);
+    const tab = tabsRef.current.find(x => tabPath(x) === path);
+    if (tab) { setActiveId(tab.id); jumpToLine(line); return; }   // jumpToLine 的 rAF 兜住换文档时序
+    const entry = [...folderIndex.texFiles, ...folderIndex.bibFiles, ...folderIndex.textFiles].find(f => f.path === path);
+    if (entry?.handle) {
+      const opened = await openFileTab(entry.handle, entry.path, rootDir);
+      if (opened) requestAnimationFrame(() => jumpToLine(line));
+    }
+  }, [folderIndex, rootDir, openFileTab, tabPath, jumpToLine]);
+
   // ---- 文件/模板 ----
   const openSingleFile = async () => {
     if (typeof window.showOpenFilePicker !== 'function') {
@@ -560,7 +813,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key === 's') { e.preventDefault(); if (!e.target.closest?.('.CodeMirror')) saveActive(); }
+      if (mod && e.key === 's') { e.preventDefault(); if (!e.target.closest?.('.CodeMirror')) saveActiveAuto(); }
       if (mod && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
       // 编译与导出走键盘：写作时不该为了出稿去菜单里找
       if (mod && e.key === 'Enter') { e.preventDefault(); doCompile(); }
@@ -583,6 +836,8 @@ export default function App() {
         e.preventDefault();
         reqFind('replace');
       }
+      // 沉浸模式退出：Esc（补全菜单或对话框开着时不退出——那些 Esc 有自己的语义）
+      if (e.key === 'Escape' && zen && !document.querySelector('dialog[open], .CodeMirror-hints')) { e.preventDefault(); setZen(false); }
       const editorFocused = e.target.closest?.('.CodeMirror');
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'b' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tB', null, { markdown: isMd }); }
       if (editorFocused && (e.ctrlKey || e.metaKey) && e.key === 'i' && (isTexLike || isMd)) { e.preventDefault(); quickInsert(cm(), 'tI', null, { markdown: isMd }); }
@@ -766,7 +1021,9 @@ export default function App() {
   const downloadCurrentPdf = async () => {
     const result = compileResult;
     if (!result?.ok || result.tabId !== activeTab?.id) return;
-    if (result.source !== activeTab.doc.getValue() && !await showConfirm(t('prev.downloadStale'))) return;
+    if (result.staleNow ? result.staleNow() : result.source !== activeTab.doc.getValue()) {
+      if (!await showConfirm(t('prev.downloadStale'))) return;
+    }
     return downloadCompiled(result);
   };
 
@@ -790,7 +1047,8 @@ export default function App() {
           submit: () => setFileDialog('submit'), settings: () => setFileDialog('settings'),
           sourceZip: exportProject, packaging, pdfAvailable: isTexLike || isMd,
           exportSource: () => downloadFile(activeTab.name, activeTab.doc.getValue(), 'text/plain;charset=utf-8'),
-          newFile, loadTemplate, openFile: openSingleFile, openFolder, save: saveActive,
+          newFile, loadTemplate, openFile: openSingleFile, openFolder, save: saveActiveAuto,
+          gSearch: () => { setSideTab('search'); setSidebarOpen(true); },
           exportTex: () => {
             if (isTexLike) exportTexFile(activeValue, ((activeTab.name || 'paper').replace(/\.(tex|md)$/i, '')) + '.tex');
             else downloadFile(activeTab.name, activeValue, 'text/plain;charset=utf-8');
@@ -826,51 +1084,14 @@ export default function App() {
                 inp.onchange = async () => {
                   const f = inp.files && inp.files[0];
                   if (!f) return;
-                  try {
-                    if (isMd && !/\.pdf$/i.test(f.name)) {
-                      const data = await new Promise((resolve, reject) => {
-                        const reader = new FileReader(); reader.onload = () => resolve(reader.result);
-                        reader.onerror = () => reject(reader.error); reader.readAsDataURL(f);
-                      });
-                      targetDoc.replaceRange('\n![' + f.name + '](' + data + ')\n', from, to, '+input');
-                      return;
-                    }
-                    const original = f.name.replace(/[%#{}~^]/g, '_');
-                    if (!validName(original)) throw new Error(t('app.badFileName'));
-                    let name = original, suffix = 1;
-                    for (;;) {
-                      let exists = tabsRef.current.some(tab => tab.name === name);
-                      if (dir) {
-                        try { await dir.getFileHandle(name); exists = true; }
-                        catch (error) { if (error.name !== 'NotFoundError') throw error; }
-                      }
-                      if (!exists) break;
-                      const dot = original.lastIndexOf('.');
-                      name = (dot > 0 ? original.slice(0, dot) : original) + ' (' + suffix++ + ')' + (dot > 0 ? original.slice(dot) : '');
-                    }
-                    if (dir) {
-                      const handle = await fs.createFile(dir, name);
-                      const writable = await handle.createWritable();
-                      await writable.write(f); await writable.close();
-                      setTreeKey(n => n + 1);
-                    } else {
-                      const asset = makeTab({ name, kind: infoFor(name).kind, imageUrl: URL.createObjectURL(f) });
-                      asset.uploadedFile = f;
-                      setTabs(ts => ts.concat(asset));
-                    }
-                    const snippet = isMd ? '\n' + (/\.pdf$/i.test(name) ? '' : '!') + '[' + name + '](' + name + ')\n'
-                      : '\n\\begin{figure}[h]\n\\centering\n\\includegraphics[width=0.7\\textwidth]{' + name + '}\n\\caption{' + t('app.imageCaption') + '}\n\\label{fig:img-' + Date.now() + '}\n\\end{figure}\n';
-                    targetDoc.replaceRange(snippet, from, to, '+input');
-                    if (!isMd) {
-                      const value = targetDoc.getValue();
-                      if (!/\\(?:usepackage|RequirePackage)(?:\s*\[[^\]]*\])?\s*\{[^}]*\bgraphicx\b/.test(value)) {
-                        const begin = value.search(/^[ \t]*\\begin\s*\{document\}/m);
-                        if (begin >= 0) targetDoc.replaceRange('\\usepackage{graphicx}\n', targetDoc.posFromIndex(begin), undefined, '+input');
-                      }
-                    }
-                  } catch (error) { alert(t('file.uploadFailed', { name: f.name, msg: error.message })); }
+                  await insertImageFile({ file: f, targetDoc, from, to, isMd, dir, tabsRef, setTabs, onTreeChanged: () => setTreeKey(n => n + 1), t, alertBox: alert });
                 };
                 inp.click();
+                return;
+              }
+              case 'tCiteSearch': {
+                if (!isTexLike) { flash(t('cite.onlyTex')); return; }
+                setCiteOpen(true);
                 return;
               }
               default: if (SNIP[id]) insert(SNIP[id]);
@@ -885,6 +1106,12 @@ export default function App() {
         channelCount={channelCount} onOpenChat={() => { setChatOpen(o => !o); setPanelOpen(false); }} onOpenSettings={() => setSettingsOpen(true)}
         onAiFix={() => startFix(visibleIssues)}
         syncScroll={syncScroll} setSyncScroll={setSyncScroll}
+        zen={zen} setZen={setZen}
+        typewriter={editorSettings.typewriter === true}
+        setTypewriter={v => setEditorSettings(s => ({ ...s, typewriter: !!v }))}
+        snippets={snippets}
+        onInsertSnippet={content => insert(content)}
+        onManageSnippets={() => setFileDialog('snippets')}
         zoom={zoom} onZoom={setZoomClamped}
         onHelp={openHelp}
         lang={lang} setLang={setLang}
@@ -897,6 +1124,7 @@ export default function App() {
           <div className="side-tabs">
             <button className={sideTab === 'files' ? 'on' : ''} title={t('side.files')} onClick={() => setSideTab('files')}>{lang === 'zh' ? '文' : '▤'}</button>
             <button className={sideTab === 'outline' ? 'on' : ''} title={t('side.outline')} onClick={() => setSideTab('outline')}>{lang === 'zh' ? '纲' : '≣'}</button>
+            <button className={sideTab === 'search' ? 'on' : ''} title={t('side.search')} onClick={() => setSideTab('search')}>{lang === 'zh' ? '搜' : '⌕'}</button>
             <button className={sideTab === 'issues' ? 'on' : ''} title={t('side.issues')} onClick={() => setSideTab('issues')}>{'⚠\uFE0E'}{issueCount ? <em>{issueCount}</em> : null}</button>
             <button title={t('m.history')} aria-label={t('m.history')} disabled={!activeTab?.doc} onClick={() => setFileDialog('history')}>↶</button>
           </div>
@@ -913,6 +1141,9 @@ export default function App() {
               </div>
             ))}
             {sideTab === 'outline' && <OutlinePanel kind={outlineKind} headings={outlineItems} onJump={jumpToHeading} />}
+            {sideTab === 'search' && (
+              <GlobalSearchPanel state={gSearch} setState={setGSearch} onSearch={runGlobalSearch} onOpen={openSearchResult} hasFolder={!!rootDir} />
+            )}
             {sideTab === 'issues' && (
               <DiagnosticsPanel
                 issues={visibleIssues}
@@ -948,12 +1179,20 @@ export default function App() {
               onChange={onDocChange}
               onInit={(c) => { cmRef.current = c; setCmReady(x => x + 1); }}
               onScrollRatio={handleScrollRatio}
-              onSave={saveActive}
+              onSave={saveActiveAuto}
               diagnostics={visibleIssues}
               onFixIssue={aiFixIssue}
               findReq={findReq}
               spellcheck={editorSettings.spellcheck && (isTexLike || isMd)}
+              grammarCheck={editorSettings.grammarCheck && (isTexLike || isMd)}
+              typewriter={editorSettings.typewriter === true}
               refCompletion={refCompletion}
+              completion={{ texLike: isTexLike, pool: completionPool, userCommands }}
+              onImageFile={(file, targetDoc, from, to) => insertImageFile({
+                file, targetDoc, from, to, isMd,
+                dir: (tabsRef.current.filter(x => x.id === activeId)[0] || {}).parentDir || rootDir,
+                tabsRef, setTabs, onTreeChanged: () => setTreeKey(n => n + 1), t, alertBox: alert,
+              })}
             />
           ) : (
             <div className="binary-note">
@@ -983,7 +1222,7 @@ export default function App() {
             </section>
           ) : previewMode === 'pdf' && compileResult?.ok && compileResult.tabId === activeTab?.id ? (
             <PdfViewer url={compileResult.pdfUrl} title={activeTab.name + ' · PDF'} lang={lang}
-              stale={compileResult.source !== activeValue} compiling={compiling} onCompile={doCompile}
+              stale={pdfIsStale} compiling={compiling} onCompile={doCompile}
               onDownload={downloadCurrentPdf} onClose={() => setPreviewMode('rich')} />
           ) : previewMode === 'log' && compileResult ? (
             <section id="previewPane">
@@ -1024,6 +1263,7 @@ export default function App() {
               selection={selection}
               onSelectNode={(did, sidx) => { setSelection({ did, sel: { type: 'node', sidx } }); setPanelOpen(true); setChatOpen(false); }}
               onSelMermaid={(block, id, cur) => { setSelection({ did: 0, sel: { type: 'mermaid', block, id, cur } }); setPanelOpen(true); setChatOpen(false); }}
+              onSelectTable={(id) => { setSelection({ did: 0, sel: { type: 'table', id } }); setPanelOpen(true); setChatOpen(false); }}
               onJumpOff={handleJumpOff}
               onScrollRatio={handleScrollRatio}
               zoom={zoom} onZoom={setZoomClamped}
@@ -1055,11 +1295,14 @@ export default function App() {
         <span className="st-path">{activeTab ? (activeTab.kind === 'draft' ? t('app.draftPath') : (activeTab.path || activeTab.name)) : ''}</span>
         {currentSaveState && <div className={'save-status ' + currentSaveState}>
           <span role="status" title={activeTab.saveError || t('save.' + currentSaveState + '.tip')}>{t('save.' + currentSaveState)}</span>
-          {currentSaveState !== 'diskSaved' && <button className="btn sm" disabled={activeTab.saving} onClick={() => currentSaveState === 'failed' ? saveActive() : activeTab.kind === 'draft' ? saveTabAs(activeTab) : saveActive()}>
+          {currentSaveState !== 'diskSaved' && <button className="btn sm" disabled={activeTab.saving} onClick={() => currentSaveState === 'failed' ? saveActiveAuto() : activeTab.kind === 'draft' ? saveTabAs(activeTab) : saveActiveAuto()}>
             {t(currentSaveState === 'failed' ? 'save.retry' : activeTab.kind === 'draft' || !activeTab.handle ? 'save.toFile' : 'm.save')}
           </button>}
         </div>}
         {isPristineDemo && <span className="st-chip" title={t('st.sampleTip')}>{t('st.sample')}</span>}
+        {isTexLike && mainDoc && mainDoc.path !== tabPath(activeTab) && (
+          <span className="st-chip" title={t('st.mainDocTip')}>⌂ {mainDoc.name || mainDoc.path}</span>
+        )}
         <span className="sep">·</span>
         <span className="st-detail">{wordText}</span>
         <span className="sep">·</span>
@@ -1078,7 +1321,10 @@ export default function App() {
       </footer>
 
       {viewMode !== 'edit' && isTexLike && cmReady >= 0 && (
-        <StylePanel open={panelOpen && !chatOpen} onClose={() => setPanelOpen(false)} result={latexResult} cm={cmRef.current} selection={selection} setSelection={setSelection} />
+        <StylePanel open={panelOpen && !chatOpen && selection.sel?.type !== 'table'} onClose={() => setPanelOpen(false)} result={latexResult} cm={cmRef.current} selection={selection} setSelection={setSelection} />
+      )}
+      {viewMode !== 'edit' && isTexLike && cmReady >= 0 && (
+        <TablePanel open={panelOpen && !chatOpen && selection.sel?.type === 'table'} onClose={() => setPanelOpen(false)} result={latexResult} cm={cmRef.current} selection={selection} />
       )}
 
       <ChatPanel
@@ -1097,6 +1343,7 @@ export default function App() {
       />
 
       <DialogHost />
+      {citeOpen && <CiteDialog onClose={() => setCiteOpen(false)} onInsert={insertCitation} />}
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1138,6 +1385,8 @@ export default function App() {
         settings={{ ...editorSettings, syncScroll }} onSettings={settings => { setEditorSettings(settings); setSyncScroll(settings.syncScroll); }}
         theme={theme} setTheme={setTheme}
         engines={engines} engine={engine} setEngine={setEngine}
+        mainDoc={pinnedMainDoc} mainDocOptions={mainDocOptions} onMainDoc={setPinnedMainDoc}
+        snippets={snippets} onSnippets={setSnippets}
         onSource={exportProject} busy={packaging} pdfAvailable={isTexLike || isMd} compiledPdf={!!compileResult?.ok}
         onPdf={compileResult?.ok ? downloadCurrentPdf : exportPdfPrint}
       />}

@@ -493,6 +493,11 @@ body.cp-dragging::before {
   background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><path d='M0 2.6 L1.5 0.4 L3 2.6 L4.5 0.4 L6 2.6' fill='none' stroke='%234f83cc' stroke-width='0.9'/></svg>") repeat-x left bottom / 6px 3px;
   padding-bottom: 2px;
 }
+/* LanguageTool 语法提示：紫波浪，与拼写蓝色再区分一档 */
+.pl-grammar {
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><path d='M0 2.6 L1.5 0.4 L3 2.6 L4.5 0.4 L6 2.6' fill='none' stroke='%23a76fd4' stroke-width='0.9'/></svg>") repeat-x left bottom / 6px 3px;
+  padding-bottom: 2px;
+}
 
 /* ---------- \ref / \cite 补全弹层（show-hint 换肤到主题变量） ---------- */
 .CodeMirror-hints {
@@ -1158,6 +1163,87 @@ figure.float .diagram { display: block; }
 .file-settings { display: grid; gap: 18px; padding: 8px 0 16px; }
 .file-settings label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .file-settings select { max-width: 240px; padding: 6px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--paper); color: inherit; }
+
+/* ---------- 文献检索 ---------- */
+.cite-dialog .modal-body { max-height: 65vh; }
+.cite-form { display: flex; gap: 8px; margin: 10px 0 12px; }
+.cite-form select { max-width: 220px; padding: 6px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--paper); color: inherit; }
+.cite-form input { flex: 1; min-width: 120px; padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--paper); color: inherit; }
+.cite-status { color: var(--ink-soft); font-size: 12.5px; margin: 0 0 8px; }
+.cite-results { display: flex; flex-direction: column; gap: 6px; }
+.cite-item { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: inherit; cursor: pointer; }
+.cite-item:hover { border-color: var(--accent); }
+.cite-title { font-weight: 600; font-size: 13px; color: var(--ink); }
+.cite-meta { font-size: 12px; color: var(--ink-soft); }
+.cite-src { font-size: 11px; color: var(--ink-faint); }
+/* 语法检查开关的说明小字 */
+.file-grammar span { display: flex; flex-direction: column; gap: 4px; }
+.file-grammar em { font-style: normal; }
+
+/* ---------- 项目搜索 ---------- */
+.gs-panel { display: flex; flex-direction: column; gap: 8px; min-height: 0; height: 100%; padding: 10px 10px 6px; }
+.gs-form { display: flex; gap: 6px; }
+.gs-form input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--paper); color: inherit; }
+.gs-flags { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.gs-flags .hint { flex-basis: 100%; font-size: 11px; }
+.gs-flag { min-width: 30px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.gs-status { margin: 0; font-size: 12px; color: var(--ink-soft); }
+.gs-status.bad { color: var(--warn-strong, var(--warn)); }
+.gs-results { overflow: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.gs-group { display: flex; flex-direction: column; gap: 2px; }
+.gs-file { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; color: var(--ink); padding: 2px 2px; border-bottom: 1px solid var(--line-soft); }
+.gs-file em { font-style: normal; color: var(--ink-faint); font-weight: 400; }
+.gs-hit { display: flex; gap: 8px; align-items: baseline; text-align: left; padding: 3px 4px; border: 0; border-radius: 4px; background: none; color: var(--ink-soft); font-size: 12px; cursor: pointer; width: 100%; }
+.gs-hit:hover { background: var(--hover); }
+.gs-lineno { flex: none; min-width: 26px; text-align: right; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.gs-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gs-line mark { background: rgba(var(--accent-rgb), .3); color: inherit; border-radius: 2px; padding: 0 1px; }
+/* 双页 PDF：一行两页，居中 */
+.pdf-spread-row { display: flex; gap: 16px; justify-content: center; }
+
+/* ---------- 表格可视化编辑 ---------- */
+/* 悬浮入口：贴在表格右上方，表格 hover 时出现（触屏常显） */
+.tbl-tools { display: none; justify-content: flex-end; gap: 4px; margin: -4px 0 2px; }
+table.tabular[data-tid]:hover + .tbl-tools, .tbl-tools:hover { display: flex; }
+.tbl-tools button, .tb-rowops .btn { min-width: 24px; padding: 1px 6px; font-size: 12px; }
+@media (hover: none) { .tbl-tools { display: flex; } }
+/* 面板本体复用图样式面板的滑入形态 */
+#tablePanel {
+  position: fixed; top: 64px; bottom: 36px; right: -340px; width: 320px;
+  background: var(--paper); border: 1px solid var(--line); border-right: 0; border-radius: 10px 0 0 10px;
+  box-shadow: -8px 6px 24px rgba(var(--shadow-rgb), .18); overflow-y: auto;
+  transition: right .22s ease; z-index: 60; font-size: 13px;
+}
+#tablePanel.open { right: 0; }
+#tablePanel .panel-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); font-weight: 700; color: var(--ink); }
+#tablePanel .panel-h .hint { flex: 1; font-weight: 400; }
+#tablePanel .panel-body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+.tb-rows { display: flex; flex-direction: column; gap: 4px; max-height: 46vh; overflow: auto; }
+.tb-row { display: flex; gap: 4px; align-items: center; }
+.tb-row input { flex: 1; min-width: 48px; padding: 4px 6px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--paper); color: inherit; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.tb-row input:disabled { opacity: .45; }
+.tb-rowops { display: flex; gap: 2px; }
+.tb-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.tb-spec { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-soft); }
+.tb-spec input { padding: 5px 8px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--paper); color: inherit; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+/* ---------- 沉浸模式：隐藏全部外壳，只留编辑/预览 ---------- */
+body.pl-zen #topbar, body.pl-zen #statusbar, body.pl-zen #sidebar,
+body.pl-zen #sideDivider, body.pl-zen #tabsBar, body.pl-zen #toolbelt { display: none; }
+body.pl-zen #layout { padding: 18px 28px; }
+body.pl-zen #editorCol, body.pl-zen #previewPane { border: 0; }
+/* 编辑区限宽到舒适的阅读宽度并居中（不限宽的沉浸只是全屏，不是专注） */
+body.pl-zen .CodeMirror-lines { max-width: 860px; margin: 0 auto; }
+/* ---------- 片段管理 ---------- */
+.sn-manager { display: flex; flex-direction: column; gap: 12px; }
+.sn-list { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow: auto; }
+.sn-item { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border: 1px solid var(--line-soft); border-radius: 6px; }
+.sn-name { border: 0; background: none; color: var(--ink); font-weight: 600; font-size: 13px; cursor: pointer; padding: 2px 4px; min-width: 90px; text-align: left; }
+.sn-name:hover { color: var(--accent-deep); }
+.sn-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-faint); }
+.sn-edit { display: flex; flex-direction: column; gap: 10px; }
+.sn-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-soft); }
+.sn-edit input, .sn-edit textarea { padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--paper); color: inherit; font: inherit; }
+.sn-edit textarea { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; resize: vertical; }
 /* ---------- 皮肤选择器 ---------- */
 .file-theme { display: flex; flex-direction: column; gap: 8px; }
 .file-theme-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

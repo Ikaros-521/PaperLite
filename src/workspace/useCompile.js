@@ -11,9 +11,12 @@ import { collectCompileFiles } from '../compileProject.js';
 
 /**
  * @param ui {{ t: Function, flash: Function, alertBox: Function }}
- * @param source {{ tabsRef: {current: any[]}, activeTab: any, isTexLike: boolean, autoWarm?: boolean }}
+ * @param source {{ tabsRef: {current: any[]}, activeTab: any, isTexLike: boolean, autoWarm?: boolean,
+ *   getEntry?: () => Promise<{source: string, name: string, parentDir: object|null, entryTabId: number|null}|null> }}
+ * getEntry：多文件项目的编译入口（主文档）。返回 null 或不传时退回「当前标签」，
+ * 移动端未接主文档，行为不变。
  */
-export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLike, autoWarm = true }) {
+export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLike, autoWarm = true, getEntry = null }) {
   const [engines, setEngines] = useState([]);
   const [engine, setEngine] = useState('builtin');
   const [builtinStatus, setBuiltinStatus] = useState('idle');
@@ -70,11 +73,12 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
 
   /**
    * 发起编译。
+   * @param {{ quiet?: boolean }} [opts] quiet = 自动编译：成功不 flash、失败不弹窗（问题栏与状态栏照常反映）
    * @returns {Promise<'ok'|'fail'|'cancelled'|'stale'|'blocked'>}
    */
-  const compile = useCallback(async () => {
+  const compile = useCallback(async (opts) => {
+    const quiet = !!(opts && opts.quiet);
     if (compiling) return 'blocked';
-    if (!isTexLike) { flashRef.current(t('app.onlyTexCompile')); return 'blocked'; }
     const tab = tabsRef.current.filter(x => x.id === (activeTab?.id ?? tabsRef.current[tabsRef.current.length - 1]?.id))[0];
     if (!tab?.doc) return 'blocked';
     if (engine !== 'builtin' && !engines.includes(engine)) {
@@ -82,18 +86,42 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
       return 'blocked';
     }
 
+    const owner = contextRef.current;
+    // 编译入口：默认当前标签；桌面传入 getEntry 时按主文档解析（子文件标签上也从主文档走）
+    let source = tab.doc.getValue();
+    let entryName = tab.name;
+    let entryTabId = tab.id;
+    let parentDir = tab.parentDir || null;
+    let entryIsTex = isTexLike;
+    if (getEntry) {
+      try {
+        const entry = await getEntry();
+        if (entry && typeof entry.source === 'string') {
+          source = entry.source;
+          entryName = entry.name || entryName;
+          entryTabId = entry.entryTabId != null ? entry.entryTabId : null;
+          parentDir = entry.parentDir != null ? entry.parentDir : parentDir;
+          entryIsTex = true;
+        }
+      } catch (e) { /* 主文档读取失败退回当前标签 */ }
+    }
+    if (!entryIsTex) { flashRef.current(t('app.onlyTexCompile')); return 'blocked'; }
+
     setCompiling(true);
     const abort = new AbortController();
     abortRef.current = abort;
-    const owner = contextRef.current;
-    const source = tab.doc.getValue();
     const tabId = tab.id;
+    // PDF 过期判据做成闭包随结果走：入口来自打开标签就比较其最新内容，
+    // 入口来自磁盘时用「项目里有未保存修改」近似（保存过的改动无法低成本察觉）
+    const staleNow = entryTabId != null
+      ? () => { const et = tabsRef.current.filter(x => x.id === entryTabId)[0]; return et?.doc ? et.doc.getValue() !== source : false; }
+      : () => (tabsRef.current || []).some(x => x.dirty && (!parentDir || x.parentDir === parentDir));
     retireErrors();
 
     try {
       let ok, pdfBytes, log, errors, errText, wasCancelled = false;
       if (engine === 'builtin') {
-        const files = await collectCompileFiles(tab, tabsRef.current);
+        const files = await collectCompileFiles({ ...tab, parentDir }, tabsRef.current);
         if (abort.signal.aborted) { flashRef.current(t('app.compileCancelled')); return 'cancelled'; }
         const r = await compileXeLaTeX(source, files);
         ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
@@ -122,22 +150,23 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
       if (ok) {
         if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
         pdfUrlRef.current = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
-        setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log, errors, engine, tabId, source });
-        flashRef.current(t('app.compileOk', { engine: engine === 'builtin' ? t('app.builtinEngine') : engine }));
+        setCompileResult({ ok: true, pdfUrl: pdfUrlRef.current, log, errors, engine, tabId, source, entryName, staleNow });
+        if (!quiet) flashRef.current(t('app.compileOk', { engine: engine === 'builtin' ? t('app.builtinEngine') : engine }));
         return 'ok';
       }
-      setCompileResult({ ok: false, log, errors, error: errText, engine, tabId, source });
+      setCompileResult({ ok: false, log, errors, error: errText, engine, tabId, source, entryName, staleNow });
       return 'fail';
     } catch (e) {
       if (contextRef.current !== owner) return 'stale';
       if (abort.signal.aborted || String(e && e.message || e) === 'cancelled') { flashRef.current(t('app.compileCancelled')); return 'cancelled'; }
-      alertBox(t('app.compileReqFailed', { msg: e.message || e }));
+      if (quiet) flashRef.current(t('app.compileReqFailed', { msg: e.message || e }));
+      else alertBox(t('app.compileReqFailed', { msg: e.message || e }));
       return 'fail';
     } finally {
       abortRef.current = null;
       setCompiling(false);
     }
-  }, [compiling, isTexLike, engine, engines, activeTab?.id, tabsRef, t, alertBox, retireErrors]);
+  }, [compiling, isTexLike, engine, engines, activeTab?.id, tabsRef, t, alertBox, retireErrors, getEntry]);
 
   /** 拆掉 Worker 立刻归还界面，长任务不该只能干等 */
   const cancelCompileNow = useCallback(() => {
@@ -152,7 +181,8 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
     compileResult, setCompileResult,
     compile, cancelCompile: cancelCompileNow, clearCompileResult: clearResult,
     retireErrors,
-    /** PDF 过期判据：编译时的源码与当前是否一致 */
-    pdfIsStale: !!compileResult?.ok && compileResult.source !== (activeTab?.doc ? activeTab.doc.getValue() : null),
+    /** PDF 过期判据：编译时入口源码与当前是否一致（主文档入口随结果携带闭包） */
+    pdfIsStale: !!compileResult?.ok && (compileResult.staleNow ? !!compileResult.staleNow()
+      : compileResult.source !== (activeTab?.doc ? activeTab.doc.getValue() : null)),
   };
 }

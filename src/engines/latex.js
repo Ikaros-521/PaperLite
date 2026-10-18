@@ -263,6 +263,7 @@ function renderLatex(srcRaw, opts) {
     footnotes: [],
     meta: { title: '', author: '', date: null, twocolumn: false, ctex: false, layout: FALLBACK, authorBlocks: [], thanks: [], heads: null, notice: '', keywords: '', institute: '' },
     diagrams: [],      // { id, svg, nodes, tikzsetRanges, wrapperId }
+    tables: [],        // { id, envStart/End, colspec(+区间), rows: [{contentStart/End, nextStart, cells:[{start,end,raw}]}] }
     refPos: {},        // ref key -> 引用处绝对偏移，供「未定义引用」回落到行号
     // off 为源码绝对偏移：警告只有挂上行号，问题栏才能给出「第 N 行」并点击跳转
     warn: function (m, off, kind) {
@@ -330,7 +331,7 @@ function renderLatex(srcRaw, opts) {
   if (ctx.footnotes.length) html += '<section class="footnotes"><hr/><ol>' + ctx.footnotes.map(function (f) { return '<li id="fn' + f.n + '">' + f.html + '</li>'; }).join('') + '</ol></section>';
 
   var stats = { chars: src.replace(/\s/g, '').length, words: countWords(src), cjk: (src.match(/[\u4e00-\u9fff]/g) || []).length };
-  return { html: html, meta: ctx.meta, warnings: ctx.warnings, diagrams: ctx.diagrams, stats: stats, headings: ctx.headings };
+  return { html: html, meta: ctx.meta, warnings: ctx.warnings, diagrams: ctx.diagrams, tables: ctx.tables, stats: stats, headings: ctx.headings };
 }
 
 function countWords(s) {
@@ -1102,8 +1103,8 @@ function renderEnv(env, ctx, absInnerStart) {
     }
 
     case 'cases': case 'matrix': case 'pmatrix': case 'bmatrix': case 'vmatrix': case 'Bmatrix': case 'array': case 'tabular': case 'tabularx': case 'tabular*': {
-      if (env.name === 'tabular') return renderTabular(inner, ctx, base);
-      if (env.name === 'tabularx' || env.name === 'tabular*') return renderTabular(inner, ctx, base, true, 'width:100%');
+      if (env.name === 'tabular') return renderTabular(inner, ctx, base, false, null, env);
+      if (env.name === 'tabularx' || env.name === 'tabular*') return renderTabular(inner, ctx, base, true, 'width:100%', env);
       // 数学环境出现在文本流中（少见），直接交给 KaTeX
       return '<div class="equation">' + renderMath('\\begin{' + env.name + '}' + inner + '\\end{' + env.name + '}', true, ctx, katexMacrosOf(ctx), base) + '</div>';
     }
@@ -1230,7 +1231,10 @@ function skipRowDecls(s) {
 // ---------------- tabular ----------------
 // widthArg=true：{宽度} 在列格式之前（tabularx/tabular*），误当成列格式会让整行错位（\toprule 掉进首格）
 // tableStyle：表格整体宽度等附加样式
-function renderTabular(inner, ctx, base, widthArg, tableStyle) {
+// env：来自 findEnv 的环境对象（outerStart/innerStart 等，相对当前流）。
+// 可视化表格编辑需要每个单元格/行/列格式的源码区间——渲染时顺手记录进 ctx.tables，
+// id 写到 <table data-tid>，TablePanel 据此把面板编辑精确写回源码（TikZ 图样式同款思路）。
+function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
   // 列格式 {} 前可能有 {宽度}（tabularx）或 [pos]（tabular[t]{...}）
   var pos = 0;
   if (widthArg) { var wg = readGroup(inner, 0); if (wg) pos = wg.end + 1; }
@@ -1275,6 +1279,9 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle) {
     return out;
   }
   var rawRows = depth0Split(bodyStr);
+  // 可视化编辑元数据：行的内容区间 + 每个单元格去空白后的源码区间与原文
+  var tblId = ctx.tables.length;
+  var tblRows = [];
   // 处理行内规则线
   var trs = [];
   var lastTrIdx = -1;
@@ -1298,9 +1305,11 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle) {
       pendingRule = (pendingRule || '') + ruleClass;
       return;
     }
+    var rowInfo = { contentStart: base + bodyStart + rr.start + consumed, contentEnd: base + bodyStart + rr.start + consumed + t.length, cells: [] };
     var cells = splitTopLevel(t, '&').map(function (c2, ci) {
       var lead = c2.text.length - c2.text.replace(/^\s+/, '').length;  // trim 掉的前导空白要补进偏移，回跳才落得到单元格行
       var raw = c2.text.trim();
+      var orig = raw;   // multicolumn 剥壳前的源码原文（面板按原文编辑）
       var span = 1;
       var mc = raw.match(/\\multicolumn\{(\d+)\}\s*\{[^}]*\}\s*\{/);
       if (mc) {
@@ -1308,7 +1317,9 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle) {
         var mcBe = braceEnd(raw, raw.indexOf('{', mc.index + mc[0].length - 1));
         raw = mcBe > 0 ? raw.slice(mc.index + mc[0].length, mcBe) + raw.slice(mcBe + 1) : raw;
       }
-      var cell = renderFlow(raw, ctx, base + bodyStart + rr.start + consumed + c2.start + lead, false);
+      var cellStart = base + bodyStart + rr.start + consumed + c2.start + lead;
+      rowInfo.cells.push({ start: cellStart, end: cellStart + orig.length, raw: orig });
+      var cell = renderFlow(raw, ctx, cellStart, false);
       var cls = [];
       if (cols.rules[ci]) cls.push('vline');
       if (cols.align[ci] === 'l') cls.push('ta-l');
@@ -1316,6 +1327,7 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle) {
       var w = cols.widths[ci] ? ' style="width:' + cols.widths[ci] + '"' : '';
       return '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + (cls.length ? ' class="' + cls.join(' ') + '"' : '') + w + '>' + cell + '</td>';
     }).join('');
+    tblRows.push(rowInfo);
     var trCls = (pendingRule || '') + ruleClass;
     pendingRule = null;
     trs.push('<tr class="' + trCls.trim() + '"' + (rr.gap ? ' style="--rg:' + rr.gap + '"' : '') + '>' + cells + '</tr>');
@@ -1326,7 +1338,34 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle) {
     trs[trs.length - 1] = trs[trs.length - 1].replace('<tr class="', '<tr class="' + pendingRule.trim() + ' ');
   }
 
-  return '<table class="tabular"' + (tableStyle ? ' style="' + tableStyle + '"' : '') + '><tbody>' + trs.join('') + '</tbody></table>';
+  // 行删除/插入需要「下一原始行的起点」：行内容 + 其 \\ 一并处理，规则线留给下一行
+  var nRaw = rawRows.length;
+  tblRows.forEach(function (rowInfo) {
+    // 找到该行对应的 rawRows 序号（contentStart 落在哪个 raw row 的区间里）
+    var hostRi = -1;
+    for (var ri = 0; ri < nRaw; ri++) {
+      var s = base + bodyStart + rawRows[ri].start;
+      if (s <= rowInfo.contentStart && rowInfo.contentStart < s + Math.max(rawRows[ri].text.length, 1)) { hostRi = ri; break; }
+    }
+    rowInfo.nextStart = hostRi >= 0 && hostRi + 1 < nRaw ? base + bodyStart + rawRows[hostRi + 1].start : rowInfo.contentEnd;
+    rowInfo.hasFollowingRow = hostRi >= 0 && hostRi + 1 < nRaw;
+  });
+
+  // 记录整表元数据（env 给出 \begin...\end 的绝对区间；colspec 内容区间直接可得）
+  var prefixLen = env && env.innerStart != null && env.outerStart != null ? env.innerStart - env.outerStart : '\\begin{tabular}'.length;
+  var endLen = env && env.outerEnd != null && env.innerEnd != null ? env.outerEnd - env.innerEnd : '\\end{tabular}'.length;
+  ctx.tables.push({
+    id: tblId,
+    envStart: base - prefixLen,
+    envEnd: base + inner.length + endLen,
+    colspec: colspec,
+    colspecStart: g ? base + g.start : -1,
+    colspecEnd: g ? base + g.end : -1,
+    cols: cols.align.length,
+    rows: tblRows,
+  });
+
+  return '<table class="tabular" data-tid="' + tblId + '"' + (tableStyle ? ' style="' + tableStyle + '"' : '') + '><tbody>' + trs.join('') + '</tbody></table>';
 }
 
 function splitTopLevel(s, sep) {

@@ -79,6 +79,6 @@ export default function QuickTools({ actions, onOpenChat, markdown, documentKey,
     {button('tImg', '▧', t('t.image'))}
     {menu('tTableMenu', '▥', t('q.table'), <><div className="quick-table-size">{size.cols} × {size.rows}</div><div className="quick-table-grid" onMouseLeave={() => setSize({ rows: 2, cols: 3 })}>{Array.from({ length: 36 }, (_, i) => { const rows = Math.floor(i / 6) + 1, cols = i % 6 + 1; return <button type="button" key={i} className={rows <= size.rows && cols <= size.cols ? 'active' : ''} aria-label={t('q.tableSize', { rows, cols })} title={t('q.tableSize', { rows, cols })} onFocus={() => setSize({ rows, cols })} onMouseEnter={() => setSize({ rows, cols })} onClick={() => run('tGridTable', { rows, cols })} />; })}</div>{!markdown && item('tTable', t('m.booktabs'))}</>)}<span className="tsep" />
     {menu('tListMenu', '☷', t('q.lists'), <>{item('tList', t('t.itemize'))}{item('tEnum', t('t.enumerate'))}</>)}
-    {menu('tMore', '···', t('q.more'), <>{item('tFlow', t('t.flow'))}{item('tMermaid', t('t.mermaid'))}{item('tBib', t('t.cite'))}{item('tFn', t('t.footnote'))}</>)}
+    {menu('tMore', '···', t('q.more'), <>{item('tFlow', t('t.flow'))}{item('tMermaid', t('t.mermaid'))}{item('tBib', t('t.cite'))}{item('tFn', t('t.footnote'))}{!markdown && <div className="mi-sep" />}{!markdown && item('tCiteSearch', t('t.citeSearch'))}</>)}
   </div>;
 }

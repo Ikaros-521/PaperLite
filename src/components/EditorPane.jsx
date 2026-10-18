@@ -22,8 +22,16 @@ import 'codemirror/addon/edit/matchbrackets';
 import 'codemirror/addon/selection/active-line';
 import 'codemirror/addon/hint/show-hint';
 import 'codemirror/addon/hint/show-hint.css';
+import 'codemirror/addon/fold/foldcode';
+import 'codemirror/addon/fold/foldgutter';
+import 'codemirror/addon/fold/brace-fold';
+import 'codemirror/addon/fold/indent-fold';
+import 'codemirror/addon/fold/foldgutter.css';
 import { buildChecker, findTypos } from '../spellcheck.js';
+import { maskNonProse } from '../spellcheck.js';
+import { LT_ENDPOINT, CHUNK_MAX, CHUNKS_PER_RUN, splitChunks, buildRequestBody, parseMatches } from '../grammar.js';
 import { matchRefContext } from '../projectIndex.js';
+import { commandCandidates, fileCandidates, matchCommandToken, matchEnvToken, matchFileToken, envNeedsEnd, ENVIRONMENTS } from '../completion.js';
 import FindReplace from './FindReplace.jsx';
 
 /* 词典懒加载：首次需要时才拉（静态托管约 2.7MB 原文，gzip 后小得多），
@@ -43,31 +51,97 @@ function loadSpellChecker() {
   return spellCheckerPromise;
 }
 
-/* 跨文件 \ref / \cite 补全：光标前行文本匹配出「命令 + 键片段」才给候选（matchRefContext）。
- * 命令含 cite 用 bibKeys，其余用 labels。逗号不在 closeCharacters 里，多键引用逗号后菜单仍在 */
-function refHintFrom(refCompletionRef) {
+/* 统一 LaTeX 补全（一个 hint 按优先级分派）：
+ *   \ref/\cite 键 → \begin{ 环境 → 文件参数 → \command 命令（内置表 + \newcommand）。
+ * 各上下文的匹配器在 src/completion.js（纯逻辑，可单测）；这里只负责取光标上下文、
+ * 组装候选与插入动作（命令模板光标落点、环境自动补 \end）。 */
+function buildLatexHint(refCompletionRef, completionRef) {
+  // 命令候选的插入：模板后缀里 '{' '[' 的第一个出现处是光标停留点
+  const applyCommand = (cand) => function (cm, data) {
+    const text = '\\' + cand.name + cand.suffix;
+    cm.replaceRange(text, data.from, data.to);
+    const nameLen = cand.name.length + 1;
+    const br = cand.suffix.indexOf('{'), brk = cand.suffix.indexOf('[');
+    let off = text.length;
+    if (br >= 0 && (brk < 0 || br < brk)) off = nameLen + br + 1;
+    else if (brk >= 0) off = nameLen + brk + 1;
+    cm.setCursor({ line: data.from.line, ch: data.from.ch + off });
+  };
+  // 环境候选的插入：补名字后看光标后的窗口，没有同名 \end 就顺手闭合
+  const applyEnv = (name) => function (cm, data) {
+    cm.replaceRange(name + '}', data.from, data.to);
+    const cur = cm.getCursor();
+    let after = '';
+    try { after = cm.getRange(cur, cm.posFromIndex(Math.min(cm.getValue().length, cm.indexFromPos(cur) + 3000))); } catch (e) { /* ignore */ }
+    if (envNeedsEnd(name, after)) {
+      cm.replaceRange('\n\\end{' + name + '}\n', cur);
+      cm.setCursor(cur);
+    }
+  };
   return function (cm) {
-    const comp = refCompletionRef.current;
-    if (!comp) return null;
     const cur = cm.getCursor();
     const before = (cm.getLine(cur.line) || '').slice(0, cur.ch);
+
+    // 1) \ref / \cite 键位（跨文件索引）
     const m = matchRefContext(before);
-    if (!m) return null;
-    const seg = m.segment;
-    const from = { line: cur.line, ch: cur.ch - seg.length };
-    const pool = m.isCite ? (comp.bibKeys || []) : (comp.labels || []);
-    const q = seg.toLowerCase();
-    const seen = new Set();
-    const list = [];
-    for (const k of pool) {
-      if (!k || !k.key || seen.has(k.key)) continue;
-      if (q && k.key.toLowerCase().indexOf(q) < 0) continue;
-      seen.add(k.key);
-      list.push({ text: k.key, displayText: k.src ? k.key + '  ·  ' + k.src : k.key });
-      if (list.length >= 50) break;
+    if (m) {
+      const comp = refCompletionRef.current;
+      if (comp) {
+        const from = { line: cur.line, ch: cur.ch - m.segment.length };
+        const pool = m.isCite ? (comp.bibKeys || []) : (comp.labels || []);
+        const q = m.segment.toLowerCase();
+        const seen = new Set();
+        const list = [];
+        for (const k of pool) {
+          if (!k || !k.key || seen.has(k.key)) continue;
+          if (q && k.key.toLowerCase().indexOf(q) < 0) continue;
+          seen.add(k.key);
+          list.push({ text: k.key, displayText: k.src ? k.key + '  ·  ' + k.src : k.key });
+          if (list.length >= 50) break;
+        }
+        if (list.length) return { list, from, to: cur };
+      }
+      return null;
     }
-    if (!list.length) return null;
-    return { list, from, to: cur };
+
+    const cp = completionRef.current;
+    if (!cp || !cp.texLike) return null;
+
+    // 2) \begin{ 环境
+    const env = matchEnvToken(before);
+    if (env) {
+      const q = env.partial.toLowerCase();
+      const names = ENVIRONMENTS.filter(n => !q || n.toLowerCase().startsWith(q)).slice(0, 40);
+      if (names.length) {
+        return { list: names.map(n => ({ text: n + '}', displayText: n, hint: applyEnv(n) })),
+          from: { line: cur.line, ch: cur.ch - env.partial.length }, to: cur };
+      }
+      return null;
+    }
+
+    // 3) 文件参数（\input / \includegraphics / \bibliography …）
+    const ft = matchFileToken(before);
+    if (ft) {
+      const paths = fileCandidates(ft.kind, ft.partial, cp.pool);
+      if (paths.length) {
+        return { list: paths.map(p => ({ text: p, displayText: p })),
+          from: { line: cur.line, ch: cur.ch - ft.partial.length }, to: cur };
+      }
+      return null;
+    }
+
+    // 4) \command 命令
+    const ct = matchCommandToken(before);
+    if (ct) {
+      const cands = commandCandidates(ct.token, cp.userCommands);
+      if (cands.length) {
+        return { list: cands.map(c => {
+          const text = '\\' + c.name + c.suffix;
+          return { text, displayText: text, hint: applyCommand(c) };
+        }), from: { line: cur.line, ch: ct.start }, to: cur };
+      }
+    }
+    return null;
   };
 }
 
@@ -75,23 +149,26 @@ function refHintFrom(refCompletionRef) {
  * 各文件独立撤销历史与光标）。mode 由 Doc 创建时指定。
  * 查找/替换用自带的 FindReplace 面板（addon 的对话框没有跳转按钮与匹配计数）。
  * 诊断：行号左侧 gutter 红橙点（点击触发 AI 修复）+ 行内波浪线（VSCode 风格）。 */
-export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, refCompletion }) {
+export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, grammarCheck, typewriter, refCompletion, completion, onImageFile }) {
   const hostRef = useRef(null);
   const cmRef = useRef(null);
   const marksRef = useRef([]);
   const [cmInst, setCmInst] = useState(null);
   const [findOpen, setFindOpen] = useState(false);
   const cb = useRef({});
-  cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue };
+  cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue, onImageFile };
   const refCompletionRef = useRef(refCompletion);
   refCompletionRef.current = refCompletion;
+  const completionRef = useRef(completion);
+  completionRef.current = completion;
+  const typewriterRef = useRef(typewriter === true);
+  typewriterRef.current = typewriter === true;
 
   // ---- 拼写检查：开关走 ref（初始化 effect 只挂一次监听），标记随 Doc 走 ----
   const spellEnabledRef = useRef(spellcheck !== false);
   spellEnabledRef.current = spellcheck !== false;
   const spellTimerRef = useRef(null);
-  const spellMarksRef = useRef([]);
-  const clearSpellMarks = () => {
+  const spellMarksRef = useRef([]);  const clearSpellMarks = () => {
     spellMarksRef.current.forEach(m => { try { m.clear(); } catch (e) { /* ignore */ } });
     spellMarksRef.current = [];
   };
@@ -121,15 +198,74 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     }
   }
 
+  // ---- LanguageTool 语法检查（可选、联网）：掩码后直连公共接口，失败静默 ----
+  // 发送的是遮罩文本：注释/公式/命令区域已替换为空格，不会把 LaTeX 结构发出去
+  const grammarEnabledRef = useRef(grammarCheck === true);
+  grammarEnabledRef.current = grammarCheck === true;
+  const grammarTimerRef = useRef(null);
+  const grammarGenRef = useRef(0);
+  const grammarMarksRef = useRef([]);
+  const grammarLastRef = useRef('');
+  const clearGrammarMarks = () => {
+    grammarMarksRef.current.forEach(m => { try { m.clear(); } catch (e) { /* ignore */ } });
+    grammarMarksRef.current = [];
+  };
+  const scheduleGrammar = () => {
+    if (!grammarEnabledRef.current) return;
+    clearTimeout(grammarTimerRef.current);
+    grammarTimerRef.current = setTimeout(runGrammar, 2000);
+  };
+  async function runGrammar() {
+    const cm = cmRef.current;
+    if (!cm || !grammarEnabledRef.current) return;
+    const gen = ++grammarGenRef.current;
+    const value = cm.getValue();
+    if (value === grammarLastRef.current) return;   // 内容没变不重复请求
+    if (!value.trim() || value.length > 120000) { clearGrammarMarks(); return; }
+    const masked = maskNonProse(value);
+    const chunks = splitChunks(masked, CHUNK_MAX, CHUNKS_PER_RUN);
+    const marks = [];
+    try {
+      for (const chunk of chunks) {
+        const r = await fetch(LT_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: buildRequestBody(chunk.text),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const json = await r.json();
+        if (gen !== grammarGenRef.current) return;   // 输入已变/开关已关：丢弃本轮
+        marks.push(...parseMatches(json, masked, chunk.offset));
+      }
+    } catch (e) { return; /* 公共接口限流/断网：语法检查是增值项，绝不打扰写作 */ }
+    if (gen !== grammarGenRef.current) return;
+    if (cm.getValue() !== value) { scheduleGrammar(); return; }   // 期间又改了：重排
+    grammarLastRef.current = value;
+    clearGrammarMarks();
+    const d = cm.getDoc();
+    const L = getLang();
+    for (const mk of marks.slice(0, 200)) {
+      const tip = mk.msg + (mk.replacements.length ? '\n' + tr(L, 'gm.suggest') + mk.replacements.join(' / ') : '');
+      try {
+        grammarMarksRef.current.push(d.markText(
+          { line: mk.line, ch: mk.from }, { line: mk.endLine, ch: mk.to },
+          { className: 'pl-grammar', title: tip }));
+      } catch (e) { /* 行已被改短等边界忽略 */ }
+    }
+  }
+
   useEffect(() => {
     const cm = CodeMirror(hostRef.current, {
       value: '',
       lineNumbers: true,
-      gutters: ['CodeMirror-linenumbers', 'pl-diag-gutter'],
+      gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter', 'pl-diag-gutter'],
       lineWrapping: true,
       autoCloseBrackets: true,
       matchBrackets: true,
       styleActiveLine: true,
+      // 代码折叠：花括号 + 缩进两种 rangeFinder（stex 没有专用 fold mode）
+      foldGutter: true,
+      foldOptions: { rangeFinder: CodeMirror.fold.combine(CodeMirror.fold.brace, CodeMirror.fold.indent) },
       extraKeys: {
         'Ctrl-S': () => { cb.current.onSave && cb.current.onSave(); return false; },
         'Cmd-S': () => { cb.current.onSave && cb.current.onSave(); return false; }
@@ -144,14 +280,23 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     inp.setAttribute('autocapitalize', 'off');
     cm.on('change', () => cb.current.onChange && cb.current.onChange(cm.getDoc(), cm.getValue()));
     cm.on('change', scheduleSpell);
-    // \ref / \cite 自动补全：打出命令后的 { 立即出全量候选，键入字符按前缀过滤；
-    // 走 change 而不是 inputRead——autoCloseBrackets 插 "{}" 时只发 change，inputRead 收不到 {
-    // 菜单已开时交给 show-hint 自己的 update，不重复弹出
-    const refHint = refHintFrom(refCompletionRef);
-    const openRefHint = () => {
+    cm.on('change', scheduleGrammar);
+    // 打字机滚动：光标（含点击定位）始终居中。cursorCoords('local') 相对编辑器盒顶，
+    // 折算回内容坐标（+scrollTop）再减半屏即目标滚动位置
+    cm.on('cursorActivity', () => {
+      if (!typewriterRef.current) return;
+      const si = cm.getScrollInfo();
+      const co = cm.cursorCoords(null, 'local');
+      cm.scrollTo(si.left, Math.max(0, co.top + si.top - si.clientHeight / 2));
+    });
+    // 自动补全（\ref/\cite、环境、文件名、命令）：打出命令后的 { 立即出全量候选，
+    // 键入字符按前缀过滤；走 change 而不是 inputRead——autoCloseBrackets 插 “{}” 时
+    // 只发 change，inputRead 收不到 {。菜单已开时交给 show-hint 自己的 update，不重复弹出
+    const latexHint = buildLatexHint(refCompletionRef, completionRef);
+    const openHint = () => {
       if (cm.state.completionActive) return;
       cm.showHint({
-        hint: refHint,
+        hint: latexHint,
         completeSingle: false,
         closeCharacters: /[\s()\[\]{};:]>/   // 逗号除外：\cite{a,b} 补下一个键时菜单不收
       });
@@ -160,11 +305,44 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       if (change.origin !== '+input') return;
       const cur = cm2.getCursor();
       const before = (cm2.getLine(cur.line) || '').slice(0, cur.ch);
-      const m = matchRefContext(before);
-      if (!m) return;
       const typed = (change.text || []).join('');
-      if (before.endsWith('{')) openRefHint();
-      else if (m.segment.length >= 1 && /^[A-Za-z0-9_:.\-]$/.test(typed)) openRefHint();
+      const m = matchRefContext(before);
+      if (m) {
+        if (before.endsWith('{')) openHint();
+        else if (m.segment.length >= 1 && /^[A-Za-z0-9_:.\-]$/.test(typed)) openHint();
+        return;
+      }
+      const cp = completionRef.current;
+      if (!cp || !cp.texLike) return;
+      if (matchEnvToken(before) && (before.endsWith('{') || /^[a-zA-Z*]$/.test(typed))) return openHint();
+      const ft = matchFileToken(before);
+      if (ft && (before.endsWith('{') || typed === ',' || /^[\w./\\\-:]$/.test(typed))) return openHint();
+      const ct = matchCommandToken(before);
+      if (ct && (typed === '\\' || /^[a-zA-Z*]$/.test(typed))) return openHint();
+    });
+    // 拖拽 / 粘贴图片：同步 preventDefault 阻止 CodeMirror 把文件名当文本插入，
+    // 然后走与工具栏「插入图片」同一条路径（打开文件夹时写盘，否则 base64 / 资源标签）
+    const imageFromEvent = (ev) => {
+      const files = ev.dataTransfer ? ev.dataTransfer.files : (ev.clipboardData ? ev.clipboardData.files : null);
+      if (!files || !files.length) return null;
+      const f = Array.prototype.slice.call(files).filter(x => /^image\//.test(x.type) || /\.(png|jpe?g|gif|svg|eps|webp|bmp|pdf)$/i.test(x.name))[0];
+      return f || null;
+    };
+    cm.on('drop', (instance, ev) => {
+      const f = imageFromEvent(ev);
+      if (!f) return;
+      ev.preventDefault();
+      let pos;
+      try { pos = instance.coordsChar({ left: ev.clientX, top: ev.clientY }, 'window'); }
+      catch (e) { pos = instance.getCursor(); }
+      cb.current.onImageFile && cb.current.onImageFile(f, instance.getDoc(), pos, pos);
+    });
+    cm.on('paste', (instance, ev) => {
+      const f = imageFromEvent(ev);
+      if (!f) return;
+      ev.preventDefault();
+      const cur = instance.getCursor();
+      cb.current.onImageFile && cb.current.onImageFile(f, instance.getDoc(), cur, cur);
     });
     cm.on('scroll', () => {
       const si = cm.getScrollInfo();
@@ -175,7 +353,9 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     setTimeout(() => cm.refresh(), 50);
     return () => {
       clearTimeout(spellTimerRef.current);
-      // 先脱开共享 Doc（避免 StrictMode 双挂载时 "document is already in use"）
+      clearTimeout(grammarTimerRef.current);
+      grammarGenRef.current++;
+      // 先脱开共享 Doc（避免 StrictMode 双挂载时 “document is already in use”）
       try { cm.swapDoc(new CodeMirror.Doc('', 'stex')); } catch (e) { /* ignore */ }
       const el = cm.getWrapperElement();
       if (el && el.parentNode) el.parentNode.removeChild(el);
@@ -191,6 +371,9 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       cm.focus();
       clearSpellMarks();   // 标记属于旧 Doc；新 Doc 稍后由 scheduleSpell 重画
       scheduleSpell();
+      clearGrammarMarks();
+      grammarLastRef.current = '';   // 换文档：内容变了，允许立即重新检查
+      scheduleGrammar();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc]);
@@ -201,6 +384,13 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     else { clearTimeout(spellTimerRef.current); clearSpellMarks(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spellcheck]);
+
+  // 语法检查同理；关掉时还要让在途请求的回执作废
+  useEffect(() => {
+    if (grammarCheck) scheduleGrammar();
+    else { clearTimeout(grammarTimerRef.current); grammarGenRef.current++; clearGrammarMarks(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grammarCheck]);
 
   // App 的 Ctrl+F / Ctrl+Shift+F 与「编辑 → 查找替换」都通过 findReq 递增来唤起面板
   useEffect(() => { if (findReq) setFindOpen(true); }, [findReq]);
