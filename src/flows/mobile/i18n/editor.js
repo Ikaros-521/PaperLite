@@ -8,9 +8,11 @@ export const ED_ZH = {
   'mb.ed.toolMath': '公式',
   'mb.ed.toolSymbols': '符号',
   'mb.ed.toolRef': '引用',
+  'mb.ed.toolCite': '文献',
   'mb.ed.toolTable': '表格',
   'mb.ed.toolFigure': '图表',
   'mb.ed.toolOutline': '大纲',
+  'mb.ed.toolSearch': '搜索',
   'mb.ed.toolCompile': '编译',
   // 一键插入片段里的示例文字（LaTeX 命令在代码里，不随语言变）
   'mb.ed.snBoldText': '加粗文字',
@@ -79,9 +81,11 @@ export const ED_EN = {
   'mb.ed.toolMath': 'Math',
   'mb.ed.toolSymbols': 'Symbols',
   'mb.ed.toolRef': 'Ref',
+  'mb.ed.toolCite': 'Cite',
   'mb.ed.toolTable': 'Table',
   'mb.ed.toolFigure': 'Figure',
   'mb.ed.toolOutline': 'Outline',
+  'mb.ed.toolSearch': 'Search',
   'mb.ed.toolCompile': 'Compile',
   // placeholder wording inside inserted snippets (the LaTeX command itself never changes)
   'mb.ed.snBoldText': 'bold text',

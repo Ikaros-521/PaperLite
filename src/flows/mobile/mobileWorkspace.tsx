@@ -12,6 +12,10 @@ import { useWorkspace } from '../../workspace/useWorkspace.js'
 import { useCompile } from '../../workspace/useCompile.js'
 import { hasDocumentclass } from '../../mainDoc.js'
 import { buildLLMContext } from '../../workspace/chatContext.js'
+import { makeTab } from '../../workspace/tabModel.js'
+import { infoFor } from '../../fileTypes.js'
+import { collectBibKeys } from '../../projectIndex.js'
+import { makeBibKey, entryToBibTeX, referencedBibFiles } from '../../citation.js'
 import { LangContext } from '../../useI18n.js'
 import { LS_LANG, detectLang, setLang as setModuleLang, tr } from '../../i18n.js'
 import * as fs from '../../fs.js'
@@ -36,6 +40,16 @@ export interface MobileTab {
   handle: unknown
   imageUrl: string | null
   uploadedFile: File | null
+}
+
+/** 文献检索条目：与桌面 CiteDialog 同一形状（citation.js 各 provider 的 parse 产出） */
+export interface MobileCiteEntry {
+  title: string
+  authors: string[]
+  venue: string
+  year: string
+  source: string
+  type?: string
 }
 
 interface PromptState {
@@ -69,6 +83,10 @@ interface MobileWorkspaceValue {
   saveActive: () => Promise<void>
   uploadFiles: () => void
   openFolder: () => Promise<void>
+  /** 从文件夹里把文件打开成标签（项目搜索点开磁盘结果用），失败（权限/不存在）返回 null */
+  openFileTab: (handle: unknown, path: string, rootDir: unknown) => Promise<MobileTab | null>
+  /** 文献检索插入：与桌面 App.insertCitation 同一策略（BibTeX 追加 + 光标处 \cite） */
+  insertCitation: (entry: MobileCiteEntry) => Promise<void>
   cmRef: RefObject<unknown>
   treeTick: number
   // 编译链：与桌面共用 useCompile，语义一致，只有"编译完看哪里"不同
@@ -218,6 +236,82 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const sendChatInject = useCallback((text: string) => setChatInject({ text, n: Date.now() }), [])
 
+  // ---- 文献检索插入：与桌面 App.insertCitation 同一策略 ----
+  // 目标 .bib 优先级：文档 \bibliography/\addbibresource 引用的 → 已打开的 .bib → refs.fib（新建）
+  const insertCitation = useCallback(async (entry: MobileCiteEntry) => {
+    const cur = (ws.tabsRef.current as MobileTab[]).find(x => x.id === ws.activeId) || null
+    if (!cur?.doc || !(cur.kind === 'tex' || cur.kind === 'draft')) { Toast.show({ content: t('cite.onlyTex') }); return }
+    // CodeMirror Doc 自带光标/区间写接口；MobileDoc 类型面只声明了取值，这里按需扩展
+    const docApi = (d: unknown) => d as MobileDoc & {
+      getCursor: () => { line: number; ch: number }
+      posFromIndex: (i: number) => { line: number; ch: number }
+      replaceRange: (text: string, from: unknown, to: unknown, origin?: string) => void
+    }
+    const taken = new Set<string>()
+    for (const x of ws.tabsRef.current as MobileTab[]) {
+      if (x.doc && /\.bib$/i.test(x.name)) collectBibKeys(x.doc.getValue()).forEach(k => taken.add(k.key))
+    }
+    const key = makeBibKey(entry, taken)
+    const bibtex = entryToBibTeX(entry, key)
+
+    const wanted = referencedBibFiles(cur.doc.getValue())
+    let target: MobileTab | null = null
+    for (const w of wanted) {
+      target = (ws.tabsRef.current as MobileTab[]).find(x => x.doc && /\.bib$/i.test(x.name) && (x.name === w || x.name.endsWith('/' + w))) || null
+      if (target) break
+    }
+    if (!target) target = (ws.tabsRef.current as MobileTab[]).find(x => x.doc && /\.bib$/i.test(x.name)) || null
+
+    let prefilled = false
+    if (!target) {
+      const name = wanted[0] || 'refs.bib'
+      const root = ws.rootDir as unknown as { name?: string; getFileHandle(n: string): Promise<never> } | null
+      if (root) {
+        try {
+          const fh = await root.getFileHandle(name)
+          target = await ws.openFileTab(fh, name, root) as MobileTab | null
+        } catch {
+          try {
+            const fh = await fs.createFile(root as never, name)
+            await fs.writeFileText(fh as never, bibtex + '\n')
+            const info = infoFor(name)
+            target = makeTab({ name, kind: info.kind, handle: fh, parentDir: root, text: bibtex + '\n', modeSpec: info.mode, saved: bibtex + '\n', historyScope: root.name || '' }) as unknown as MobileTab
+            ws.setTabs(ts => (ts as MobileTab[]).concat(target as MobileTab))
+            prefilled = true
+          } catch { /* 盘上写不了就退回内存标签 */ }
+        }
+      }
+      if (!target && !prefilled) {
+        const info = infoFor(name)
+        target = makeTab({ name, kind: info.kind, text: '', modeSpec: info.mode, saved: '' }) as unknown as MobileTab
+        ws.setTabs(ts => (ts as MobileTab[]).concat(target))
+      }
+    }
+    if (!target?.doc) { Toast.show({ content: t('cite.noBibTarget') }); return }
+    if (!prefilled) {
+      const targetDoc = docApi(target.doc)
+      const base = targetDoc.getValue()
+      const sep = base ? (base.endsWith('\n\n') ? '' : base.endsWith('\n') ? '\n' : '\n\n') : ''
+      const endPos = targetDoc.posFromIndex(base.length)
+      targetDoc.replaceRange(sep + bibtex + '\n', endPos, endPos, '+input')
+      // 追加发生在未挂载的 Doc 上，不经过编辑器 change 事件——手动补脏标记，
+      // 否则关闭标签时会跳过「未保存确认」把刚追加的条目一起丢掉（桌面同一坑）
+      const tdoc = target.doc
+      const tsaved = (target as unknown as { saved: string }).saved
+      ws.setTabs(ts => (ts as MobileTab[]).map(x => x.doc === tdoc ? ({ ...x, dirty: x.doc!.getValue() !== tsaved } as MobileTab) : x))
+    }
+    // 回到原文档光标处插 \cite：直接写 Doc，不依赖当前编辑器挂载的是哪个文档。
+    // 「近似排版」视图下编辑器未挂载、change 事件不会触发——手动同步一次（挂载态重复调用幂等）
+    const backId = cur.id
+    const curDoc = docApi(cur.doc)
+    const pos = curDoc.getCursor()
+    curDoc.replaceRange('\\cite{' + key + '}', pos, pos, '+input')
+    ws.onDocChange(cur.doc, curDoc.getValue())
+    ws.setActiveId(backId)
+    Toast.show({ content: t('cite.inserted', { cmd: '\\cite{' + key + '}', file: target.name }) })
+  }, [ws, t])
+
+
   useEffect(() => {
     try { localStorage.setItem(LS_LANG, lang) } catch { /* ignore */ }
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
@@ -252,6 +346,8 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     saveActive: ws.saveActive,
     uploadFiles: ws.uploadFiles,
     openFolder: ws.openFolder,
+    openFileTab: ws.openFileTab as never,
+    insertCitation,
     cmRef,
     treeTick,
     engines: compileLayer.engines,
@@ -279,7 +375,7 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     scale,
     setScale,
     scaleFont: SCALE_FONT[scale],
-  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chatInject, buildContext, beforeAiApply, sendChatInject, settingsOpen, scale, setScale])
+  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chatInject, buildContext, beforeAiApply, sendChatInject, insertCitation, settingsOpen, scale, setScale])
 
   return (
     // antd-mobile 自带文案（下拉刷新 / 没有更多了 / 搜索框、蒙层等 aria-label）默认是 zh-CN，

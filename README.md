@@ -131,7 +131,7 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 | **其他导出** | `.tex`（可传 Overleaf / 本地 TeX 编译）、独立 HTML、单图 SVG（矢量）/ PNG（2x） |
 | **编辑器** | CodeMirror 5（stex 高亮、括号匹配/补全、活动行、**代码折叠**）、工具栏插入模板；**插入图片（按钮 / 拖拽 / 粘贴）**：打开文件夹时写入项目目录并插 `\includegraphics`（重名自动加序号、顺手补 `\usepackage{graphicx}`），未打开文件夹时 LaTeX 开内存资源标签、Markdown 转 base64 |
 | **自动补全** | `\ref` / `\cite` 跨文件键位之外，补齐 **LaTeX 命令**（内置 90+ 常用命令 + 文档 `\newcommand` 定义，光标停在参数内）、**环境名**（`\begin{` 选定后自动闭合 `\end{}`）、**文件名**（`\input` / `\include` / `\includegraphics` / `\bibliography` 等参数里补项目文件路径）。逻辑在 `src/completion.js`（纯函数，`test/completion.mjs` 覆盖） |
-| **文献检索插入** | 「插入 → 文献检索」直连 **Crossref / OpenAlex / DBLP** 公共 API（浏览器发起，不经任何服务器中转）：搜标题/作者/关键词 → 点选条目 → 自动生成 BibTeX 键（首作者姓+年+标题词，撞键自动去重）与条目**追加到 .bib 文件**（优先文档 `\bibliography` 引用的，没有则新建 `refs.bib`；打开文件夹时写盘）→ 光标处插入 `\cite{key}`。逻辑在 `src/citation.js`（纯函数，`test/citation.mjs` 覆盖） |
+| **文献检索插入** | 「插入 → 文献检索」直连 **Crossref / OpenAlex / DBLP** 公共 API（浏览器发起，不经任何服务器中转）：搜标题/作者/关键词 → 点选条目 → 自动生成 BibTeX 键（首作者姓+年+标题词，撞键自动去重）与条目**追加到 .bib 文件**（优先文档 `\bibliography` 引用的，没有则新建 `refs.bib`；打开文件夹时写盘）→ 光标处插入 `\cite{key}`。逻辑在 `src/citation.js`（纯函数，`test/citation.mjs` 覆盖）；网络层 `src/citationSearch.js` 为桌面/移动共用单入口（`test/citationSearch.mjs` 覆盖），移动端工具带「文献」同款可用 |
 | **语法检查** | 可选的 **LanguageTool** 联网检查（设置里开启，默认关闭）：输入停顿约 2 秒后把**正文**发送到 languagetool.org 公共接口——发送前先做等长遮罩，注释/公式/命令/引用键不会外发；紫色波浪线标记，悬停显示问题与替换建议，中文英文都支持。长文按空行分块、每轮最多 3 块，公共接口限流友好。逻辑在 `src/grammar.js`（纯函数，`test/grammar.mjs` 覆盖） |
 | **快捷键** | `Ctrl+S` 保存、`Ctrl+Enter` 编译、`Ctrl+P` 下载编译 PDF（源码修改后先确认；尚未编译则打印网页预览）、`Ctrl+1/2/3` 仅编辑/分栏/仅预览、`Ctrl+Alt+N` 新建文件；编辑器内 `Ctrl+B` / `Ctrl+I`。「帮助 → 快捷键」列出全部 |
 | **写作专注** | 「查看 → 沉浸模式」（Esc 退出）：隐藏菜单/工具条/侧栏/标签/状态栏，编辑区限宽到 860px 居中，只留编辑与预览；「查看 → 打字机滚动」让光标（含点击定位）始终停在视口中央，长文写作不再追着光标翻页，随设置持久化 |
@@ -150,6 +150,7 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 - **手机浏览器没有 File System Access API**，因此「打开本地文件夹」在移动端不可用，改用顶栏「导入」上传文件
 - 中英双语与六套皮肤在两端一致；正文字号三档（13 / 15 / 17.5px）持久化在本地，纸面预览与编辑区同步
 - **编辑器与编译同内核增强**：代码折叠、LaTeX 命令/环境/文件名与 ef/\cite 跨标签补全、LanguageTool 语法检查与打字机滚动（读桌面同一设置键，默认关）在移动端同样可用；编译同样从主文档入口走（打开的标签里自动探测 \documentclass）
+- **写作工具带同样接全**：工具带「文献」直连 Crossref / OpenAlex / DBLP 检索并走与桌面同一插入策略（BibTeX 追加 .bib + 光标处 `\cite`）；「搜索」跨打开标签做项目内搜索（点命中跳行）；「插入 → 我的片段」与桌面共享同一份片段库（localStorage 同键），可就地增删改
 
 ## 架构
 
@@ -164,6 +165,7 @@ paperlite/
 │   ├── mainDoc.js        # 主文档（编译入口）解析：固定设置 + \documentclass 探测（纯函数）
 │   ├── completion.js     # LaTeX 命令/环境/文件名补全：匹配器与候选表（纯函数）
 │   ├── citation.js       # 文献检索：Crossref/OpenAlex/DBLP 归一化 + BibTeX 生成（纯函数）
+│   ├── citationSearch.js # 文献检索网络层：桌面/移动共用的 fetch+解析单入口（纯逻辑）
 │   ├── grammar.js        # LanguageTool 语法检查：分块/偏移映射（纯函数，复用拼写遮罩）
 │   ├── searchIndex.js    # 项目内搜索：文件清单装配 + grep 限量（纯函数，复用 findModel）
 │   ├── tableMutations.js # 表格可视化编辑写回：单元格/行列/colspec 区间替换（纯函数）
@@ -210,7 +212,7 @@ npm run electron:build
 
 项目内置 GitHub Actions 工作流（[`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)），**推送到 `main` 分支即自动构建并发布到 GitHub Pages**（也可在 Actions 页面手动触发 Run workflow）。
 
-流水线步骤：安装依赖 → `npm test`（19 个测试文件、1900+ 断言）→ `npm run test:xelatex`（真实引擎编译回归）→ `vite build` → 部署 `dist/` 到 Pages。
+流水线步骤：安装依赖 → `npm test`（20 个测试文件、1950+ 断言）→ `npm run test:xelatex`（真实引擎编译回归）→ `vite build` → 部署 `dist/` 到 Pages。
 
 首次启用只需在仓库设置一次：
 

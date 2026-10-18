@@ -22,6 +22,7 @@ import {
   Segmented,
   Selector,
   Tag,
+  TextArea,
   Toast,
 } from 'antd-mobile'
 import {
@@ -35,6 +36,7 @@ import {
   PictureOutline,
   PlayOutline,
   RedoOutline,
+  SearchOutline,
   UndoOutline,
   UnorderedListOutline,
 } from 'antd-mobile-icons'
@@ -42,6 +44,11 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import EditorPane from '../../components/EditorPane.jsx'
 import PreviewPane from '../../components/PreviewPane.jsx'
 import { collectLabels, collectBibKeys } from '../../projectIndex.js'
+import { PROVIDERS } from '../../citation.js'
+import { searchCitations } from '../../citationSearch.js'
+import { loadSnippets, saveSnippets, nextSnippetId, validateSnippetName } from '../../snippets.js'
+import { collectSearchFiles, searchInFiles } from '../../searchIndex.js'
+import * as fs from '../../fs.js'
 import { collectUserCommands } from '../../completion.js'
 import { renderLatex } from '../../engines/latex.js'
 import { renderMarkdownFull } from '../../engines/markdown.js'
@@ -53,9 +60,9 @@ import { useT } from '../../useI18n.js'
 import { formatWords } from './shared/format'
 import { SAVE_STATE, VIEW_LABEL } from './shared/labels'
 import { useKeyboardInset, useLongPress } from './shared/hooks'
-import { useMobileWorkspace, type MobileTab } from './mobileWorkspace'
+import { useMobileWorkspace, type MobileCiteEntry, type MobileTab } from './mobileWorkspace'
 
-/** 桌面 #toolbelt 有 18 个按钮，390px 会换行成 113px 高；移动端留高频 11 项
+/** 桌面 #toolbelt 有 18 个按钮，390px 会换行成 113px 高；移动端留高频 13 项（单行横滑）
  *  语言运行时可切换，模块顶层不能取文案，这里只存键，渲染时再 t() */
 const TOOLS = [
   { id: 'undo', key: 'mb.ed.toolUndo', icon: <UndoOutline /> },
@@ -65,9 +72,11 @@ const TOOLS = [
   { id: 'math', key: 'mb.ed.toolMath', icon: <span>$x$</span> },
   { id: 'symbols', key: 'mb.ed.toolSymbols', icon: <span>Ω</span> },
   { id: 'ref', key: 'mb.ed.toolRef', icon: <ContentOutline /> },
+  { id: 'cite', key: 'mb.ed.toolCite', icon: <span>❝</span> },
   { id: 'table', key: 'mb.ed.toolTable', icon: <span>▥</span> },
   { id: 'figure', key: 'mb.ed.toolFigure', icon: <PictureOutline /> },
   { id: 'outline', key: 'mb.ed.toolOutline', icon: <UnorderedListOutline /> },
+  { id: 'search', key: 'mb.ed.toolSearch', icon: <SearchOutline /> },
   { id: 'compile', key: 'mb.ed.toolCompile', icon: <PlayOutline /> },
 ] as const
 
@@ -81,6 +90,30 @@ const makeSnippets = (t: Translate): Record<string, string> => ({
 })
 
 const SYMBOLS = ['α', 'β', 'γ', 'δ', 'ε', 'θ', 'λ', 'μ', 'π', 'σ', 'ω', '∑', '', '∫', '√', '≤', '≥', '≠', '≈', '∞', '∈', '⊂', '∀', '∃']
+
+/** 片段形状与 snippets.js 的 localStorage 存取一致，桌面「管理片段」改的也是这份数据 */
+interface Snippet {
+  id: string
+  name: string
+  content: string
+}
+
+/** 项目搜索的磁盘面：浅层扫 .tex/.bib/.md/.txt（深度 ≤3、单文件 ≤200KB、≤120 个）。
+ *  桌面 App 维护常驻 folderIndex；移动端搜索频率低，按需扫一次即可 */
+const TEXT_EXT = /\.(tex|bib|md|txt)$/i
+async function scanFolderTexts(dir: unknown, prefix = '', depth = 0, out: Array<{ path: string; text: string; handle: unknown }> = []) {
+  if (depth > 3 || out.length >= 120) return out
+  let entries: Array<{ name: string; kind: string; handle: unknown }>
+  try { entries = await fs.listDir(dir as never) as never } catch { return out }
+  for (const ent of entries) {
+    if (out.length >= 120) break
+    const path = prefix + ent.name
+    if (ent.kind === 'directory') { await scanFolderTexts(ent.handle, path + '/', depth + 1, out); continue }
+    if (!TEXT_EXT.test(ent.name)) continue
+    try { out.push({ path, text: await fs.readFileText(ent.handle as never, 200 * 1024), handle: ent.handle }) } catch { /* 超大/二进制跳过 */ }
+  }
+  return out
+}
 
 /** 近似排版块长按：桌面靠 hover 出工具条，触屏拿不到，改长按就地菜单 */
 
@@ -270,34 +303,312 @@ function OutlineSheet({
 
 /* ================================================
    FLOW: Mobile Edit & Live Preview
+   SHEET: 文献检索（与桌面 CiteDialog 同一网络层与插入策略）
+   PLATFORM: H5 (Ant Design Mobile)
+   ------------------------------------------------
+   ENTRY:  工具带「文献」
+   EXIT:   点条目 → 生成 BibTeX 追加 .bib + 光标处 \cite（共享 ws.insertCitation）
+   ================================================ */
+function CiteSheet({
+  visible,
+  onClose,
+  onInsert,
+}: {
+  visible: boolean
+  onClose: () => void
+  onInsert: (entry: MobileCiteEntry) => void
+}) {
+  const t = useT()
+  const [provider, setProvider] = useState('crossref')
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [results, setResults] = useState<MobileCiteEntry[]>([])
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => { if (visible) { setResults([]); setError('') } }, [visible])
+  useEffect(() => () => abortRef.current?.abort(), [])
+
+  const search = async () => {
+    const q = query.trim()
+    if (!q || loading) return
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    const timer = setTimeout(() => ctrl.abort(), 15000)
+    setLoading(true); setError(''); setResults([])
+    try {
+      const list = (await searchCitations(provider, q, ctrl.signal)) as MobileCiteEntry[]
+      setResults(list)
+      if (!list.length) setError(t('cite.empty'))
+    } catch (err) {
+      if ((err as Error)?.name !== 'AbortError') setError(t('cite.error', { msg: (err as Error)?.message || String(err) }))
+    } finally {
+      clearTimeout(timer)
+      if (abortRef.current === ctrl) setLoading(false)
+    }
+  }
+
+  return (
+    <Popup
+      visible={visible}
+      onMaskClick={onClose}
+      onClose={onClose}
+      position="bottom"
+      closeOnSwipe
+      showCloseButton
+      bodyStyle={{ borderTopLeftRadius: 12, borderTopRightRadius: 12 }}
+    >
+      <div className="pl-sheet">
+        <div className="pl-sheet-head">
+          <span>{t('cite.title')}</span>
+          <Button fill="none" size="small" onClick={onClose}>
+            {t('dialog.cancel')}
+          </Button>
+        </div>
+        <div className="pl-sheet-body" style={{ padding: '8px 16px 16px' }}>
+          <div style={{ fontSize: 12, color: 'var(--ink-faint)', margin: '4px 0 8px' }}>{t('cite.netNote')}</div>
+          <Selector
+            columns={3}
+            value={[provider]}
+            onChange={v => { setProvider((v[0] as string) || 'crossref'); setResults([]); setError('') }}
+            options={Object.keys(PROVIDERS).map(p => ({ label: t('cite.p_' + p), value: p }))}
+          />
+          <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
+            <div style={{ flex: 1 }}>
+              <Input value={query} onChange={setQuery} placeholder={t('cite.placeholder')} clearable enterKeyHint="search" onEnterPress={search} aria-label={t('cite.placeholder')} />
+            </div>
+            <Button color="primary" size="small" loading={loading} disabled={!query.trim() || loading} onClick={search}>
+              {loading ? t('cite.searching') : t('cite.search')}
+            </Button>
+          </div>
+          {error && <div style={{ fontSize: 12, color: 'var(--warn-strong)', padding: '4px 0' }}>{error}</div>}
+          <List>
+            {results.map((e, i) => (
+              <List.Item
+                key={i}
+                clickable
+                onClick={() => { onInsert(e); onClose() }}
+                description={
+                  <span style={{ fontSize: 12 }}>
+                    {[
+                      e.authors.length > 3 ? e.authors.slice(0, 3).join('；') + t('cite.etAl') : e.authors.join('；'),
+                      e.venue,
+                      e.year,
+                    ].filter(Boolean).join(' · ')}
+                  </span>
+                }
+              >
+                <span style={{ fontSize: 14 }}>{e.title}</span>
+                <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--ink-faint)' }}>{e.source}</span>
+              </List.Item>
+            ))}
+          </List>
+        </div>
+      </div>
+    </Popup>
+  )
+}
+
+/* ================================================
+   FLOW: Mobile Edit & Live Preview
+   SHEET: 项目内搜索（打开标签 + 文件夹扫描，桌面侧栏面板的移动形态）
+   PLATFORM: H5 (Ant Design Mobile)
+   ------------------------------------------------
+   ENTRY:  工具带「搜索」
+   EXIT:   点命中 → 打开所在文件并跳到该行（标签间切换用 pendingJump 兜时序）
+   ================================================ */
+interface GsMatch { path: string; line: number; text: string; from: number; to: number }
+interface GsState {
+  query: string
+  regex: boolean
+  matchCase: boolean
+  wholeWord: boolean
+  busy: boolean
+  result: { ok: boolean; matches: GsMatch[]; fileCount: number; truncated: boolean } | null
+}
+
+function SearchSheet({
+  visible,
+  onClose,
+  state,
+  setState,
+  onSearch,
+  onOpen,
+  hasFolder,
+}: {
+  visible: boolean
+  onClose: () => void
+  state: GsState
+  setState: (updater: (s: GsState) => GsState) => void
+  onSearch: (opts: { query: string; regex: boolean; matchCase: boolean; wholeWord: boolean }) => void
+  onOpen: (path: string, line: number) => void
+  hasFolder: boolean
+}) {
+  const t = useT()
+  const run = () => onSearch({ query: state.query, regex: state.regex, matchCase: state.matchCase, wholeWord: state.wholeWord })
+  const flag = (on: boolean, glyph: string, title: string, key: 'matchCase' | 'wholeWord' | 'regex') => (
+    <Button
+      key={key}
+      size="small"
+      fill={on ? 'outline' : 'none'}
+      color={on ? 'primary' : 'default'}
+      aria-label={title}
+      aria-pressed={on}
+      style={{ flex: 1, minWidth: 44 }}
+      onClick={() => setState(s => ({ ...s, [key]: !s[key] }))}
+    >
+      {glyph}
+    </Button>
+  )
+
+  const groups: Array<{ path: string; items: GsMatch[] }> = []
+  for (const m of state.result?.matches || []) {
+    const last = groups[groups.length - 1]
+    if (last && last.path === m.path) last.items.push(m)
+    else groups.push({ path: m.path, items: [m] })
+  }
+
+  return (
+    <Popup
+      visible={visible}
+      onMaskClick={onClose}
+      onClose={onClose}
+      position="bottom"
+      closeOnSwipe
+      showCloseButton
+      bodyStyle={{ borderTopLeftRadius: 12, borderTopRightRadius: 12 }}
+    >
+      <div className="pl-sheet">
+        <div className="pl-sheet-head">
+          <span>{t('gs.title')}</span>
+          <Button fill="none" size="small" onClick={onClose}>
+            {t('dialog.cancel')}
+          </Button>
+        </div>
+        <div className="pl-sheet-body" style={{ padding: '8px 16px 16px' }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <Input
+                value={state.query}
+                placeholder={t('gs.placeholder')}
+                clearable
+                enterKeyHint="search"
+                onChange={v => setState(s => ({ ...s, query: v }))}
+                onEnterPress={run}
+                aria-label={t('gs.title')}
+              />
+            </div>
+            <Button color="primary" size="small" loading={state.busy} disabled={!state.query.trim() || state.busy} onClick={run}>
+              {t('gs.go')}
+            </Button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, margin: '10px 0 2px' }}>
+            {flag(state.matchCase, 'Aa', t('find.case'), 'matchCase')}
+            {flag(state.wholeWord, 'ab', t('find.word'), 'wholeWord')}
+            {flag(state.regex, '.*', t('find.regex'), 'regex')}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-faint)', margin: '4px 0 8px' }}>
+            {hasFolder ? t('gs.scope') : t('gs.noFolder')}
+          </div>
+          {state.result && state.result.ok === false && (
+            <div style={{ fontSize: 12, color: 'var(--warn-strong)' }}>{t('find.invalid')}</div>
+          )}
+          {state.result?.ok && state.result.matches.length === 0 && state.query && (
+            <div style={{ fontSize: 12, color: 'var(--ink-soft)', padding: '8px 0' }}>{t('gs.none')}</div>
+          )}
+          {state.result?.ok && state.result.matches.length > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--ink-faint)' }}>
+              {t('gs.count', { n: state.result.matches.length, files: state.result.fileCount })}
+              {state.result.truncated ? ' · ' + t('gs.truncated') : ''}
+            </div>
+          )}
+          <div style={{ maxHeight: '44vh', overflowY: 'auto', marginTop: 6 }}>
+            {groups.map(g => (
+              <div key={g.path}>
+                <div style={{ fontSize: 12, color: 'var(--ink-soft)', fontWeight: 600, padding: '8px 0 2px', wordBreak: 'break-all' }}>
+                  {g.path} · {g.items.length}
+                </div>
+                <List>
+                  {g.items.map((m, i) => (
+                    <List.Item key={i} clickable onClick={() => onOpen(m.path, m.line)}>
+                      <span className="pl-num" style={{ marginRight: 8, color: 'var(--ink-faint)' }}>{m.line + 1}</span>
+                      <span style={{ wordBreak: 'break-all', fontSize: 13 }}>
+                        {m.text.slice(Math.max(0, m.from - 40), m.from)}
+                        <mark>{m.text.slice(m.from, m.to)}</mark>
+                        {m.text.slice(m.to, m.to + 120)}
+                      </span>
+                    </List.Item>
+                  ))}
+                </List>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Popup>
+  )
+}
+
+/* ================================================
+   FLOW: Mobile Edit & Live Preview
    SCREEN 4 of 4: 快捷插入 Sheet（真光标处写入）
    PLATFORM: H5 (Ant Design Mobile)
    ------------------------------------------------
-   ENTRY:  工具带「符号 / 引用 / 表格 / 图表」
+   ENTRY:  工具带「符号 / 引用 / 表格 / 图表 / 我的片段」
    EXIT:   点片段 → 写入 CodeMirror 光标处并保持焦点
-   BRANCH: 「取消」/下拉关闭 → 源码不变
+   BRANCH: 「取消」/下拉关闭 → 源码不变；「我的片段」分类内可就地增删改
    ================================================ */
 function InsertSheet({
   visible,
   initialCategory,
   labels,
+  snippets,
+  onSnippets,
   onClose,
   onInsert,
 }: {
   visible: boolean
   initialCategory: string
   labels: string[]
+  snippets: Snippet[]
+  /** 受控更新：Flow2 持有片段状态并负责落 localStorage（与桌面共享同一份数据） */
+  onSnippets: (updater: (list: Snippet[]) => Snippet[]) => void
   onClose: () => void
   onInsert: (text: string) => void
 }) {
   const [category, setCategory] = useState(initialCategory)
   const [refKey, setRefKey] = useState('')
   const [grid, setGrid] = useState({ rows: 0, cols: 0 })
+  // 「我的片段」的就地编辑态：null=列表态，非空=新增/编辑表单
+  const [editing, setEditing] = useState<Snippet | null>(null)
+  const [editError, setEditError] = useState('')
   const t = useT()
 
   useEffect(() => {
     if (visible) setCategory(initialCategory)
+    else { setEditing(null); setEditError('') }
   }, [visible, initialCategory])
+
+  const saveSnippetEdit = () => {
+    if (!editing) return
+    const v = validateSnippetName(editing.name, snippets, editing.id || undefined)
+    if (!v.ok) { setEditError(t(v.error === 'empty' ? 'sn.nameEmpty' : 'sn.nameDup')); return }
+    const clean = { id: editing.id || nextSnippetId(), name: v.name, content: editing.content }
+    onSnippets(list => (editing.id ? list.map(s => (s.id === editing.id ? clean : s)) : list.concat([clean])))
+    setEditing(null)
+    setEditError('')
+  }
+
+  const deleteSnippet = (s: Snippet) => {
+    Dialog.confirm({
+      title: t('dialog.alert'),
+      content: t('sn.delConfirm', { name: s.name }),
+      confirmText: t('sn.del'),
+      cancelText: t('dialog.cancel'),
+      onConfirm: () => onSnippets(list => list.filter(x => x.id !== s.id)),
+    })
+  }
 
   const insert = (text: string) => {
     onInsert(text)
@@ -351,6 +662,7 @@ function InsertSheet({
               { label: t('mb.ed.toolRef'), value: 'ref' },
               { label: t('mb.ed.toolTable'), value: 'table' },
               { label: t('mb.ed.toolFigure'), value: 'figure' },
+              { label: t('m.mySnippets'), value: 'snippets' },
             ]}
           />
         </div>
@@ -477,6 +789,52 @@ function InsertSheet({
               ))}
             </List>
           )}
+
+          {category === 'snippets' && (
+            editing ? (
+              <div style={{ display: 'grid', gap: 8, paddingTop: 4 }}>
+                <Input placeholder={t('sn.name')} value={editing.name} onChange={v => setEditing(s => (s ? { ...s, name: v } : s))} aria-label={t('sn.name')} />
+                <TextArea
+                  placeholder={t('sn.content')}
+                  value={editing.content}
+                  onChange={v => setEditing(s => (s ? { ...s, content: v } : s))}
+                  autoSize={{ minRows: 4, maxRows: 10 }}
+                  aria-label={t('sn.content')}
+                />
+                {editError && <div style={{ fontSize: 12, color: 'var(--warn-strong)' }}>{editError}</div>}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button block fill="outline" onClick={() => { setEditing(null); setEditError('') }}>{t('sn.cancel')}</Button>
+                  <Button block color="primary" onClick={saveSnippetEdit}>{t('sn.save')}</Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <List>
+                  {snippets.length ? snippets.map(s => (
+                    <List.Item
+                      key={s.id}
+                      clickable
+                      onClick={() => insert(s.content)}
+                      description={<span style={{ fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{s.content.slice(0, 90)}{s.content.length > 90 ? '…' : ''}</span>}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+                        {s.name}
+                        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 12 }}>
+                          <Button fill="none" size="mini" onClick={e => { e.stopPropagation(); setEditing({ ...s }); setEditError('') }}>{t('sn.edit')}</Button>
+                          <Button fill="none" size="mini" color="danger" onClick={e => { e.stopPropagation(); deleteSnippet(s) }}>{t('sn.del')}</Button>
+                        </span>
+                      </span>
+                    </List.Item>
+                  )) : (
+                    <List.Item>{t('sn.empty')}</List.Item>
+                  )}
+                </List>
+                <Button block fill="outline" size="small" style={{ marginTop: 10 }} onClick={() => { setEditing({ id: '', name: '', content: '' }); setEditError('') }}>
+                  {t('sn.add')}
+                </Button>
+              </>
+            )
+          )}
         </div>
       </div>
     </Popup>
@@ -499,6 +857,14 @@ export function Flow2_Workspace() {
   const [insertCategory, setInsertCategory] = useState('format')
   const [previewMenu, setPreviewMenu] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [citeOpen, setCiteOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  // 片段与桌面共享同一份 localStorage（paperlite.snippets.v1），两端增删改互见
+  const [snippets, setSnippets] = useState<Snippet[]>(() => loadSnippets())
+  useEffect(() => { saveSnippets(snippets as never) }, [snippets])
+  const [gSearch, setGSearch] = useState<GsState>({ query: '', regex: false, matchCase: false, wholeWord: false, busy: false, result: null })
+  // 最近一次搜索扫到的磁盘文件（含句柄），点开磁盘命中时用它打开标签
+  const diskFilesRef = useRef<Array<{ path: string; text: string; handle: unknown }>>([])
 
   const tab = useMemo(
     () => ws.tabs.filter(x => String(x.id) === String(docId))[0] || ws.activeTab,
@@ -629,6 +995,13 @@ export function Flow2_Workspace() {
     if (id === 'redo') { instance?.redo(); return }
     if (id === 'outline') { setOutlineOpen(true); return }
     if (id === 'compile') { navigate(`/m/compile/${tab.id}`); return }
+    if (id === 'cite') {
+      // 文献检索只对 LaTeX 文档有意义，非 tex/draft 直接提示不开面板
+      if (!(tab.kind === 'tex' || tab.kind === 'draft')) { Toast.show({ content: t('cite.onlyTex') }); return }
+      setCiteOpen(true)
+      return
+    }
+    if (id === 'search') { setSearchOpen(true); return }
     if (snippets[id]) { insertAtCaret(snippets[id]); return }
     setInsertCategory(id)
     setInsertOpen(true)
@@ -638,6 +1011,44 @@ export function Flow2_Workspace() {
     pendingJumpRef.current = { line: lineZeroBased }
     setView('source')
     attemptPendingJump()
+  }
+
+  // ---- 项目内搜索：打开标签（实时内容）+ 文件夹按需扫描，与桌面侧栏共用 searchIndex ----
+  const runGlobalSearch = async ({ query, regex, matchCase, wholeWord }: { query: string; regex: boolean; matchCase: boolean; wholeWord: boolean }) => {
+    setGSearch(s => ({ ...s, busy: true }))
+    const tabsList = ws.tabs.filter(x => x.doc).map(x => ({ path: x.path || x.name, name: x.name, text: x.doc!.getValue() }))
+    let disk: Array<{ path: string; text: string; handle: unknown }> = []
+    if (ws.rootDir) {
+      try { disk = await scanFolderTexts(ws.rootDir) } catch { /* 权限/读取失败按「没有文件夹」处理 */ }
+    }
+    diskFilesRef.current = disk
+    const result = searchInFiles(
+      collectSearchFiles(tabsList as never, disk.map(d => ({ path: d.path, text: d.text })) as never),
+      { query, regex, matchCase, wholeWord },
+    )
+    setGSearch(s => ({ ...s, busy: false, result: result as never }))
+  }
+
+  const openSearchResult = async (path: string, line: number) => {
+    setSearchOpen(false)
+    setView('source')
+    const base = path.includes('/') ? path.split('/').pop()! : path
+    const hit = ws.tabs.find(x => x.path === path) || ws.tabs.find(x => x.name === base || x.name === path)
+    if (hit) {
+      const cross = hit.id !== tab.id
+      if (cross) navigate(`/m/workspace/${hit.id}`)
+      // 跨标签要等 swapDoc 换入新 Doc 再落光标；同标签立即跳
+      setTimeout(() => { pendingJumpRef.current = { line }; attemptPendingJump() }, cross ? 60 : 0)
+      return
+    }
+    const f = diskFilesRef.current.find(x => x.path === path)
+    if (f) {
+      const opened = await ws.openFileTab(f.handle, f.path, ws.rootDir) as MobileTab | null
+      if (opened) {
+        navigate(`/m/workspace/${opened.id}`)
+        setTimeout(() => { pendingJumpRef.current = { line }; attemptPendingJump() }, 60)
+      }
+    }
   }
 
   const errCount = issues.filter(i => i.severity === 'error').length
@@ -717,8 +1128,26 @@ export function Flow2_Workspace() {
         visible={insertOpen}
         initialCategory={insertCategory}
         labels={labels}
+        snippets={snippets}
+        onSnippets={updater => setSnippets(list => updater(list))}
         onClose={() => setInsertOpen(false)}
         onInsert={insertAtCaret}
+      />
+
+      <CiteSheet
+        visible={citeOpen}
+        onClose={() => setCiteOpen(false)}
+        onInsert={entry => { void ws.insertCitation(entry) }}
+      />
+
+      <SearchSheet
+        visible={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        state={gSearch}
+        setState={setGSearch}
+        onSearch={runGlobalSearch}
+        onOpen={openSearchResult}
+        hasFolder={!!ws.rootDir}
       />
 
       {/* → 长按预览区 → 就地菜单（桌面靠 hover 工具条，触屏拿不到） */}

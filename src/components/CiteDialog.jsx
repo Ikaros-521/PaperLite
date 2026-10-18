@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useT } from '../useI18n.js';
 import { PROVIDERS } from '../citation.js';
+import { searchCitations } from '../citationSearch.js';
 
 /* 文献检索对话框：浏览器直连 Crossref / OpenAlex / DBLP 公共 API（无后端中转），
  * 选中条目后由 App 的 insertCitation 生成 BibTeX 追加到 .bib 并插入 \cite。
- * 网络层（fetch/超时/取消）收在这里，便于界面独立降级：失败只提示，不阻塞写作。 */
+ * 网络层在 citationSearch.js 与移动端共用；这里只管超时/取消与界面降级。 */
 export default function CiteDialog({ onClose, onInsert }) {
   const t = useT();
   const ref = useRef(null);
@@ -28,10 +29,7 @@ export default function CiteDialog({ onClose, onInsert }) {
     const timer = setTimeout(() => ctrl.abort(), 15000);
     setLoading(true); setError(''); setResults([]);
     try {
-      const r = await fetch(PROVIDERS[provider].url(q), { signal: ctrl.signal });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const json = await r.json();
-      const list = PROVIDERS[provider].parse(json);
+      const list = await searchCitations(provider, q, ctrl.signal);
       setResults(list);
       if (!list.length) setError(t('cite.empty'));
     } catch (err) {
