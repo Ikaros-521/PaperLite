@@ -860,3 +860,43 @@ body,
 .pl-num {
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- 表格可视化编辑面板：桌面右滑抽屉在移动壳里适配成底部弹层 ---------- */
+.pl-mobile #tablePanel {
+  top: auto;
+  bottom: 0;
+  right: 0;
+  left: 0;
+  width: auto;
+  max-height: 72dvh;
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -10px 28px rgba(var(--shadow-rgb), .2);
+}
+
+.pl-mobile #tablePanel .tb-row input {
+  min-width: 56px;
+  font-size: 16px; /* ≥16px，避免 iOS 聚焦时整页缩放 */
+}
+
+.pl-mobile #tablePanel .tb-actions .btn,
+.pl-mobile #tablePanel .tb-rowops .btn {
+  min-height: 34px;
+}
+
+/* ---------- 沉浸写作的浮动退出钮（触屏没有 Esc） ---------- */
+.pl-zen-exit {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top));
+  right: 12px;
+  z-index: 80;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--chrome);
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1;
+}

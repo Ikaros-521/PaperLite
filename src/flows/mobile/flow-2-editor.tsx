@@ -9,7 +9,7 @@
 // 数据源 = 共享工作区的真实 CodeMirror Doc + 桌面同一套渲染引擎
 // =============================================
 
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionSheet,
   Button,
@@ -31,6 +31,7 @@ import {
   ContentOutline,
   EditSOutline,
   ExclamationTriangleOutline,
+  EyeOutline,
   MessageOutline,
   MoreOutline,
   PictureOutline,
@@ -43,6 +44,7 @@ import {
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import EditorPane from '../../components/EditorPane.jsx'
 import PreviewPane from '../../components/PreviewPane.jsx'
+import TablePanel from '../../components/TablePanel.jsx'
 import { collectLabels, collectBibKeys } from '../../projectIndex.js'
 import { PROVIDERS } from '../../citation.js'
 import { searchCitations } from '../../citationSearch.js'
@@ -198,10 +200,12 @@ function Screen2_RichPreview({
   result,
   onLongPress,
   onJumpOff,
+  onSelectTable,
 }: {
   result: ReturnType<typeof renderLatex> & { isMd?: boolean }
   onLongPress: () => void
   onJumpOff: (offset: number) => void
+  onSelectTable: (id: number) => void
 }) {
   const { handlers, consumeClick } = useLongPress(onLongPress)
   const t = useT()
@@ -226,6 +230,7 @@ function Screen2_RichPreview({
         onSyncToggle={() => {}}
         onScrollRatio={() => {}}
         onJumpOff={onJumpOff}
+        onSelectTable={onSelectTable}
         selection={{ did: 0, sel: null }}
         engines={[]}
         engine="builtin"
@@ -859,6 +864,10 @@ export function Flow2_Workspace() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [citeOpen, setCiteOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  // 沉浸写作：隐藏导航/视图切换/工具带，只留编辑器与一个浮动退出钮（桌面用 Esc，触屏没有）
+  const [zen, setZen] = useState(false)
+  // 表格可视化编辑：预览里点「✎」记下表 id，TablePanel 从渲染结果按 id 取区间
+  const [tableSel, setTableSel] = useState<number | null>(null)
   // 片段与桌面共享同一份 localStorage（paperlite.snippets.v1），两端增删改互见
   const [snippets, setSnippets] = useState<Snippet[]>(() => loadSnippets())
   useEffect(() => { saveSnippets(snippets as never) }, [snippets])
@@ -926,6 +935,27 @@ export function Flow2_Workspace() {
     [result],
   )
   const labels = useMemo(() => Array.from(value.matchAll(/\\label\{([^}]+)\}/g)).map(m => m[1]), [value])
+
+  // 表格写回垫片：「近似排版」视图里编辑器未挂载，TablePanel 的 replaceRange 直接落在
+  // CodeMirror Doc 上（Doc 本身就是数据模型），写完手动同步共享层，脏标记与预览刷新才不缺
+  const tableCm = useMemo(() => {
+    const doc = tab?.doc as unknown as {
+      getValue: () => string
+      posFromIndex: (i: number) => unknown
+      replaceRange: (text: string, from: unknown, to: unknown, origin?: string) => void
+    } | null | undefined
+    if (!doc) return null
+    return {
+      getValue: () => doc.getValue(),
+      posFromIndex: (i: number) => doc.posFromIndex(i),
+      replaceRange: (text: string, from: unknown, to: unknown, origin?: string) => {
+        doc.replaceRange(text, from, to, origin)
+        ws.onDocChange(doc, doc.getValue())
+      },
+      focus: () => {},
+    }
+  }, [tab, ws])
+  const onSelectTable = useCallback((id: number) => setTableSel(id), [])
 
   if (!tab || !tab.doc) {
     return (
@@ -1057,39 +1087,44 @@ export function Flow2_Workspace() {
 
   return (
     <div className="pl-screen" style={{ '--pl-keyboard': `${keyboard}px` } as CSSProperties}>
-      <NavBar
-        onBack={() => navigate('/m')}
-        right={
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Button color="primary" size="mini" onClick={() => navigate(`/m/compile/${tab.id}`)}>
-              {t('mb.ed.toolCompile')}
-            </Button>
-            {/* 桌面菜单栏在移动端整体降级为 ⋯ Action Sheet */}
-            <Button fill="none" size="mini" aria-label={t('mb.ed.moreActions')} onClick={() => setMoreOpen(true)}>
-              <MoreOutline />
-            </Button>
+      {/* 沉浸写作：导航/视图切换/工具带整体不渲染（触屏没有 Esc，右上角浮动钮退出） */}
+      {!zen && (
+        <NavBar
+          onBack={() => navigate('/m')}
+          right={
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Button color="primary" size="mini" onClick={() => navigate(`/m/compile/${tab.id}`)}>
+                {t('mb.ed.toolCompile')}
+              </Button>
+              {/* 桌面菜单栏在移动端整体降级为 ⋯ Action Sheet */}
+              <Button fill="none" size="mini" aria-label={t('mb.ed.moreActions')} onClick={() => setMoreOpen(true)}>
+                <MoreOutline />
+              </Button>
+            </span>
+          }
+        >
+          <span className="pl-nav-title">
+            <span className="pl-nav-name">{tab.name}</span>
+            <Tag color={state.color} fill="outline">
+              {t(state.textKey)}
+            </Tag>
           </span>
-        }
-      >
-        <span className="pl-nav-title">
-          <span className="pl-nav-name">{tab.name}</span>
-          <Tag color={state.color} fill="outline">
-            {t(state.textKey)}
-          </Tag>
-        </span>
-      </NavBar>
+        </NavBar>
+      )}
 
-      <Segmented
-        value={view}
-        onChange={v => setView(v as 'source' | 'rich')}
-        options={[
-          { label: t(VIEW_LABEL.source), value: 'source' },
-          { label: t(VIEW_LABEL.rich), value: 'rich' },
-        ]}
-        style={{ margin: '8px 12px', '--segmented-background': 'var(--chrome)' } as CSSProperties}
-      />
+      {!zen && (
+        <Segmented
+          value={view}
+          onChange={v => setView(v as 'source' | 'rich')}
+          options={[
+            { label: t(VIEW_LABEL.source), value: 'source' },
+            { label: t(VIEW_LABEL.rich), value: 'rich' },
+          ]}
+          style={{ margin: '8px 12px', '--segmented-background': 'var(--chrome)' } as CSSProperties}
+        />
+      )}
 
-      {(errCount > 0 || warnCount > 0) && (
+      {!zen && (errCount > 0 || warnCount > 0) && (
         <NoticeBar
           color={errCount > 0 ? 'alert' : 'info'}
           wrap
@@ -1109,18 +1144,26 @@ export function Flow2_Workspace() {
 
       {view === 'source'
         ? <Screen1_SourceEditor tab={tab} />
-        : <Screen2_RichPreview result={result as never} onLongPress={() => setPreviewMenu(true)} onJumpOff={jumpToOffset} />}
+        : <Screen2_RichPreview result={result as never} onLongPress={() => setPreviewMenu(true)} onJumpOff={jumpToOffset} onSelectTable={onSelectTable} />}
 
-      <div className="pl-toolbelt" data-keyboard={keyboard > 0}>
-        <div className="pl-scroll-x">
-          {TOOLS.map(tool => (
-            <button key={tool.id} type="button" className="pl-tool" aria-label={t(tool.key)} onClick={() => runTool(tool.id)}>
-              {tool.icon}
-              <span>{t(tool.key)}</span>
-            </button>
-          ))}
+      {!zen && (
+        <div className="pl-toolbelt" data-keyboard={keyboard > 0}>
+          <div className="pl-scroll-x">
+            {TOOLS.map(tool => (
+              <button key={tool.id} type="button" className="pl-tool" aria-label={t(tool.key)} onClick={() => runTool(tool.id)}>
+                {tool.icon}
+                <span>{t(tool.key)}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+
+      {zen && (
+        <button type="button" className="pl-zen-exit" aria-label={t('mb.ed.zenExit')} title={t('mb.ed.zenExit')} onClick={() => setZen(false)}>
+          ✕
+        </button>
+      )}
 
       <OutlineSheet visible={outlineOpen} headings={headings} onClose={() => setOutlineOpen(false)} onJump={jumpToOffset} />
 
@@ -1149,6 +1192,18 @@ export function Flow2_Workspace() {
         onOpen={openSearchResult}
         hasFolder={!!ws.rootDir}
       />
+
+      {/* 表格可视化编辑：桌面 TablePanel 原样复用（写回走 Doc 直写垫片），
+          布局由 mobile-theme.css 把右滑抽屉适配成底部弹层 */}
+      {tableSel != null && (
+        <TablePanel
+          open
+          onClose={() => setTableSel(null)}
+          result={result as never}
+          cm={tableCm as never}
+          selection={{ did: 0, sel: { type: 'table', id: tableSel } } as never}
+        />
+      )}
 
       {/* → 长按预览区 → 就地菜单（桌面靠 hover 工具条，触屏拿不到） */}
       <ActionSheet
@@ -1216,6 +1271,15 @@ export function Flow2_Workspace() {
               navigate('/m/chat')
             },
           }] : []),
+          {
+            key: 'zen',
+            text: <span><EyeOutline /> {t('mb.ed.zen')}</span>,
+            onClick: () => {
+              setMoreOpen(false)
+              setView('source')
+              setZen(true)
+            },
+          },
           {
             key: 'export',
             text: t('mb.ed.exportBackup'),

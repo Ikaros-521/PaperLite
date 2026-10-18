@@ -14,6 +14,9 @@ export const ED_ZH = {
   'mb.ed.toolOutline': '大纲',
   'mb.ed.toolSearch': '搜索',
   'mb.ed.toolCompile': '编译',
+  // 沉浸写作（⋯ 菜单进入，隐藏外壳；触屏没有 Esc，浮动钮退出）
+  'mb.ed.zen': '沉浸写作',
+  'mb.ed.zenExit': '退出沉浸',
   // 一键插入片段里的示例文字（LaTeX 命令在代码里，不随语言变）
   'mb.ed.snBoldText': '加粗文字',
   'mb.ed.snItalicText': '斜体文字',
@@ -87,6 +90,8 @@ export const ED_EN = {
   'mb.ed.toolOutline': 'Outline',
   'mb.ed.toolSearch': 'Search',
   'mb.ed.toolCompile': 'Compile',
+  'mb.ed.zen': 'Zen writing',
+  'mb.ed.zenExit': 'Exit zen',
   // placeholder wording inside inserted snippets (the LaTeX command itself never changes)
   'mb.ed.snBoldText': 'bold text',
   'mb.ed.snItalicText': 'italic text',
