@@ -126,6 +126,7 @@ function ChatTab() {
           setMessages={ws.setChatMessages as never}
           inject={ws.chatInject as never}
           onBeforeApply={ws.beforeAiApply}
+          agentCfg={ws.agentCfg as never}
         />
       </div>
     </div>
@@ -272,6 +273,8 @@ function MobileShell() {
           setChannels={ws.setChannels as never}
           activeChannelId={ws.activeChannelId}
           setActiveChannelId={ws.setActiveChannelId as never}
+          agentCfg={ws.agentCfg as never}
+          setAgentCfg={ws.setAgentCfg as never}
         />
         {/* ChatPanel / SettingsDialog 里的 alert、confirm 走桌面那条 dialogs.js 队列；
             移动壳不挂 DialogHost 的话这些调用会永远不 resolve（删除渠道按不动） */}

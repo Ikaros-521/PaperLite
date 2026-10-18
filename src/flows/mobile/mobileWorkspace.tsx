@@ -20,6 +20,7 @@ import { LangContext } from '../../useI18n.js'
 import { LS_LANG, detectLang, setLang as setModuleLang, tr } from '../../i18n.js'
 import * as fs from '../../fs.js'
 import * as llm from '../../llm.js'
+import { loadAgentSettings, saveAgentSettings } from '../../workspace/agentRuntime.js'
 import { saveStateOf } from './shared/labels'
 import { SCALE_FONT, readScale, writeScale, type ScaleId } from './shared/scale'
 import type { SaveState } from './shared/types'
@@ -111,6 +112,8 @@ interface MobileWorkspaceValue {
   setChannels: (updater: unknown) => void
   activeChannelId: string
   setActiveChannelId: (id: string) => void
+  agentCfg: { maxSteps: number; keepResults: number }
+  setAgentCfg: (updater: (prev: { maxSteps: number; keepResults: number }) => { maxSteps: number; keepResults: number }) => void
   chatMessages: unknown[]
   setChatMessages: (updater: unknown) => void
   chatInject: { text: string; n: number } | null
@@ -196,6 +199,9 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
   const [chatInject, setChatInject] = useState<{ text: string; n: number } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   useEffect(() => { llm.saveChannels(channels) }, [channels])
+  // Agent 行为参数：与桌面读写同一个 localStorage 键，设置弹窗 Agent 子页共用
+  const [agentCfg, setAgentCfg] = useState(loadAgentSettings)
+  useEffect(() => { saveAgentSettings(agentCfg) }, [agentCfg])
 
   const activeValueRef = useRef(ws.activeValue)
   activeValueRef.current = ws.activeValue
@@ -363,6 +369,8 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     setChannels,
     activeChannelId,
     setActiveChannelId,
+    agentCfg,
+    setAgentCfg,
     chatMessages,
     setChatMessages,
     chatInject,

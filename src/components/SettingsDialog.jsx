@@ -3,9 +3,18 @@ import { useLang, useT } from '../useI18n.js';
 import { testConnection, fetchModels, newChannel, normTemperature, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
 import { resolveWindow, inputBudget, formatTokens } from '../context.js';
 import { showConfirm } from '../dialogs.js';
+import { AGENT_STEPS_MAX, AGENT_KEEP_MAX } from '../workspace/agentRuntime.js';
 
-/* AI 设置弹窗：多渠道管理（内置平台预设 / OpenAI 兼容与 Anthropic 协议 /
- * 模型列表拉取 + 搜索下拉 / 测试连接 / 上下文窗口（默认按模型自动推断） */
+/* AI 设置弹窗：子页切换（渠道 / Agent）。
+ * 渠道子页：多渠道管理（内置平台预设 / OpenAI 兼容与 Anthropic 协议 /
+ * 模型列表拉取 + 搜索下拉 / 测试连接 / 上下文窗口（默认按模型自动推断））。
+ * Agent 子页：步数上限等行为参数，对所有渠道生效。 */
+
+// 设置数值输入的钳制：非法输入回退当前值（与上下文窗口输入同一交互口径）
+const clampCfg = (v, min, max, dflt) => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
+};
 
 // 模型输入框：可手输；点「获取模型」拉取渠道列表，输入即时过滤，点选填入
 function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
@@ -67,9 +76,10 @@ function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
   );
 }
 
-export default function SettingsDialog({ open, onClose, channels, setChannels, activeChannelId, setActiveChannelId }) {
+export default function SettingsDialog({ open, onClose, channels, setChannels, activeChannelId, setActiveChannelId, agentCfg, setAgentCfg }) {
   const t = useT();
   const lang = useLang();
+  const [tab, setTab] = useState('channels'); // 'channels' 渠道管理 | 'agent' Agent 行为
   const [editId, setEditId] = useState(null);
   const [testing, setTesting] = useState(null); // {id, result}
   const [reveal, setReveal] = useState({});     // 各渠道 API Key 是否明文显示
@@ -121,6 +131,16 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
         </div>
 
         <div className="modal-body">
+          <div className="set-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={tab === 'channels'}
+              className={'set-tab' + (tab === 'channels' ? ' on' : '')}
+              onClick={() => setTab('channels')}>{t('set.tabChannels')}</button>
+            <button type="button" role="tab" aria-selected={tab === 'agent'}
+              className={'set-tab' + (tab === 'agent' ? ' on' : '')}
+              onClick={() => setTab('agent')}>{t('set.tabAgent')}</button>
+          </div>
+
+          {tab === 'channels' && (<>
           <p className="hint">{t('set.intro')}</p>
 
           <div className="ch-list">
@@ -241,6 +261,25 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
 
           <button className="btn" onClick={addChannel}>{t('set.add')}</button>
           <p className="hint">{t('set.tip')}</p>
+          </>)}
+
+          {tab === 'agent' && agentCfg && (
+            <div className="ch-edit set-agent">
+              <p className="hint">{t('set.agentIntro')}</p>
+              <label>
+                {t('set.agentSteps')}
+                <input type="number" min="1" max={AGENT_STEPS_MAX} value={agentCfg.maxSteps}
+                  onChange={e => setAgentCfg(s => ({ ...s, maxSteps: clampCfg(e.target.value, 1, AGENT_STEPS_MAX, s.maxSteps) }))} />
+                <span className="hint">{t('set.agentStepsHint')}</span>
+              </label>
+              <label>
+                {t('set.agentKeep')}
+                <input type="number" min="1" max={AGENT_KEEP_MAX} value={agentCfg.keepResults}
+                  onChange={e => setAgentCfg(s => ({ ...s, keepResults: clampCfg(e.target.value, 1, AGENT_KEEP_MAX, s.keepResults) }))} />
+                <span className="hint">{t('set.agentKeepHint')}</span>
+              </label>
+            </div>
+          )}
         </div>
 
         <div className="modal-f">

@@ -50,6 +50,7 @@ import { useCompile } from './workspace/useCompile.js';
 import { buildLLMContext, aiFixIssuePrompt, agentProjectBrief } from './workspace/chatContext.js';
 import { runFixQueue } from './workspace/aiFixQueue.js';
 import { makeAgentExecutor } from './workspace/agentTools.js';
+import { loadAgentSettings, saveAgentSettings } from './workspace/agentRuntime.js';
 import { LangContext } from './useI18n.js';
 
 const LS_MODE = 'paperlite.viewmode.v2';
@@ -480,6 +481,9 @@ export default function App() {
   }, [activeValue, editorSettings.autoCompile, isTexLike, compiling, engine, builtinStatus, compileResult, autoCompileNow]);
 
   useEffect(() => { llm.saveChannels(channels); }, [channels]);
+  // Agent 行为参数（步数上限等）：随浏览器保存，对话面板与设置弹窗共用一份
+  const [agentCfg, setAgentCfg] = useState(() => loadAgentSettings());
+  useEffect(() => { saveAgentSettings(agentCfg); }, [agentCfg]);
   // 沉浸模式：涂在 <body> 上让 CSS 隐藏全部外壳；片段变更即落盘（失败静默，编辑仍在内存）
   useEffect(() => { document.body.classList.toggle('pl-zen', zen); }, [zen]);
   useEffect(() => { saveSnippets(snippets); }, [snippets]);
@@ -1450,6 +1454,7 @@ export default function App() {
         setMessages={setChatMessages}
         externalBusy={aiBusy}
         agentEnv={agentEnv}
+        agentCfg={agentCfg}
       />
 
       <DialogHost />
@@ -1461,6 +1466,8 @@ export default function App() {
         setChannels={setChannels}
         activeChannelId={activeChannelId}
         setActiveChannelId={setActiveChannelId}
+        agentCfg={agentCfg}
+        setAgentCfg={setAgentCfg}
       />
 
       {fileDialog === 'history' && activeTab.doc && <HistoryDialog key={activeId} name={activeTab.name} current={activeTab.doc.getValue()} versions={readHistory(historyKey)}

@@ -20,6 +20,32 @@ export const AGENT_MAX_STEPS = 8;
 // 把第 1 步 read_file 的 12k 字符一路背到第 8 步。
 export const TOOL_RESULT_KEEP = 2;
 
+// Agent 行为参数（步数上限 / 全文保留条数）随浏览器保存；常量只作默认值与钳制边界
+export const AGENT_STEPS_MAX = 50;
+export const AGENT_KEEP_MAX = 10;
+const AGENT_CFG_KEY = 'paperlite.agentSettings.v1';
+
+function clampInt(v, min, max, dflt) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
+}
+
+export function loadAgentSettings() {
+  const dflt = { maxSteps: AGENT_MAX_STEPS, keepResults: TOOL_RESULT_KEEP };
+  try {
+    const raw = JSON.parse(localStorage.getItem(AGENT_CFG_KEY) || '{}');
+    if (!raw || typeof raw !== 'object') return dflt;
+    return {
+      maxSteps: clampInt(raw.maxSteps, 1, AGENT_STEPS_MAX, dflt.maxSteps),
+      keepResults: clampInt(raw.keepResults, 1, AGENT_KEEP_MAX, dflt.keepResults),
+    };
+  } catch (e) { return dflt; }
+}
+
+export function saveAgentSettings(cfg) {
+  try { localStorage.setItem(AGENT_CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* ignore */ }
+}
+
 export function agentSystemPrompt() {
   const L = getLang();
   return tr(L, 'ai.agentSystem', {
@@ -29,10 +55,10 @@ export function agentSystemPrompt() {
 }
 
 /** 装配用的历史视图：旧的 tool-result 换成占位（UI 仍显示完整结果，仅请求侧瘦身） */
-function historyForLlm(list, L) {
+function historyForLlm(list, L, keep) {
   const toolIdx = [];
   for (let i = 0; i < list.length; i++) if (list[i] && list[i].kind === 'tool-result') toolIdx.push(i);
-  const stale = new Set(toolIdx.slice(0, Math.max(0, toolIdx.length - TOOL_RESULT_KEEP)));
+  const stale = new Set(toolIdx.slice(0, Math.max(0, toolIdx.length - keep)));
   if (!stale.size) return list;
   return list.map((m, i) => stale.has(i)
     ? { ...m, content: tr(L, 'agent.staleToolResult', { tool: m.tool || '?', n: (m.content || '').length }) }
@@ -47,6 +73,7 @@ function historyForLlm(list, L) {
  *   summaryHeader,              // 压缩摘要头（与普通对话一致）
  *   budget,                     // 输入预算（ctx.inputBudget）
  *   maxSteps?: number,
+ *   keepResults?: number,       // 最近的 N 条工具结果保持全文（默认 TOOL_RESULT_KEEP）
  *   execute: (name, args) => Promise<{ok, result}>,
  *   onUpdate: (messages: any[]) => void,
  *   signal?: AbortSignal,
@@ -59,6 +86,7 @@ export async function runAgentLoop(opts) {
     execute, onUpdate, signal,
   } = opts;
   const maxSteps = opts.maxSteps || AGENT_MAX_STEPS;
+  const keep = clampInt(opts.keepResults, 1, AGENT_KEEP_MAX, TOOL_RESULT_KEEP);
   const L = getLang();
 
   // 本地持有完整列表，每次变化整体推给 UI
@@ -67,7 +95,7 @@ export async function runAgentLoop(opts) {
   const patchLast = (fn) => { list = list.slice(0, -1).concat([fn(list[list.length - 1])]); onUpdate(list); };
 
   const build = () => ctx.buildPayload({
-    system, docHeader, doc, summaryHeader, history: historyForLlm(list, L), budget,
+    system, docHeader, doc, summaryHeader, history: historyForLlm(list, L, keep), budget,
   }).messages;
 
   let usage = null;

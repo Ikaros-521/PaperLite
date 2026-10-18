@@ -438,6 +438,16 @@ body.cp-dragging::before {
 }
 .modal-body { padding: 12px 16px; overflow: auto; }
 .modal-f { padding: 10px 16px; border-top: 1px solid var(--line-soft); text-align: right; }
+/* AI 设置子页切换：下划线式页签（渠道 / Agent） */
+.set-tabs { display: flex; gap: 2px; margin-bottom: 10px; border-bottom: 1px solid var(--line-soft); }
+.set-tab {
+  border: 0; background: none; font: inherit; font-size: 13.5px; padding: 6px 14px 5px;
+  color: var(--ink-soft); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.set-tab:hover { color: var(--ink); }
+.set-tab.on { color: var(--accent-deep); border-bottom-color: var(--accent); font-weight: 600; }
+.set-agent { gap: 12px; }
+.set-agent > label input[type=number] { width: 110px; }
 .ch-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .ch-item { border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 10px; }
 .ch-item.on { border-color: var(--accent-border); background: var(--hover); }

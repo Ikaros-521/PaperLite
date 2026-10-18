@@ -13,7 +13,7 @@ import { runAgentLoop, agentSystemPrompt } from '../workspace/agentRuntime.js';
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -208,6 +208,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         doc: brief,
         summaryHeader: t('ai.summaryHeader'),
         budget,
+        maxSteps: agentCfg && agentCfg.maxSteps,
+        keepResults: agentCfg && agentCfg.keepResults,
         execute: agentEnv.execute,
         onUpdate: list => setMessages(list),
         signal: ac.signal,

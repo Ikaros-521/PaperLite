@@ -4,7 +4,7 @@
  * user 消息进入 buildPayload）。
  */
 import assert from 'node:assert/strict';
-import { runAgentLoop, agentSystemPrompt } from '../src/workspace/agentRuntime.js';
+import { runAgentLoop, agentSystemPrompt, loadAgentSettings, saveAgentSettings } from '../src/workspace/agentRuntime.js';
 import * as ctxBudget from '../src/context.js';
 import { setLang } from '../src/i18n.js';
 
@@ -121,5 +121,41 @@ assert.ok(reqText.includes('已省略') || reqText.includes('omitted'), '占位�
 // UI 侧：完整结果始终可见
 const uiText = uiLists[uiLists.length - 1].map(m => m.content || '').join('\n');
 assert.ok(uiText.includes('RESULT-1'), 'UI 消息流仍保留完整结果');
+
+// keepResults 可配置（AI 设置 → Agent 子页）：请求侧全文保留条数走 opts 而非固定常量
+let seq3 = 0;
+const requests3 = [];
+globalThis.fetch = async (u, opts) => {
+  requests3.push(JSON.parse(opts.body).messages);
+  return sseResponse('```tool\n{"tool":"read_selection","args":{}}\n```');
+};
+await runAgentLoop({
+  channel,
+  messages: [{ role: 'user', content: 'go' }],
+  system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+  budget: ctxBudget.inputBudget(channel),
+  maxSteps: 3,
+  keepResults: 1,
+  execute: async () => ({ ok: true, result: 'KEEP-' + (++seq3) }),
+  onUpdate: () => {},
+});
+globalThis.fetch = realFetch;
+const keepReq = requests3[requests3.length - 1].map(m => m.content).join('\n');
+assert.ok(!keepReq.includes('KEEP-1') && !keepReq.includes('KEEP-2'), 'keepResults=1 时更早的结果要从请求中省略');
+assert.ok(keepReq.includes('KEEP-3'), '最近 1 条保持全文');
+
+// Agent 行为设置的持久化：读回 + 越界钳制 + 损坏数据回退默认值
+const memStore = {};
+globalThis.localStorage = {
+  getItem: k => (k in memStore ? memStore[k] : null),
+  setItem: (k, v) => { memStore[k] = String(v); },
+};
+saveAgentSettings({ maxSteps: 999, keepResults: 0 });
+assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1 }, '越界值要钳制到合法区间');
+saveAgentSettings({ maxSteps: 12, keepResults: 4 });
+assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4 }, '合法值要原样读回');
+memStore['paperlite.agentSettings.v1'] = '{oops';
+assert.deepEqual(loadAgentSettings(), { maxSteps: 8, keepResults: 2 }, '损坏数据回退默认值');
+delete globalThis.localStorage;
 
 console.log('agentRuntime: all tests passed');
