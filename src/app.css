@@ -298,6 +298,46 @@ body.cp-dragging::before {
   border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; background: var(--paper); font-size: 12px; max-width: 150px; color: var(--ink);
 }
 .cot-badge { font-size: 11px; color: var(--accent-deep); background: var(--badge-bg); border-radius: 4px; padding: 1px 6px; }
+/* Agent 模式开关与状态徽标 */
+.agent-toggle {
+  border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; background: var(--paper);
+  font-size: 12px; color: var(--ink-soft); cursor: pointer; transition: all .12s;
+}
+.agent-toggle:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-deep); }
+.agent-toggle.on {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600;
+}
+.agent-toggle:disabled { opacity: .5; cursor: default; }
+.agent-badge {
+  font-size: 11px; color: var(--accent-deep); background: var(--badge-bg);
+  border-radius: 4px; padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
+}
+/* Agent 工具调用 / 结果卡片 */
+.chat-tool-call {
+  display: flex; align-items: center; gap: 6px; margin: 4px 0;
+  font-size: 11.5px; color: var(--ink-soft); background: var(--chrome);
+  border: 1px dashed var(--edge); border-radius: 6px; padding: 4px 8px;
+}
+.chat-tool-call .ctc-gear { color: var(--accent); }
+.chat-tool-call code { color: var(--accent-deep); font-weight: 600; }
+.chat-tool-call .ctc-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .75; }
+.chat-tool-result {
+  align-self: stretch; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--chrome);
+  padding: 5px 8px; font-size: 11.5px; color: var(--ink-soft);
+}
+.chat-tool-result .ctr-head { display: flex; align-items: baseline; gap: 8px; }
+.chat-tool-result .ctr-head code { color: var(--accent-deep); }
+.chat-tool-result .ctr-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
+.chat-tool-result .ctr-body {
+  font-family: Consolas, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-word;
+  max-height: 140px; overflow: auto; margin: 4px 0 0; color: var(--ink-soft);
+}
+.chat-tool-result.bad { border-color: rgba(var(--shadow-rgb), .3); }
+.chat-tool-result.running { opacity: .75; }
+.chat-agent-limit {
+  align-self: center; font-size: 11px; color: var(--ink-faint);
+  border: 1px dotted var(--edge); border-radius: 999px; padding: 2px 10px; text-align: center;
+}
 .chat-list { flex: 1; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
 .chat-empty { color: var(--ink-faint); line-height: 2; padding: 20px 6px; }
 .chat-suggest-h { color: var(--ink-faint); font-size: 12px; margin-bottom: 6px; }
@@ -480,6 +520,20 @@ body.cp-dragging::before {
 .pl-diag-dot:hover { transform: scale(1.4); }
 .pl-diag-dot.err { background: var(--seal); }
 .pl-diag-dot.warn { background: var(--warn-strong); }
+/* 划词 AI 快捷条：竖排图标小控件，整体落在行号列内（绝对定位于 #editorPane 左缘），
+ * 不遮挡正文；悬停按钮显示功能名 */
+.pl-selpop {
+  position: absolute; left: 2px; z-index: 30;
+  display: flex; flex-direction: column; gap: 1px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 3px 10px rgba(var(--shadow-rgb), .16); padding: 2px;
+}
+.pl-selpop button {
+  border: 0; background: none; cursor: pointer; font-size: 13px; line-height: 1;
+  color: var(--ink-soft); width: 24px; height: 24px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; transition: all .12s;
+}
+.pl-selpop button:hover { background: var(--accent); color: var(--on-accent); }
 .pl-diag-err-text, .pl-diag-warn-text { padding-bottom: 2px; }
 /* 波浪线画在 data-URI 里，var() 进不去，故取一个浅底/深底都可读的红橙值 */
 .pl-diag-err-text {

@@ -8,6 +8,7 @@
 import * as llm from '../llm.js';
 import * as ctxBudget from '../context.js';
 import { tr, getLang } from '../i18n.js';
+import { outlineOf } from './agentTools.js';
 
 function rangeText(cm, a, b) {
   const lines = [];
@@ -85,4 +86,34 @@ export function aiFixIssuePrompt({ issues, lines }) {
     return tr(L, 'ai.errLineSrc', { n: d.line != null ? d.line + 1 : '?', msg: d.msg, src: src.trim() });
   }).join('\n');
   return tr(L, 'ai.fixIssuePrompt', { detail });
+}
+
+/**
+ * Agent 模式的项目状态简报：活动文件 + 标签清单 + 大纲 + 选区长度 + 诊断数。
+ * 渐进式披露：简报只放「元数据级」信息（路径/行数/大纲条目/长度/数量），
+ * 正文、选区内容、诊断明细一律由模型按需用工具读取（read_file / read_selection /
+ * get_diagnostics），避免每轮请求都携带大块可能用不上的上下文。
+ */
+export function agentProjectBrief({ cm, tabs, activeId, tabPath, diagnostics }) {
+  const L = getLang();
+  const c = cm ? cm() : null;
+  const openTabs = (tabs || []).filter(x => x && x.doc);
+  const activeTab = openTabs.filter(x => x.id === activeId())[0] || null;
+  const lines = [];
+  if (activeTab) {
+    const text = c ? c.getValue() : activeTab.doc.getValue();
+    const lineCount = text.split('\n').length;
+    lines.push(tr(L, 'agent.briefActive', { path: tabPath(activeTab), n: lineCount }));
+    const outline = outlineOf(text);
+    if (outline.length) lines.push(tr(L, 'agent.briefOutline') + '\n  ' + outline.join('\n  '));
+    // 只报「有选区、多长」，不附内容：与选区无关的问题不必为此付出 token
+    const sel = c ? c.getSelection() : '';
+    if (sel) lines.push(tr(L, 'agent.briefSel', { n: sel.length }));
+  }
+  const others = openTabs.filter(x => x !== activeTab).map(tabPath);
+  if (others.length) lines.push(tr(L, 'agent.briefTabs') + ' ' + others.join(', '));
+  const issues = diagnostics || [];
+  if (issues.length) lines.push(tr(L, 'agent.briefDiag', { n: issues.length }));
+  lines.push(tr(L, 'agent.briefHint'));
+  return lines.join('\n');
 }

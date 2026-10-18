@@ -2,20 +2,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
 import * as ctx from '../context.js';
 import { showAlert as alert, showConfirm } from '../dialogs.js';
+import { stripToolBlocks, parseToolCalls } from '../workspace/agentTools.js';
+import { runAgentLoop, agentSystemPrompt } from '../workspace/agentRuntime.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
- * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复）、
- * 上下文用量状态栏（实测/估算）与压缩（模型摘要，失败回退本地裁剪）。
- * 载荷装配与 token 口径统一在 context.js，后续 agent 工具调用共用同一预算。 */
+ * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复、
+ * 划词翻译/润色的自动发送）、上下文用量状态栏（实测/估算）与压缩（模型摘要，失败回退本地裁剪）。
+ * Agent 模式（agentEnv 可用时）：模型经文本协议调用工具（读项目/搜索/改文档），循环执行直到完成。
+ * 载荷装配与 token 口径统一在 context.js，agent 工具调用共用同一预算。 */
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [scope, setScope] = useState('selection');
+  const [mode, setMode] = useState('chat');   // 'chat' 普通对话 | 'agent' 工具代理
   const [showReasoning, setShowReasoning] = useState({});
   const [pos, setPos] = useState(null);      // null=停靠右侧；{x,y}=浮动位置（同样式面板）
   const [width, setWidth] = useState(null);  // null=默认 360；左缘可拉伸
@@ -30,6 +34,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const listRef = useRef(null);
   const taRef = useRef(null);
   const panelRef = useRef(null);
+  const busyRef = useRef(false);          // inject 自动发送时读最新 busy，不依赖 state 时机
+  const sendRef = useRef(null);           // send 声明在下面，effect 里经 ref 取最新实现
 
   const channel = useMemo(
     () => channels.filter(c => c.id === activeChannelId)[0] || channels[0] || null,
@@ -40,15 +46,24 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages]);
 
-  // 外部注入提示词（如点击诊断红点）：预填输入框并聚焦，光标到末尾等待补充修复方向
+  // 外部注入提示词：诊断红点预填并聚焦；划词翻译/润色自动发送（auto 为完整问题文本）。
+  // scope 顺带切换上下文范围（如划词动作强制 selection）——注意 setScope 是异步的，
+  // 自动发送当拍就要用，因此同时把 scope 作为覆盖参数传给 send，不吃旧闭包值。
   useEffect(() => {
     if (inject && inject.n) {
-      setInput(inject.text);
+      if (inject.scope) setScope(inject.scope);
+      if (inject.mode) setMode(inject.mode);
+      if (inject.auto) {
+        if (!busyRef.current && sendRef.current) sendRef.current(inject.auto, { scope: inject.scope });
+        return;
+      }
+      setInput(inject.text || '');
       setTimeout(() => {
         const ta = taRef.current;
         if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
       }, 60);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inject && inject.n]);
 
   // 用量基线：只随消息条数变化重算，流式增量不触发整段历史重新估算
@@ -175,13 +190,52 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     return next;
   };
 
-  const send = async () => {
-    const q = input.trim();
+  // ---- Agent 模式：模型经文本协议调工具，循环执行直到给出最终回答 ----
+  const runAgent = async (q) => {
+    const brief = agentEnv.buildBrief();
+    setReqUsage(null);
+    setRealUsage(null);
+    setBusy(true); busyRef.current = true;
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setMessages(messages.concat([{ role: 'user', content: q }]));
+    try {
+      const { usage } = await runAgentLoop({
+        channel,
+        messages: messages.concat([{ role: 'user', content: q }]),
+        system: agentSystemPrompt(),
+        docHeader: t('ai.agentCtxHeader'),
+        doc: brief,
+        summaryHeader: t('ai.summaryHeader'),
+        budget,
+        execute: agentEnv.execute,
+        onUpdate: list => setMessages(list),
+        signal: ac.signal,
+      });
+      setRealUsage(usage || null);
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        setMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content
+          ? { ...m, content: t('chat.reqFailed', { msg: e.message || e }) }
+          : m));
+      }
+    } finally {
+      setBusy(false); busyRef.current = false;
+      abortRef.current = null;
+    }
+  };
+
+  const send = async (preset, opts) => {
+    // preset 只接受字符串：onClick={send} 会把事件对象传进来，绝不能当成提问文本
+    const q = (typeof preset === 'string' ? preset : input).trim();
     if (!q || busy || externalBusy) return;
     if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
     setInput('');
     setNote('');
-    const pack = await buildContext(scope, q, channel);
+    if (mode === 'agent' && agentEnv) return runAgent(q);
+    // 自动发送的注入会带 scope 覆盖（setScope 要下一拍才生效，不能吃旧闭包值）
+    const useScope = (opts && opts.scope) || scope;
+    const pack = await buildContext(useScope, q, channel);
     const build = (list) => ctx.buildPayload({
       system: t('ai.system'),
       docHeader: t('ai.ctxHeader'),
@@ -203,7 +257,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     }
     setReqUsage(built.usage);
     setRealUsage(null);
-    setBusy(true);
+    setBusy(true); busyRef.current = true;
     const ac = new AbortController();
     abortRef.current = ac;
     setMessages(history.concat([{ role: 'assistant', content: '', reasoning: '' }]));
@@ -223,10 +277,11 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           : m));
       }
     } finally {
-      setBusy(false);
+      setBusy(false); busyRef.current = false;
       abortRef.current = null;
     }
   };
+  sendRef.current = send;   // inject 自动发送经 ref 取最新闭包（messages/busly 都是当次渲染值）
 
   const applyBlock = async (code, mode) => {
     const cm = buildContext.cm && buildContext.cm();
@@ -247,6 +302,26 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   };
 
   const copy = (text) => navigator.clipboard && navigator.clipboard.writeText(text);
+
+  // 正文里的 ```tool 块渲染为「工具调用」卡片（执行状态看紧随的 tool-result 卡片）；
+  // 先统一 strip：流式中未闭合的 tool 块也不会把半截 JSON 露到正文
+  const renderWithTools = (text, mi) => {
+    const { calls } = parseToolCalls(text);
+    const stripped = stripToolBlocks(text);
+    if (!calls.length) return renderBlocks(stripped, mi);
+    return (
+      <>
+        {stripped ? renderBlocks(stripped, mi) : null}
+        {calls.map((c, ci) => (
+          <div key={'tool' + ci} className="chat-tool-call">
+            <span className="ctc-gear">⚙</span>
+            <code>{c.tool}</code>
+            <span className="ctc-args">{JSON.stringify(c.args)}</span>
+          </div>
+        ))}
+      </>
+    );
+  };
 
   const renderBlocks = (text, mi) => {
     const parts = [];
@@ -303,12 +378,24 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           {!channels.length && <option value="">{t('chat.noChannelOpt')}</option>}
           {channels.map(c => <option key={c.id} value={c.id}>{c.name} · {c.chatModel || t('chat.noModel')}</option>)}
         </select>
-        <select value={scope} onChange={e => setScope(e.target.value)} title={t('chat.scopeTip')}>
-          <option value="selection">{t('chat.scopeSel')}</option>
-          <option value="paragraph">{t('chat.scopePara')}</option>
-          <option value="full">{t('chat.scopeFull')}</option>
-          <option value="retrieve">{t('chat.scopeRag')}</option>
-        </select>
+        {agentEnv && (
+          <button className={'agent-toggle' + (mode === 'agent' ? ' on' : '')}
+            disabled={busy || externalBusy || compacting}
+            onClick={() => setMode(m => (m === 'agent' ? 'chat' : 'agent'))}
+            title={t('agent.toggleTip')}>
+            🤖 {t('agent.toggle')}
+          </button>
+        )}
+        {mode === 'agent' && agentEnv ? (
+          <span className="agent-badge" title={t('agent.badgeTip')}>{t('agent.badge')}</span>
+        ) : (
+          <select value={scope} onChange={e => setScope(e.target.value)} title={t('chat.scopeTip')}>
+            <option value="selection">{t('chat.scopeSel')}</option>
+            <option value="paragraph">{t('chat.scopePara')}</option>
+            <option value="full">{t('chat.scopeFull')}</option>
+            <option value="retrieve">{t('chat.scopeRag')}</option>
+          </select>
+        )}
         {channel && channel.cot && <span className="cot-badge" title={t('chat.cotTip')}>{t('chat.cot')}</span>}
       </div>
 
@@ -317,7 +404,10 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           channel ? (
             <div className="chat-empty">
               <div className="chat-suggest-h">{t('chat.try')}</div>
-              {[t('chat.sug1'), t('chat.sug2'), t('chat.sug3')].map(s => (
+              {(mode === 'agent' && agentEnv
+                ? [t('agent.sug1'), t('agent.sug2'), t('agent.sug3')]
+                : [t('chat.sug1'), t('chat.sug2'), t('chat.sug3')]
+              ).map(s => (
                 <button key={s} className="chat-suggest"
                   onClick={() => { setInput('「' + s + '」'); taRef.current && taRef.current.focus(); }}>
                   「{s}」
@@ -340,6 +430,16 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             </div>
             <div className="chat-summary-b">{m.content}</div>
           </div>
+        ) : m.kind === 'tool-result' ? (
+          <div key={i} className={'chat-tool-result' + (m.running ? ' running' : m.ok ? '' : ' bad')}>
+            <div className="ctr-head">
+              <span>{m.running ? '⏳' : (m.ok ? '✅' : '❌')} {t('agent.toolRan')} <code>{m.tool}</code></span>
+              <span className="ctr-args">{JSON.stringify(m.args || {}).slice(0, 140)}</span>
+            </div>
+            <pre className="ctr-body">{String(m.content || '').slice(0, 1500)}</pre>
+          </div>
+        ) : m.kind === 'agent-limit' ? (
+          <div key={i} className="chat-agent-limit">{m.content}</div>
         ) : (
           <div key={i} className={'chat-msg ' + m.role}>
             {m.role === 'user' && m.ctxNote && <div className="chat-ctx">{m.ctxNote}</div>}
@@ -351,7 +451,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
                 {showReasoning[i] && <div className="cot-body">{m.reasoning}</div>}
               </div>
             ) : null}
-            {m.content ? renderBlocks(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
+            {m.content ? renderWithTools(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
           </div>
         ))}
       </div>
@@ -389,7 +489,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <div className="chat-input-acts">
           {busy
             ? <button className="btn sm" onClick={() => abortRef.current && abortRef.current.abort()}>{t('chat.stop')}</button>
-            : <button className="btn sm primary" onClick={send} disabled={!channel || externalBusy}>{t('chat.send')}</button>}
+            : <button className="btn sm primary" onClick={() => send()} disabled={!channel || externalBusy}>{t('chat.send')}</button>}
         </div>
       </div>
     </aside>

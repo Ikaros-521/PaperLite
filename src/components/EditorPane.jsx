@@ -148,15 +148,19 @@ function buildLatexHint(refCompletionRef, completionRef) {
 /* CodeMirror 5 封装：单一编辑器实例 + 每 Tab 一个 CodeMirror.Doc（swapDoc 切换，
  * 各文件独立撤销历史与光标）。mode 由 Doc 创建时指定。
  * 查找/替换用自带的 FindReplace 面板（addon 的对话框没有跳转按钮与匹配计数）。
- * 诊断：行号左侧 gutter 红橙点（点击触发 AI 修复）+ 行内波浪线（VSCode 风格）。 */
-export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, grammarCheck, typewriter, refCompletion, completion, onImageFile, onForwardSync }) {
+ * 诊断：行号左侧 gutter 红橙点（点击触发 AI 修复）+ 行内波浪线（VSCode 风格）。
+ * 选中内容后在行号列旁弹出 AI 快捷条（对话 / 润色 / 翻译），动作交给上层 onSelectionAction。 */
+export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, grammarCheck, typewriter, refCompletion, completion, onImageFile, onForwardSync, onSelectionAction }) {
   const hostRef = useRef(null);
   const cmRef = useRef(null);
   const marksRef = useRef([]);
   const [cmInst, setCmInst] = useState(null);
   const [findOpen, setFindOpen] = useState(false);
+  // 选区快捷条：{top,left} 相对 #editorPane；null 隐藏。拖选进行中不弹（draggingRef）
+  const [selPop, setSelPop] = useState(null);
+  const draggingRef = useRef(false);
   const cb = useRef({});
-  cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue, onImageFile, onForwardSync };
+  cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue, onImageFile, onForwardSync, onSelectionAction };
   const refCompletionRef = useRef(refCompletion);
   refCompletionRef.current = refCompletion;
   const completionRef = useRef(completion);
@@ -356,12 +360,40 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       const pos = instance.coordsChar({ left: e.clientX, top: e.clientY });
       if (pos) cb.current.onForwardSync(pos.line);
     });
+    // ---- 选区 AI 快捷条：竖排小控件，整体落在行号列内（left 固定贴 gutter 左缘，
+    // 不遮挡正文任何内容），top 跟随选区首行并夹在编辑器可视区内 ----
+    const updateSelPop = () => {
+      const c = cmRef.current;
+      if (!c || !cb.current.onSelectionAction) { setSelPop(null); return; }
+      if (!c.somethingSelected()) { setSelPop(null); return; }
+      try {
+        const from = c.getCursor('from');
+        const co = c.charCoords(from, 'local');
+        const host = hostRef.current;
+        const maxTop = host ? Math.max(0, host.clientHeight - 96) : Infinity;
+        const next = { top: Math.min(Math.max(0, co.top - 2), maxTop) };
+        // cursorActivity（打字机模式下高频）只有位置真的变了才 setState
+        setSelPop(prev => (prev && prev.top === next.top) ? prev : next);
+      } catch (e) { setSelPop(null); }
+    };
+    cm.on('mousedown', () => { draggingRef.current = true; });
+    cm.on('cursorActivity', () => { if (!draggingRef.current) updateSelPop(); });
+    // 滚动后行号列位置不变但选区行变了：重算（选区滚出可视区时 charCoords 可能为负，夹到 0）
+    cm.on('scroll', () => { if (cm.somethingSelected()) updateSelPop(); else setSelPop(null); });
+    const onMouseUp = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      // CodeMirror 在 mouseup 后才提交最终选区，等一拍再定位
+      setTimeout(updateSelPop, 0);
+    };
+    window.addEventListener('mouseup', onMouseUp);
     cb.current.onInit && cb.current.onInit(cm);
     setTimeout(() => cm.refresh(), 50);
     return () => {
       clearTimeout(spellTimerRef.current);
       clearTimeout(grammarTimerRef.current);
       grammarGenRef.current++;
+      window.removeEventListener('mouseup', onMouseUp);
       // 先脱开共享 Doc（避免 StrictMode 双挂载时 “document is already in use”）
       try { cm.swapDoc(new CodeMirror.Doc('', 'stex')); } catch (e) { /* ignore */ }
       const el = cm.getWrapperElement();
@@ -376,6 +408,7 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       cm.swapDoc(doc);
       cm.refresh();
       cm.focus();
+      setSelPop(null);          // 换文档后旧选区失效，快捷条收起
       clearSpellMarks();   // 标记属于旧 Doc；新 Doc 稍后由 scheduleSpell 重画
       scheduleSpell();
       clearGrammarMarks();
@@ -460,6 +493,23 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
   return (
     <div id="editorPane">
       <div id="editorHost" ref={hostRef} />
+      {selPop && cmInst && (
+        <div className="pl-selpop" style={{ top: selPop.top }} role="toolbar">
+          {[['chat', '💬', 'selpop.chat'],
+            ['polish', '✨', 'selpop.polish'],
+            ['translate', '🌐', 'selpop.translate']].map(([act, icon, labelKey]) => (
+            <button key={act} title={tr(getLang(), labelKey)} aria-label={tr(getLang(), labelKey)}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => {
+                const text = cmInst.getSelection();
+                setSelPop(null);
+                if (text) cb.current.onSelectionAction && cb.current.onSelectionAction({ action: act, text });
+              }}>
+              {icon}
+            </button>
+          ))}
+        </div>
+      )}
       {cmInst && doc && (
         <FindReplace cm={cmInst} doc={doc} open={findOpen} request={findReq}
           onClose={() => { setFindOpen(false); cmInst.focus(); }} />

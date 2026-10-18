@@ -442,6 +442,64 @@ export const DICT = {
     'ai.compactSystem': '你是对话压缩器。只输出中文要点摘要，不要复述原文、不要评价、不要新增信息。',
     'ai.compactPrompt': '请把下面的历史对话压缩成要点摘要。必须保留：已达成的结论、用户明确提出的偏好与约束、' +
       '文档结构与未完成的任务、关键术语与数字。用简洁条目输出，总长控制在 300 字内：',
+    // ---- 划词 AI 快捷条 ----
+    'selpop.chat': 'AI 对话', 'selpop.polish': '润色', 'selpop.translate': '翻译',
+    'ai.selChatPre': '请基于选中内容',
+    'ai.selPolish': '请润色下面【选中的内容】：保持原意与 LaTeX 结构不变，提升学术表达与流畅度。' +
+      '把润色后的完整内容放在 ```latex 代码块中，再用条目简述修改点。\n\n选中的内容：\n```latex\n{sel}\n```',
+    'ai.selTranslate': '请翻译下面【选中的内容】：若原文是中文，译为可直接用于论文的学术英文（保留 LaTeX 命令与数学环境不变）；' +
+      '若原文是英文或其他语言，译为中文。把译文放在 ```latex 代码块中，可附简短译注。\n\n选中的内容：\n```latex\n{sel}\n```',
+    // ---- Agent 模式 ----
+    'ai.agentCtxHeader': '当前项目状态（细节请用工具按需读取）：',
+    'ai.agentSystem': '你是 PaperLite 论文编辑器中的 AI Agent，可代替用户浏览、检索和修改整个项目。' +
+      '请用{lang}回答，简洁、结构化，使用 Markdown。\n\n' +
+      '可用工具（调用时输出一个 ```tool 代码块，内含一条 JSON：{"tool":"工具名","args":{…}}，同一轮可以多个）：\n{tools}\n\n' +
+      '使用规则：\n' +
+      '- 按需最小化读取：先用大纲 / 搜索结果定位，再读需要的文件；与问题无关的内容不要主动读取。\n' +
+      '- 需要了解项目内容时先用 list_files / read_file / search_files，不要凭空猜测文件内容。\n' +
+      '- 修改文档前必须先 read_file 确认原文；edit_file 的 old_text 必须与文档原文完全一致且全文唯一（不唯一时附上相邻行做上下文）。\n' +
+      '- 回答「项目怎么用 / 哪里有问题」时，先用 get_diagnostics / read_file 拿真实状态再回答。\n' +
+      '- 不需要工具时直接用 Markdown 回答。\n' +
+      '- 完成修改后，简要总结改了哪些文件、哪些位置。',
+    'agent.toggle': 'Agent', 'agent.toggleTip': 'Agent 模式：AI 可读取项目文件、全局搜索、修改文档、新建文件，循环执行直到完成任务',
+    'agent.badge': '🤖 自主读取项目', 'agent.badgeTip': 'Agent 模式下 AI 自主决定读取哪些上下文（选区 / 大纲 / 诊断会随问题附带）',
+    'agent.sug1': '帮我检查全文并修复所有 LaTeX 语法问题', 'agent.sug2': '梳理这个项目的结构，提出改进建议',
+    'agent.sug3': '根据已有章节续写下一节',
+    'agent.toolRan': '工具',
+    'agent.toolTruncated': '结果过长，已截断 {n} 字符',
+    'agent.tListFiles': '列出项目全部文件与打开的标签',
+    'agent.tReadFile': '读取指定路径文件的内容（优先读编辑中的实时内容）',
+    'agent.tOpenFile': '在编辑器中打开指定文件（之后 edit_file / insert_text 作用于它）',
+    'agent.tSearch': '在项目所有文件中做文本搜索',
+    'agent.tReadSel': '读取编辑器当前选中的文本',
+    'agent.tDiag': '获取当前文档的语法 / 编译诊断列表',
+    'agent.tEditFile': '把当前文档中 old_text 精确替换为 new_text（old_text 必须全文唯一）',
+    'agent.tInsert': '把 text 插入到当前文档光标处（有选区时替换选区）',
+    'agent.tCreateFile': '在项目中新建文件并写入 content',
+    'agent.filesOpen': '打开的标签：', 'agent.filesActive': '当前编辑',
+    'agent.filesFolder': '项目文件夹：', 'agent.filesEmpty': '项目里还没有文件',
+    'agent.errNoPath': '缺少 path 参数', 'agent.errFileNotFound': '未找到文件：{path}',
+    'agent.errNoQuery': '缺少 query 参数', 'agent.errBadRegex': '正则表达式无效',
+    'agent.searchNoHit': '没有找到「{query}」的匹配',
+    'agent.searchHit': '共 {n} 处匹配（{files} 个文件）：',
+    'agent.searchTrunc': '（仅显示前 40 处）',
+    'agent.diagClean': '当前文档没有语法 / 编译问题',
+    'agent.selEmpty': '当前没有选中内容',
+    'agent.errNoEditor': '当前没有可编辑的文本文档',
+    'agent.errNoOldText': '缺少必填文本参数',
+    'agent.errOldNotFound': 'old_text 在文档中不存在，请先 read_file 核对原文（注意空格与换行）',
+    'agent.errOldAmbiguous': 'old_text 在文档中出现多处，请附上相邻行使其唯一',
+    'agent.editDone': '已替换（新文本 {n} 字符）', 'agent.insertDone': '已插入到光标处',
+    'agent.errCreateFailed': '文件创建失败', 'agent.errUnknownTool': '未知工具：{name}',
+    'agent.toolCrashed': '工具执行异常：{msg}', 'agent.toolTooLarge': '文件过大（超过 2MB）',
+    'agent.errBadBlock': '```tool 块不是合法 JSON，请按 {"tool":"…","args":{…}} 重新输出：{raw}',
+    'agent.limitNote': '（系统提示：已达到工具调用步数上限 {n} 步。请基于已获取的信息直接给出最终回答，不要再调用工具。）',
+    'agent.briefActive': '当前编辑：{path}（{n} 行）',
+    'agent.briefOutline': '文档大纲：',
+    'agent.briefSel': '当前有选中内容：{n} 字符（需要时用 read_selection 读取）',
+    'agent.briefTabs': '其他打开标签：', 'agent.briefDiag': '当前诊断问题：{n} 条（可用 get_diagnostics 查看）',
+    'agent.briefHint': '需要正文细节时请用工具读取。',
+    'agent.staleToolResult': '（{tool} 的较早结果已省略，共 {n} 字符；如需再次查看请重新调用该工具）',
     'llm.anthropicErr': 'Anthropic 错误',
     'llm.timeout': '请求超时，请稍后重试或换更快的模型',
     'llm.cancelled': '已取消',
@@ -958,6 +1016,69 @@ export const DICT = {
     'ai.compactSystem': 'You are a conversation compactor. Output only a terse bullet summary; do not repeat the transcript, do not comment, do not invent facts.',
     'ai.compactPrompt': 'Compact the following conversation history into a bullet summary. Keep: conclusions reached, ' +
       'explicit user preferences and constraints, document structure and unfinished tasks, key terms and numbers. Stay under 300 words:',
+    // ---- Selection AI quick bar ----
+    'selpop.chat': 'Ask AI', 'selpop.polish': 'Polish', 'selpop.translate': 'Translate',
+    'ai.selChatPre': 'Based on the selected text, ',
+    'ai.selPolish': 'Polish the [selected text] below: keep the meaning and LaTeX structure intact while improving academic ' +
+      'expression and flow. Put the full polished passage in a ```latex code block, then list the changes as bullets.' +
+      '\n\nSelected text:\n```latex\n{sel}\n```',
+    'ai.selTranslate': 'Translate the [selected text] below: if it is Chinese, translate into academic English ready for a paper ' +
+      '(keep LaTeX commands and math environments unchanged); otherwise translate into Chinese. Put the translation in a ' +
+      '```latex code block, with brief translator notes if needed.\n\nSelected text:\n```latex\n{sel}\n```',
+    // ---- Agent mode ----
+    'ai.agentCtxHeader': 'Current project state (use tools to read details on demand):',
+    'ai.agentSystem': 'You are the AI Agent inside the PaperLite paper editor. You can browse, search, and modify the whole ' +
+      'project on the user\'s behalf. Answer in {lang}, concisely and structurally, using Markdown.\n\n' +
+      'Available tools (to call one, output a ```tool code block containing one JSON object: {"tool":"name","args":{…}}; ' +
+      'multiple blocks per turn are allowed):\n{tools}\n\n' +
+      'Rules:\n' +
+      '- Read minimally, on demand: locate via the outline / search results first, then read only what is needed; do not read content unrelated to the question.\n' +
+      '- Use list_files / read_file / search_files before making claims about project content; never guess file contents.\n' +
+      '- Read the file before editing; edit_file\'s old_text must match the document exactly and be unique (add adjacent ' +
+      'lines for context when ambiguous).\n' +
+      '- For "how is my project doing" questions, check get_diagnostics / read_file first.\n' +
+      '- When no tool is needed, just answer in Markdown.\n' +
+      '- After making changes, briefly summarize which files and locations were changed.',
+    'agent.toggle': 'Agent', 'agent.toggleTip': 'Agent mode: the AI can read project files, search globally, edit documents, and create files, looping until the task is done',
+    'agent.badge': '🤖 reads project on demand', 'agent.badgeTip': 'In Agent mode the AI decides which context to read (selection / outline / diagnostics are attached to each question)',
+    'agent.sug1': 'Check the whole document and fix all LaTeX syntax issues', 'agent.sug2': 'Review this project structure and suggest improvements',
+    'agent.sug3': 'Continue writing the next section from the existing ones',
+    'agent.toolRan': 'Tool',
+    'agent.toolTruncated': 'result truncated ({n} chars omitted)',
+    'agent.tListFiles': 'List all project files and open tabs',
+    'agent.tReadFile': 'Read the file at the given path (live editor content preferred)',
+    'agent.tOpenFile': 'Open the given file in the editor (subsequent edit_file / insert_text apply to it)',
+    'agent.tSearch': 'Search text across all project files',
+    'agent.tReadSel': 'Read the current editor selection',
+    'agent.tDiag': 'Get the syntax / compile diagnostics of the current document',
+    'agent.tEditFile': 'Replace old_text with new_text in the current document (old_text must be unique)',
+    'agent.tInsert': 'Insert text at the cursor of the current document (replaces the selection if any)',
+    'agent.tCreateFile': 'Create a new file in the project with the given content',
+    'agent.filesOpen': 'Open tabs:', 'agent.filesActive': 'active',
+    'agent.filesFolder': 'Project folder:', 'agent.filesEmpty': 'No files in the project yet',
+    'agent.errNoPath': 'Missing path argument', 'agent.errFileNotFound': 'File not found: {path}',
+    'agent.errNoQuery': 'Missing query argument', 'agent.errBadRegex': 'Invalid regular expression',
+    'agent.searchNoHit': 'No matches for "{query}"',
+    'agent.searchHit': '{n} matches in {files} files:',
+    'agent.searchTrunc': '(showing the first 40)',
+    'agent.diagClean': 'No syntax / compile issues in the current document',
+    'agent.selEmpty': 'Nothing is selected',
+    'agent.errNoEditor': 'No editable text document is open',
+    'agent.errNoOldText': 'Missing required text argument',
+    'agent.errOldNotFound': 'old_text does not exist in the document; read_file first and copy exactly (mind spaces and line breaks)',
+    'agent.errOldAmbiguous': 'old_text appears multiple times; include adjacent lines to make it unique',
+    'agent.editDone': 'Replaced (new text {n} chars)', 'agent.insertDone': 'Inserted at the cursor',
+    'agent.errCreateFailed': 'Failed to create the file', 'agent.errUnknownTool': 'Unknown tool: {name}',
+    'agent.toolCrashed': 'Tool execution failed: {msg}', 'agent.toolTooLarge': 'File too large (> 2MB)',
+    'agent.errBadBlock': 'The ```tool block is not valid JSON; re-emit it as {"tool":"…","args":{…}}: {raw}',
+    'agent.limitNote': '(System note: the tool-call step limit of {n} has been reached. Give the final answer from what you ' +
+      'already have; do not call tools again.)',
+    'agent.briefActive': 'Currently editing: {path} ({n} lines)',
+    'agent.briefOutline': 'Outline:',
+    'agent.briefSel': 'Selection present: {n} chars (use read_selection when needed)',
+    'agent.briefTabs': 'Other open tabs:', 'agent.briefDiag': '{n} diagnostics in the current document (use get_diagnostics)',
+    'agent.briefHint': 'Read the full text with tools when needed.',
+    'agent.staleToolResult': '(earlier {tool} result omitted, {n} chars; call the tool again if you need to re-read it)',
     'llm.anthropicErr': 'Anthropic error',
     'llm.timeout': 'Request timed out — retry later or pick a faster model',
     'llm.cancelled': 'Cancelled',

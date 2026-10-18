@@ -47,8 +47,9 @@ import { saveState } from './saveState.js';
 import { makeTab } from './workspace/tabModel.js';
 import { useWorkspace } from './workspace/useWorkspace.js';
 import { useCompile } from './workspace/useCompile.js';
-import { buildLLMContext, aiFixIssuePrompt } from './workspace/chatContext.js';
+import { buildLLMContext, aiFixIssuePrompt, agentProjectBrief } from './workspace/chatContext.js';
 import { runFixQueue } from './workspace/aiFixQueue.js';
+import { makeAgentExecutor } from './workspace/agentTools.js';
 import { LangContext } from './useI18n.js';
 
 const LS_MODE = 'paperlite.viewmode.v2';
@@ -96,6 +97,7 @@ export default function App() {
     noteHistory, snapshot,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
+    addDraft,
     onDocChange: applyDocChange,
   } = useWorkspace({
     t, flash, alertBox: alert, confirm: showConfirm, prompt: showPrompt,
@@ -179,6 +181,9 @@ export default function App() {
   const ratioRef = useRef({ edit: 0, preview: 0 });
   const valueRef = useRef(activeValue);
   valueRef.current = activeValue;
+  // Agent 工具执行时要取「执行那一刻」的状态，全部经 ref 中转（构建一次的 executor 不持旧闭包）
+  const activeIdRef = useRef(activeId); activeIdRef.current = activeId;
+  const snapshotRef = useRef(null);   // useWorkspace 的 snapshot 渲染期注入（下方赋值）
 
   // 唤起编辑器内查找/替换面板：seq 递增让同一个模式也能重新聚焦并全选输入框
   const [findReq, setFindReq] = useState(null);
@@ -209,6 +214,7 @@ export default function App() {
   // ---- 跨文件 \ref / \cite 索引 + 项目文件清单（主文档解析、文件名补全、项目搜索都吃它）----
   // 磁盘扫描（文件夹变化/保存时）+ 打开中的标签（随输入即时）
   const [folderIndex, setFolderIndex] = useState({ labels: [], bibKeys: [], texFiles: [], imageFiles: [], bibFiles: [], textFiles: [] });
+  const folderIndexRef = useRef(folderIndex); folderIndexRef.current = folderIndex;
   useEffect(() => {
     let cancelled = false;
     if (!rootDir) { setFolderIndex({ labels: [], bibKeys: [], texFiles: [], imageFiles: [], bibFiles: [], textFiles: [] }); return undefined; }
@@ -797,6 +803,7 @@ export default function App() {
   }), [activeTab?.doc]);
   const dismissed = dismissedIssues?.tabId === activeTab?.id ? dismissedIssues.fps : [];
   const visibleIssues = allIssues.filter(d => !dismissed.includes(fpOf(d)));
+  const issuesRef = useRef(visibleIssues); issuesRef.current = visibleIssues;
   const dismissIssues = ids => setDismissedIssues({
     tabId: activeTab?.id,
     fps: [...new Set([...dismissed, ...visibleIssues.filter(d => ids.includes(d.id)).map(fpOf)])]
@@ -1033,6 +1040,80 @@ export default function App() {
     setChatInject({ text: aiFixIssuePrompt({ issues: all, lines: activeValue.split('\n') }), n: Date.now() });
   };
 
+  // ---- 划词 AI 快捷条：对话预填输入框（上下文锁定选区）；润色 / 翻译直接发送。
+  // 选中文本直接嵌进用户消息（而不是只靠上下文范围的 system 文档块携带）——
+  // 思维链/小模型容易忽略 system 里的"参考文档"，反问"请提供内容"；嵌进提问对任何模型都可见。
+  const handleSelectionAction = useCallback(({ action, text }) => {
+    const L = getLang();
+    const sel = String(text || '');
+    // 超长选区截断保护（正常划词远短于此；此处是兜底）
+    const clipped = sel.length > 8000 ? sel.slice(0, 8000) + '\n' + tr(L, 'app.ctxOmitted') : sel;
+    setChatOpen(true); setPanelOpen(false);
+    if (action === 'polish') setChatInject({ auto: tr(L, 'ai.selPolish', { sel: clipped }), n: Date.now(), scope: 'selection', mode: 'chat' });
+    else if (action === 'translate') setChatInject({ auto: tr(L, 'ai.selTranslate', { sel: clipped }), n: Date.now(), scope: 'selection', mode: 'chat' });
+    else setChatInject({ text: tr(L, 'ai.selChatPre'), n: Date.now(), scope: 'selection', mode: 'chat' });
+  }, []);
+
+  // ---- AI Agent 执行环境：工具操作真实工作区（列文件 / 读文件 / 搜索 / 改文档 / 建文件 / 打开文件）----
+  snapshotRef.current = snapshot;
+  const createFileForAgent = useCallback(async (path, content) => {
+    const L = getLang();
+    const clean = String(path || '').replace(/^[./\\]+/, '').replace(/\/+/g, '/').trim();
+    if (!clean || /[\\:*?"<>|]/.test(clean)) return { ok: false, msg: tr(L, 'app.badFileName') };
+    const root = rootDirRef.current;
+    if (root) {
+      try {
+        const parts = clean.split('/');
+        let dir = root;
+        for (let i = 0; i < parts.length - 1; i++) dir = await fs.createDirectory(dir, parts[i]);
+        const handle = await fs.createFile(dir, parts[parts.length - 1]);
+        await fs.writeFileText(handle, content);
+        await openFileTab(handle, clean, root);
+        setTreeKey(n => n + 1);
+        return { ok: true, msg: tr(L, 'agent.createdInFolder', { path: clean }) };
+      } catch (e) { return { ok: false, msg: String((e && e.message) || e) }; }
+    }
+    addDraft(clean, content);   // 未连文件夹：内存草稿标签（浏览器自动落盘）
+    return { ok: true, msg: tr(L, 'agent.createdDraft', { path: clean }) };
+  }, [openFileTab, addDraft]);
+
+  const openByPathForAgent = useCallback(async (path) => {
+    const L = getLang();
+    const clean = String(path || '').trim();
+    const tab = tabsRef.current.find(x => tabPathRef.current(x) === clean);
+    if (tab) { setActiveId(tab.id); return { ok: true, msg: clean }; }
+    const fi = folderIndexRef.current;
+    const entry = [...(fi.texFiles || []), ...(fi.bibFiles || []), ...(fi.textFiles || [])].find(f => f.path === clean);
+    if (entry && entry.handle) {
+      const opened = await openFileTab(entry.handle, entry.path, rootDirRef.current);
+      if (opened) return { ok: true, msg: clean };
+    }
+    return { ok: false, msg: tr(L, 'agent.errFileNotFound', { path: clean }) };
+  }, [openFileTab]);
+
+  const agentEnv = useMemo(() => ({
+    execute: makeAgentExecutor({
+      cm: () => cmRef.current,
+      tabs: () => tabsRef.current,
+      activeId: () => activeIdRef.current,
+      tabPath: tb => tabPathRef.current(tb),
+      folderIndex: () => folderIndexRef.current,
+      rootDir: () => rootDirRef.current,
+      getDiagnostics: () => issuesRef.current,
+      beforeEdit: () => snapshotRef.current && snapshotRef.current(tr(getLang(), 'hist.beforeAi'), 'manual', true),
+      createFile: (p, c) => createFileForAgent(p, c),
+      openByPath: p => openByPathForAgent(p),
+    }),
+    buildBrief: () => agentProjectBrief({
+      cm: () => cmRef.current,
+      tabs: tabsRef.current,
+      activeId: () => activeIdRef.current,
+      tabPath: tb => tabPathRef.current(tb),
+      diagnostics: issuesRef.current,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [createFileForAgent, openByPathForAgent]);
+
   // ---- 导出 ----
   const exportPdfPrint = () => {
     const paper = document.getElementById('paper');
@@ -1214,6 +1295,7 @@ export default function App() {
               refCompletion={refCompletion}
               completion={{ texLike: isTexLike, pool: completionPool, userCommands }}
               onForwardSync={forwardSyncToPdf}
+              onSelectionAction={handleSelectionAction}
               onImageFile={(file, targetDoc, from, to) => insertImageFile({
                 file, targetDoc, from, to, isMd,
                 dir: (tabsRef.current.filter(x => x.id === activeId)[0] || {}).parentDir || rootDir,
@@ -1367,6 +1449,7 @@ export default function App() {
         messages={chatMessages}
         setMessages={setChatMessages}
         externalBusy={aiBusy}
+        agentEnv={agentEnv}
       />
 
       <DialogHost />
