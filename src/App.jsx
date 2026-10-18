@@ -28,6 +28,7 @@ import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnos
 import { collectLabels, collectBibKeys } from './projectIndex.js';
 import { resolveMainDoc, hasDocumentclass, loadMainDocSetting, saveMainDocSetting } from './mainDoc.js';
 import { collectUserCommands } from './completion.js';
+import { locateLineInSource, paragraphHeadAtLine, stripTexCommands } from './pdfSync.js';
 import { insertImageFile } from './imageInsert.js';
 import { PROVIDERS, makeBibKey, entryToBibTeX, referencedBibFiles } from './citation.js';
 import CiteDialog from './components/CiteDialog.jsx';
@@ -423,6 +424,30 @@ export default function App() {
       if (compact) setViewMode('preview');
     }
   };
+
+  // ---- PDF ⇄ 源码 近似跳转（synctex-lite）：引擎 wasm 不产 synctex，
+  // 用编译产物文本（pdf.js 抽取）与源码段落做归一化匹配，见 src/pdfSync.js ----
+  const pdfViewerRef = useRef(null);
+  const compiledSource = () => (compileResult && compileResult.source != null ? compileResult.source : activeValue);
+  const forwardSyncToPdf = useCallback(line => {
+    if (previewMode !== 'pdf' || !compileResult?.ok) { flash(t('sync.needPdf')); return; }
+    const head = paragraphHeadAtLine(compiledSource(), line);
+    const ok = pdfViewerRef.current?.jumpToText?.(stripTexCommands(head.text));
+    if (!ok) flash(t('sync.noHit'));
+    if (compact) setViewMode('preview');
+  }, [compileResult, activeValue, previewMode, flash, t, compact]);
+  const backSyncToSource = useCallback(str => {
+    const src = compiledSource();
+    let line = locateLineInSource(src, str);
+    if (line == null && src !== activeValue) line = locateLineInSource(activeValue, str);
+    if (line == null) { flash(t('sync.noHit')); return; }
+    if (src !== activeValue) {
+      // 编译入口是别的标签（主文档）：切到那个标签再跳行
+      const tab = tabsRef.current.find(x => x.doc && x.doc.getValue() === src);
+      if (tab && tab.id !== activeId) { setActiveId(tab.id); requestAnimationFrame(() => jumpToLine(line)); return; }
+    }
+    jumpToLine(line);
+  }, [compileResult, activeValue, activeId, flash, t]);
 
   // ---- 自动编译：保存时 / 输入停顿后。quiet 模式不动视图、成功不 flash，问题栏照常反映 ----
   const settingsRef = useRef(editorSettings); settingsRef.current = editorSettings;
@@ -1188,6 +1213,7 @@ export default function App() {
               typewriter={editorSettings.typewriter === true}
               refCompletion={refCompletion}
               completion={{ texLike: isTexLike, pool: completionPool, userCommands }}
+              onForwardSync={forwardSyncToPdf}
               onImageFile={(file, targetDoc, from, to) => insertImageFile({
                 file, targetDoc, from, to, isMd,
                 dir: (tabsRef.current.filter(x => x.id === activeId)[0] || {}).parentDir || rootDir,
@@ -1221,8 +1247,9 @@ export default function App() {
               </div></div></div>
             </section>
           ) : previewMode === 'pdf' && compileResult?.ok && compileResult.tabId === activeTab?.id ? (
-            <PdfViewer url={compileResult.pdfUrl} title={activeTab.name + ' · PDF'} lang={lang}
+            <PdfViewer ref={pdfViewerRef} url={compileResult.pdfUrl} title={activeTab.name + ' · PDF'} lang={lang}
               stale={pdfIsStale} compiling={compiling} onCompile={doCompile}
+              onBackSync={backSyncToSource}
               onDownload={downloadCurrentPdf} onClose={() => setPreviewMode('rich')} />
           ) : previewMode === 'log' && compileResult ? (
             <section id="previewPane">

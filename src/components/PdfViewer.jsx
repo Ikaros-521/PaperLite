@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { loadPdfLibrary, pdfOptions } from '../pdf.js';
+import { buildPageIndex, findTextInDoc } from '../pdfSync.js';
 
-function PdfPage({ pdf, number, scale, width, height, root }) {
+function PdfPage({ pdf, number, scale, width, height, root, flash, onBackSync }) {
   const host = useRef(null), canvas = useRef(null), text = useRef(null);
   const [visible, setVisible] = useState(false);
   const [error, setError] = useState('');
@@ -40,22 +41,36 @@ function PdfPage({ pdf, number, scale, width, height, root }) {
   return <div ref={host} className="pdf-page" data-page={number}
     style={{ width: width * scale, height: height * scale, '--total-scale-factor': scale }}>
     <canvas ref={canvas} aria-label={`PDF · ${number}`} />
-    <div ref={text} className="pdf-text-layer" />
+    <div ref={text} className="pdf-text-layer"
+      onDoubleClick={e => {
+        if (!onBackSync) return;
+        const span = e.target && e.target.closest ? e.target.closest('span') : null;
+        const str = span && span.textContent;
+        if (str && str.trim()) onBackSync(str);
+      }} />
+    {flash && <div className="pdf-sync-flash" aria-hidden="true"
+      style={{ left: flash.x * scale, top: (height - flash.y) * scale }} />}
     {error && <div role="alert" className="pdf-message">{error}</div>}
   </div>;
 }
 
-export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload, onClose,
-  onCompile, compiling, stale = false }) {
+/* Ctrl+点击编辑器（正向）与双击 PDF 文本（反向）的正反向跳转是「文本匹配近似定位」：
+ * 引擎 wasm 不产 synctex，这里靠 pdf.js 抽取的页文本索引做归一化子串匹配（pdfSync.js）。 */
+const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload, onClose,
+  onCompile, compiling, stale = false, onBackSync }, ref) {
   const zh = lang === 'zh';
   const scroll = useRef(null);
   const [pdf, setPdf] = useState(null), [pages, setPages] = useState([]);
   const [error, setError] = useState(''), [current, setCurrent] = useState(1);
   const [zoom, setZoom] = useState('fit'), [available, setAvailable] = useState(700);
   const [spread, setSpread] = useState(false);
+  // 每页文本索引（pdf.js getTextContent，PDF 坐标）+ 正向跳转的闪烁标记
+  const indexesRef = useRef([]);
+  const [flash, setFlash] = useState(null);
   useEffect(() => {
     let task, cancelled = false;
     setPdf(null); setPages([]); setError(''); setCurrent(1);
+    indexesRef.current = []; setFlash(null);
     loadPdfLibrary().then(async lib => {
       if (cancelled) return;
       task = lib.getDocument(pdfOptions({ url }));
@@ -68,6 +83,23 @@ export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload,
         sizes.push({ width: viewport.width, height: viewport.height });
       }
       if (!cancelled) { setPages(sizes); setPdf(doc); }
+      // 文本索引不阻塞首屏：后台逐页抽取，供正反向跳转匹配（超长文档只索引前 300 页）
+      (async () => {
+        const list = [];
+        const max = Math.min(doc.numPages, 300);
+        for (let i = 1; i <= max; i++) {
+          if (cancelled) return;
+          try {
+            const page = await doc.getPage(i);
+            const tc = await page.getTextContent();
+            const items = (tc.items || [])
+              .filter(it => it && typeof it.str === 'string' && it.transform)
+              .map(it => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width || 0, h: it.height || 10 }));
+            list.push(buildPageIndex(items, i));
+          } catch (e) { /* 单页抽取失败跳过 */ }
+        }
+        if (!cancelled) indexesRef.current = list;
+      })();
     }).catch(err => { if (!cancelled) setError(err.message); });
     return () => { cancelled = true; task?.destroy(); };
   }, [url]);
@@ -108,6 +140,21 @@ export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload,
     const page = nodes.find(node => node.getBoundingClientRect().bottom > top + 30);
     if (page) setCurrent(Number(page.dataset.page));
   };
+  // 正向跳转入口：文本匹配命中 → 翻页 + 定位闪烁；找不到返回 false 交给调用方提示
+  useImperativeHandle(ref, () => ({
+    jumpToText(query) {
+      const hit = findTextInDoc(indexesRef.current, query, current);
+      if (!hit) return false;
+      jump(hit.page);
+      setFlash({ page: hit.page, x: hit.x, y: hit.y });
+      return true;
+    },
+  }), [current]);
+  useEffect(() => {
+    if (!flash) return undefined;
+    const timer = setTimeout(() => setFlash(null), 1800);
+    return () => clearTimeout(timer);
+  }, [flash]);
   return <section id="previewPane" className="pdf-viewer">
     <div id="previewBar" className="pdf-toolbar">
       <span className="pb-title" title={title}>{title}</span>
@@ -140,12 +187,16 @@ export default function PdfViewer({ url, title = 'PDF', lang = 'zh', onDownload,
         : spread
           ? Array.from({ length: Math.ceil(pages.length / 2) }, (_, r) => (
             <div className="pdf-spread-row" key={url + 'row' + r}>
-              <PdfPage key={url + (r * 2)} pdf={pdf} number={r * 2 + 1} scale={scale} {...pages[r * 2]} root={scroll} />
-              {pages[r * 2 + 1] && <PdfPage key={url + (r * 2 + 1)} pdf={pdf} number={r * 2 + 2} scale={scale} {...pages[r * 2 + 1]} root={scroll} />}
+              <PdfPage key={url + (r * 2)} pdf={pdf} number={r * 2 + 1} scale={scale} {...pages[r * 2]} root={scroll}
+                flash={flash && flash.page === r * 2 + 1 ? flash : null} onBackSync={onBackSync} />
+              {pages[r * 2 + 1] && <PdfPage key={url + (r * 2 + 1)} pdf={pdf} number={r * 2 + 2} scale={scale} {...pages[r * 2 + 1]} root={scroll}
+                flash={flash && flash.page === r * 2 + 2 ? flash : null} onBackSync={onBackSync} />}
             </div>
           ))
           : pages.map((size, i) => <PdfPage key={url + i} pdf={pdf} number={i + 1} scale={scale}
-            {...size} root={scroll} />)}
+            {...size} root={scroll} flash={flash && flash.page === i + 1 ? flash : null} onBackSync={onBackSync} />)}
     </div>
   </section>;
-}
+});
+
+export default PdfViewer;

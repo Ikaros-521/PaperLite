@@ -1200,6 +1200,14 @@ figure.float .diagram { display: block; }
 .gs-line mark { background: rgba(var(--accent-rgb), .3); color: inherit; border-radius: 2px; padding: 0 1px; }
 /* 双页 PDF：一行两页，居中 */
 .pdf-spread-row { display: flex; gap: 16px; justify-content: center; }
+/* 正向跳转的定位闪烁框（synctex-lite 命中处，1.8s 自隐） */
+.pdf-sync-flash {
+  position: absolute; width: 140px; height: 20px; margin: -14px 0 0 -8px;
+  border: 2px solid var(--accent); border-radius: 4px;
+  background: rgba(var(--accent-rgb), .18); pointer-events: none; z-index: 3;
+  animation: pl-sync-fade 1.8s ease forwards;
+}
+@keyframes pl-sync-fade { 0% { opacity: 1; } 65% { opacity: 1; } 100% { opacity: 0; } }
 
 /* ---------- 表格可视化编辑 ---------- */
 /* 悬浮入口：贴在表格右上方，表格 hover 时出现（触屏常显） */

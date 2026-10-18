@@ -149,14 +149,14 @@ function buildLatexHint(refCompletionRef, completionRef) {
  * 各文件独立撤销历史与光标）。mode 由 Doc 创建时指定。
  * 查找/替换用自带的 FindReplace 面板（addon 的对话框没有跳转按钮与匹配计数）。
  * 诊断：行号左侧 gutter 红橙点（点击触发 AI 修复）+ 行内波浪线（VSCode 风格）。 */
-export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, grammarCheck, typewriter, refCompletion, completion, onImageFile }) {
+export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSave, diagnostics, onFixIssue, findReq, spellcheck, grammarCheck, typewriter, refCompletion, completion, onImageFile, onForwardSync }) {
   const hostRef = useRef(null);
   const cmRef = useRef(null);
   const marksRef = useRef([]);
   const [cmInst, setCmInst] = useState(null);
   const [findOpen, setFindOpen] = useState(false);
   const cb = useRef({});
-  cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue, onImageFile };
+  cb.current = { onChange, onInit, onScrollRatio, onSave, onFixIssue, onImageFile, onForwardSync };
   const refCompletionRef = useRef(refCompletion);
   refCompletionRef.current = refCompletion;
   const completionRef = useRef(completion);
@@ -348,6 +348,13 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       const si = cm.getScrollInfo();
       const ratio = si.top / Math.max(1, si.height - si.clientHeight);
       cb.current.onScrollRatio && cb.current.onScrollRatio(ratio, 'edit');
+    });
+    // Ctrl+点击 → 正向同步跳 PDF（Overleaf 习惯）；移动端不传 onForwardSync 即不挂
+    cm.on('mousedown', (instance, e) => {
+      if (!e.ctrlKey || e.defaultPrevented || !cb.current.onForwardSync) return;
+      e.preventDefault();
+      const pos = instance.coordsChar({ left: e.clientX, top: e.clientY });
+      if (pos) cb.current.onForwardSync(pos.line);
     });
     cb.current.onInit && cb.current.onInit(cm);
     setTimeout(() => cm.refresh(), 50);

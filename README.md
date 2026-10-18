@@ -41,7 +41,7 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 
 1. **内置 XeLaTeX（浏览器）——默认可用，无需安装**：XeTeX/dvipdfmx 的 WebAssembly 构建 + 随站点分发的 TeX 宏包/字体镜像（`public/xelatex/`，来源与许可见 [public/xelatex/NOTICE.md](public/xelatex/NOTICE.md)），GitHub Pages 纯静态托管即可把 LaTeX（含 `ctexart` 中文）编译成 PDF。应用空闲时后台预热引擎，就绪后**先用当前打开的文档跑一遍预热编译**（把这篇真正要用的宏包/字体拉进引擎内存），再按 `repo/warm.json`（内置模板冷编译实际加载的 479 项）并行预取进浏览器缓存；预取期间界面显示「资源预热中」，随时可编译。实测 40ms 往返链路下 demo 模板首次编译从 53s 降到 9s
 2. 本机引擎（可选）：安装 [MiKTeX](https://miktex.org) 或 TeX Live 并加入 PATH，`npm run build && node server.mjs` 后引擎下拉会多出本机引擎
-3. 「编译」→ 编译两遍（解析目录/引用）→ 预览区直接看 PDF（可下载/新窗口）；`latex` 引擎自动经 `dvipdfmx` 转 PDF。PDF 阅读器支持**页码输入跳转 / 上下翻页、按钮与 Ctrl+滚轮缩放、适合宽度、双页对开**（双栏论文双页看更自然；双页下「适合宽度」按两页宽计算）
+3. 「编译」→ 编译两遍（解析目录/引用）→ 预览区直接看 PDF（可下载/新窗口）；`latex` 引擎自动经 `dvipdfmx` 转 PDF。PDF 阅读器支持**页码输入跳转 / 上下翻页、按钮与 Ctrl+滚轮缩放、适合宽度、双页对开**（双栏论文双页看更自然；双页下「适合宽度」按两页宽计算），以及**PDF ⇄ 源码 正反向跳转**：编辑器里 **Ctrl+点击** 段落 → PDF 滚到对应位置并闪烁定位框；**双击 PDF 文本** → 源码跳到该段所在行（含跨标签：编译入口是主文档时会先切过去）。这是文本匹配的近似定位（synctex-lite，逻辑在 `src/pdfSync.js`，两端归一化后子串匹配，断行/连字符/中英混排都吃得住；数学环境与重复文本可能失手，失败安静提示），内置与本机引擎产物通用
 4. **主文档（编译入口）**：多文件项目（`\input` / `\include` 拆章）在子文件标签上编译，也会从带 `\documentclass` 的主文档走，不会把子文件当独立文档编译报错。自动探测优先级为「当前标签是主文档 > 打开标签里的 `main/paper/root.tex` > 文件夹扫描」，也可在「文件 → 设置」里固定到具体文件（按文件夹名记忆）；入口不是当前文件时状态栏常驻 `⌂ 主文档名`。主文档没打开时直接从磁盘读取参与编译，打开中的标签则连同未保存修改一起编译
 5. **自动重编译**：设置里可选「保存时 / 输入停顿 6 秒后 / 手动（默认）」。自动编译为静默模式——不切换视图、成功不弹提示，结果照常更新 PDF 与问题栏；内置引擎只在本次会话已手动编译过一次后才跟随（首次编译要拉约 98 MB 资源，必须由用户发起）
 6. **编译失败**：自动切换日志视图，`!` 错误与 `l.NN` 行号被解析成可点击条目，一键跳到源码行（进入「⚠ 问题」面板同样可跳转）
@@ -169,6 +169,7 @@ paperlite/
 │   ├── citationSearch.js # 文献检索网络层：桌面/移动共用的 fetch+解析单入口（纯逻辑）
 │   ├── grammar.js        # LanguageTool 语法检查：分块/偏移映射（纯函数，复用拼写遮罩）
 │   ├── searchIndex.js    # 项目内搜索：文件清单装配 + grep 限量（纯函数，复用 findModel）
+│   ├── pdfSync.js        # PDF⇄源码 近似跳转：归一化匹配键 + 页文本索引/查询（纯函数）
 │   ├── tableMutations.js # 表格可视化编辑写回：单元格/行列/colspec 区间替换（纯函数）
 │   ├── snippets.js       # 自定义片段：localStorage 存取与名称校验（纯函数）
 │   ├── imageInsert.js    # 插入图片统一路径：按钮/拖拽/粘贴 → 写盘或 base64 + figure 环境
@@ -213,7 +214,7 @@ npm run electron:build
 
 项目内置 GitHub Actions 工作流（[`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)），**推送到 `main` 分支即自动构建并发布到 GitHub Pages**（也可在 Actions 页面手动触发 Run workflow）。
 
-流水线步骤：安装依赖 → `npm test`（20 个测试文件、1950+ 断言）→ `npm run test:xelatex`（真实引擎编译回归）→ `vite build` → 部署 `dist/` 到 Pages。
+流水线步骤：安装依赖 → `npm test`（21 个测试文件、1950+ 断言）→ `npm run test:xelatex`（真实引擎编译回归）→ `vite build` → 部署 `dist/` 到 Pages。
 
 首次启用只需在仓库设置一次：
 
@@ -246,6 +247,7 @@ Pages 是纯静态托管，`fetch('/api/health')` 会 404，应用据此把引�
 - 近似预览为论文常用子集，非完整 TeX 引擎；`bibtex` 文献、任意宏包与复杂 TikZ 以「编译」产出的 PDF 为准（内置 XeLaTeX 引擎本身已跑 `bibtex` 通路）
 - 文献检索与语法检查是**联网**功能：请求由浏览器直连 Crossref / OpenAlex / DBLP / languagetool.org 公共接口，无服务器中转，也因此受各家限流约束（失败会提示、不影响本地功能）
 - 多文件项目编译时，日志行号以主文档为口径：错误发生在子文件里时，行号跳转以打开的主文档标签为准
+- PDF⇄源码跳转是**文本匹配近似定位**而非真 synctex：内置引擎的 XeTeX/dvipdfmx wasm（SwiftLaTeX 构建）不含 synctex，命名目标/链接输出也被裁掉（实测 hyperref 的 `pdf:dest`/GoTo special 都不落盘），文本匹配是纯前端可达的替代；命中不了时只提示不跳转
 - `align` 环境整块编号（不逐行编号）；流程图标签中的数学以 Unicode 近似显示
 - PDF 页码由浏览器打印对话框的页眉页脚设置控制
 

@@ -230,6 +230,9 @@ export const DICT = {
     'gs.none': '没有匹配；试试更短的关键词或关闭「整词」。',
     'gs.count': '{n} 处 · {files} 个文件',
     'gs.truncated': '已截断至 500 处',
+    // ---- PDF ⇄ 源码 近似跳转（synctex-lite）----
+    'sync.needPdf': '先编译出 PDF，再用 Ctrl+点击编辑器跳到对应位置',
+    'sync.noHit': 'PDF 与源码文本没对上（断行/数学环境会影响匹配），没找到跳转目标',
     // ---- 表格可视化编辑 ----
     'tb.openTip': '可视化编辑此表格',
     'tb.title': '表格编辑',
@@ -756,6 +759,8 @@ export const DICT = {
     'gs.none': 'No matches. Try a shorter query or turn off whole-word.',
     'gs.count': '{n} matches · {files} files',
     'gs.truncated': 'truncated at 500 matches',
+    'sync.needPdf': 'Compile a PDF first, then Ctrl+click the editor to jump to it',
+    'sync.noHit': 'PDF and source text did not match (wrapping/math reduce accuracy); no jump target found',
     // ---- Visual table editing ----
     'tb.openTip': 'Edit this table visually',
     'tb.title': 'Table editor',
