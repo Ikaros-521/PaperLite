@@ -56,7 +56,16 @@ export function searchInFiles(files, { query, regex = false, matchCase = false, 
       let m;
       while ((m = re.exec(line))) {
         if (hits === 0) filesWithHit.add(file.path);
-        matches.push({ path: file.path, line: li, text: line.length > 300 ? line.slice(0, 300) : line, from: m.index, to: m.index + m[0].length });
+        // 长行围绕命中截取窗口；from/to 必须相对截断后的文本，否则命中落在
+        // 窗口之外时 <mark> 切出来是空串（只剩前后文，看不出命中了什么）
+        let shown = line, from = m.index, to = m.index + m[0].length;
+        if (line.length > 300) {
+          const start = Math.max(0, Math.min(from - 60, line.length - 300));
+          shown = line.slice(start, start + 300);
+          from -= start;
+          to = Math.min(from + m[0].length, shown.length);
+        }
+        matches.push({ path: file.path, line: li, text: shown, from, to });
         hits++;
         if (m[0] === '') re.lastIndex++;   // 零宽匹配防死循环
         if (hits >= maxPerFile || matches.length >= maxTotal) break;

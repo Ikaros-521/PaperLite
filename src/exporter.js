@@ -65,11 +65,17 @@ export function exportPDF(contentHtml, meta) {
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
+// viewBox 容忍逗号/多空格分隔与缺项：畸形值落回 0，后续统一夹到 ≥32（NaN 会把 canvas 归零、导出空白图）
+function parseViewBox(el) {
+  const vb = (el.getAttribute('viewBox') || '0 0 100 100').split(/[\s,]+/).filter(Boolean).map(Number);
+  return [vb[0] || 0, vb[1] || 0, vb[2] || 0, vb[3] || 0];
+}
+
 // 序列化预览中的 SVG（补 xmlns 与白底）
 export function serializeSvg(svgEl, bgColor) {
   const clone = svgEl.cloneNode(true);
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  const vb = (clone.getAttribute('viewBox') || '0 0 100 100').split(/\s+/).map(Number);
+  const vb = parseViewBox(clone);
   const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   bg.setAttribute('x', vb[0]); bg.setAttribute('y', vb[1]);
   bg.setAttribute('width', vb[2]); bg.setAttribute('height', vb[3]);
@@ -85,7 +91,7 @@ export function exportSvg(svgEl, name) {
 export function exportPng(svgEl, name, scale) {
   scale = scale || 2;
   const svgStr = serializeSvg(svgEl);
-  const vb = (svgEl.getAttribute('viewBox') || '0 0 100 100').split(/\s+/).map(Number);
+  const vb = parseViewBox(svgEl);
   const w = Math.max(32, vb[2]), h = Math.max(32, vb[3]);
   const img = new Image();
   const url = URL.createObjectURL(new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' }));

@@ -29,6 +29,10 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
   const flashRef = useRef(flash);
   flashRef.current = flash;
 
+  // 卸载时回收最后一个 PDF Blob URL：成功编译只会在下一次成功时 revoke，
+  // 移动端路由切换会卸载本 hook，数 MB 的 blob 就此泄漏
+  useEffect(() => () => { if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current); }, []);
+
   // 换文档即换上下文：迟到的响应不许把已经改过的稿子的错误再贴回去
   const bindDoc = useCallback(doc => {
     if (contextRef.current?.doc !== doc) contextRef.current = { doc: doc || null };
