@@ -50,6 +50,9 @@ ok(escapeCellText('100%') === '100\\%', '% 转义');
 ok(escapeCellText('a_b #c') === 'a\\_b \\#c', '_ # 转义');
 ok(escapeCellText('已转义 \\& 保持') === '已转义 \\& 保持', '已转义不重复');
 ok(escapeCellText('&首字符') === '\\&首字符', '首字符转义');
+ok(escapeCellText('&&') === '\\&\\&', '连写两个 & 都要转义（旧正则只转第一个）');
+ok(escapeCellText('A&B&&C') === 'A\\&B\\&\\&C', '相邻特殊字符逐个覆盖');
+ok(escapeCellText('100% && 200%') === '100\\% \\&\\& 200\\%', '% 与 && 混排');
 
 console.log('== 单元格编辑 ==');
 let next = applyCellEdit(SRC, tbl.rows[1].cells[2], '99');

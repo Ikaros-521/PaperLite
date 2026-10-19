@@ -6,11 +6,21 @@
  * 区间来自最近一次渲染，写回后预览会重渲、区间刷新——面板每次都读新值。
  */
 
-/** 单元格文本转义：& % # _ 只转义未被转义的（保留用户手写的 \& 等） */
+/** 单元格文本转义：& % # _ 只转义未被转义的（保留用户手写的 \& 等）
+ * 逐字扫并数反斜杠奇偶，和 texComments 同一口径。原先用
+ * /(^|[^\\])([&%#_])/g 一次替换，它会吃掉前一个字符，导致相邻两个特殊字符的
+ * 第二个被跳过：'&&' 得到 '\&&'，写回 .tex 后那个裸 & 凭空多出一列。 */
 export function escapeCellText(text) {
-  return String(text == null ? '' : text)
-    .replace(/(^|[^\\])([&%#_])/g, '$1\\$2')
-    .replace(/^([%#_&])/, '\\$1');
+  const s = String(text == null ? '' : text);
+  let out = '', bs = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charAt(i);
+    if (c === '\\') { out += c; bs++; continue; }
+    if ((c === '&' || c === '%' || c === '#' || c === '_') && bs % 2 === 0) out += '\\';
+    out += c;
+    bs = 0;
+  }
+  return out;
 }
 
 function replaceRange(src, start, end, text) {
