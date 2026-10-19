@@ -1,4 +1,6 @@
 // Keep every quick insertion in one undo step and select its editable placeholder.
+import { stripTexComments } from './texComments.js';
+
 export function replaceTemplate(cm, before, content, after = '') {
   const start = cm.indexFromPos(cm.getCursor('from'));
   cm.replaceSelection(before + content + after, 'end', 'quick-insert');
@@ -46,7 +48,7 @@ export function quickInsert(cm, id, value, { markdown = false, text = 'text' } =
   } else if (id === 'tLink') {
     const url = String(value).trim().replace(/([{}%#&_$])/g, '\\$1');
     cm.operation(() => {
-      const source = cm.getValue().replace(/(?<!\\)%[^\n]*/g, '');
+      const source = stripTexComments(cm.getValue());
       if (!markdown && !/\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\s*\{[^}]*\bhyperref\b/.test(source)) {
         const begin = cm.getValue().search(/^[ \t]*\\begin\s*\{document\}/m);
         if (begin >= 0) cm.replaceRange('\\usepackage{hyperref}\n', cm.posFromIndex(begin), undefined, 'quick-insert');

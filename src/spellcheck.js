@@ -86,11 +86,17 @@ export function maskNonProse(srcRaw) {
       out[i] = ' '; i++; continue;
     }
 
-    // 行内注释（未转义的 %）
-    if (c === '%' && s.charAt(i - 1) !== '\\') {
-      let e = s.indexOf('\n', i);
-      if (e < 0) e = n;
-      blank(i, e); i = e; continue;
+    // 行内注释：% 前是偶数个连续反斜杠才算注释（与 texComments 同口径）。
+    // 扫描器成对消费反斜杠，`\%` 早就被当转义吞掉了；还带着反斜杠前缀落到这里的
+    // 正是 `\\%`（换行命令 + 真注释），旧写法把它当字面百分号，注释里的单词全进词典。
+    if (c === '%') {
+      let b = i - 1, bs = 0;
+      while (b >= 0 && s.charAt(b) === '\\') { bs++; b--; }
+      if (bs % 2 === 0) {
+        let e = s.indexOf('\n', i);
+        if (e < 0) e = n;
+        blank(i, e); i = e; continue;
+      }
     }
 
     if (c === '$') {

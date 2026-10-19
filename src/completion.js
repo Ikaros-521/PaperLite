@@ -8,6 +8,8 @@
  * 无 React/DOM 依赖，Node 可直接单测；候选的插入动作（光标落点、环境闭合）在 EditorPane 侧。
  */
 
+import { stripTexComments } from './texComments.js';
+
 // 常用环境（含 PaperLite 排版引擎与内置 XeLaTeX 收录的期刊排版环境）
 export const ENVIRONMENTS = [
   'abstract', 'align', 'align*', 'algorithm', 'algorithmic', 'cases', 'center',
@@ -52,8 +54,8 @@ export function collectUserCommands(texts) {
   const out = new Set();
   const push = m => { if (m[1]) out.add(m[1]); };
   for (const text of texts || []) {
-    // 抹掉未转义 % 后的注释：被注释掉的定义不该进候选（与 lint/QuickTools 同款规则）
-    const src = String(text || '').replace(/(?<!\\)%[^\n]*/g, '');
+    // 抹掉注释：被注释掉的定义不该进候选（与 lint/预览共用 texComments 的奇偶反斜杠口径）
+    const src = stripTexComments(text);
     let m;
     const re1 = /\\(?:re)?newcommand\*?\s*\{\s*\\([a-zA-Z]+)/g;
     while ((m = re1.exec(src))) push(m);

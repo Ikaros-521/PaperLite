@@ -32,6 +32,17 @@ ok(collectLabels(commented).map(l => l.key).join(',') === 'a,b', '注释中的 l
 const escaped = 'lab\\label{x} \\% not comment\\label{y}';
 ok(collectLabels(escaped).length === 2, '\\% 转义不当注释: ' + collectLabels(escaped).length);
 
+// 偶数个反斜杠（\\% 是换行命令 + 真注释）——与 lint/预览同一套奇偶口径
+const lineBreakComment = 'row1\\\\% \\label{ghost}\n\\label{real}';
+ok(collectLabels(lineBreakComment).map(l => l.key).join(',') === 'real',
+  '\\\\% 之后算注释: ' + collectLabels(lineBreakComment).map(l => l.key).join(','));
+
+// 等长抹除：pos 是按源码偏移算的，删字符会让跳转落到别的行
+const posSrc = '\\label{a}\n% long trailing comment here\n\\label{b}';
+const posLabels = collectLabels(posSrc);
+ok(posLabels.length === 2 && posSrc.slice(posLabels[1].pos, posLabels[1].pos + 9) === '\\label{b}',
+  'pos 仍指向原文偏移: ' + JSON.stringify(posLabels.map(l => l.pos)));
+
 // 空 label 不要
 ok(collectLabels('\\label{} \\label{ok}').length === 1, '空 label 跳过');
 
