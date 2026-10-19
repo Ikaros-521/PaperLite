@@ -133,9 +133,10 @@ const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
-  // 双页视图按两页宽算适配缩放（+16px 列间距）
+  // 双页视图按两页宽算适配缩放（+16px 列间距）。available 取自 contentRect，
+  // 已不含 .pdf-scroll 的 24px 内边距与常驻滚动条槽，直接整宽适配即可
   const fitWidth = spread ? (pages[0]?.width || 612) * 2 + 16 : (pages[0]?.width || 612);
-  const scale = zoom === 'fit' ? Math.max(0.1, (available - 48) / fitWidth) : zoom;
+  const scale = zoom === 'fit' ? Math.max(0.1, available / fitWidth) : zoom;
   scaleRef.current = scale;
   const jump = number => {
     const next = Math.max(1, Math.min(pages.length, Number(number) || 1));
