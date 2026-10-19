@@ -475,5 +475,65 @@ const fakeBegin = renderLatex('\\documentclass{article}\n\\begin{document}\n\\be
 ok(fakeBegin.html.includes('前文保留'), '\\beginfoo 不吞后文正文');
 ok(fakeBegin.html.includes('内文'), '后接的真实环境照常渲染');
 
+// 坏文件（截断下载、连写漏括号）不该把主线程锁死：以下三种都曾是 O(N·L)，
+// 240KB 输入实测 8.1s / 4.1s / 5.2s，现在必须停在毫秒级
+{
+  const cases = [
+    ['未闭合 \\begin', (String.raw`\begin{figure}x`).repeat(16000)],
+    ['未闭合 \\label{', (String.raw`\section{` + String.raw`\label{a`).repeat(8000)],
+    ['未闭合 \\caption[', String.raw`\begin{figure}` + (String.raw`\caption[` + 'x').repeat(8000) + String.raw`\end{figure}`],
+    ['未闭合 \\bibitem[', String.raw`\begin{thebibliography}{9}` + (String.raw`\bibitem[` + 'k').repeat(8000)],
+  ];
+  for (const [name, chunk] of cases) {
+    const src = String.raw`\documentclass{article}\begin{document}` + '\n' + chunk;
+    const t0 = Date.now();
+    renderLatex(src);
+    const ms = Date.now() - t0;
+    ok(ms < 1500, name + ' 大批量渲染保持线性, got ' + ms + 'ms');
+  }
+}
+
+// 嵌套列表：只切顶层 \item，内层交给递归
+{
+  const nestedList = renderLatex(String.raw`\documentclass{article}\begin{document}\begin{enumerate}\item a\begin{itemize}\item b\end{itemize}\item c\end{enumerate}\end{document}`);
+  ok(/<ol[\s\S]*?<li>[\s\S]*?<ul/.test(nestedList.html), '嵌套列表生成内层 ul');
+  ok(!nestedList.html.includes('beginitemize'), '内层 \\begin 不漏成正文');
+}
+
+// 一个环境可以带多个 \label，真 LaTeX 让它们都指向同一编号
+{
+  const multiLab = renderLatex(String.raw`\documentclass{article}\begin{document}\begin{figure}\caption{题注\label{f1}\label{f2}}\end{figure}见\ref{f1}与\ref{f2}\end{document}`);
+  ok(!/bad-ref/.test(multiLab.html), '同环境多个 \\label 都能引用');
+  ok(multiLab.html.includes('图&nbsp;1') || (multiLab.html.match(/bad-ref/g) || []).length === 0, '浮动体照常编号');
+}
+
+// 未闭合的行内 $ 不该把后面的章节整段吞进公式
+{
+  const dollar = renderLatex(String.raw`\documentclass{article}\begin{document}单价 $50 每件。` + '\n\n' +
+    String.raw`\section{结果}` + '\n以及 $x$ 与 $y$。\n' + String.raw`\end{document}`);
+  ok(/<h2[^>]*>[\s\S]{0,80}结果/.test(dollar.html), '未闭合行内 $ 不吞后续章节标题');
+  ok(dollar.headings.some(h => h.text.includes('结果')), '大纲仍有该章节');
+}
+
+// 深嵌套：打爆 JS 栈会让整篇预览只剩一个错误框
+{
+  let deepErr = null, deepRes = null;
+  try {
+    deepRes = renderLatex(String.raw`\documentclass{article}\begin{document}` + String.raw`\textbf{`.repeat(2000) +
+      'x' + '}'.repeat(2000) + String.raw`\end{document}`);
+  } catch (e) { deepErr = e; }
+  ok(!deepErr, '深嵌套不再打爆调用栈');
+  ok(deepRes && deepRes.warnings.some(w => /嵌套层级|Nesting deeper/.test(w.msg || '')), '深嵌套给出可读警告');
+}
+
+// 内部占位符改用 NUL 定界：正文里的 @@ 记号该原样显示，也不该被误判成引用
+{
+  const marks = renderLatex(String.raw`\documentclass{article}\begin{document}正文 @@COLS@@ 与 @@R:x@@ 与 @@TOC@@ 保持原样\end{document}`);
+  ok(marks.html.includes('@@COLS@@') && marks.html.includes('@@R:x@@') && marks.html.includes('@@TOC@@'), '正文里的 @@ 记号不被当占位符回填');
+  ok(!/bad-ref/.test(marks.html), '正文里的 @@R:x@@ 不误报未定义引用');
+  const headMark = renderLatex(String.raw`\documentclass{article}\begin{document}\section{见\ref{nope}}\end{document}`);
+  ok(!headMark.headings.some(h => (h.text || '').includes('\u0000')), '大纲标题不含占位符控制字符');
+}
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

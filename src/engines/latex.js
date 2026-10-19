@@ -53,10 +53,10 @@ function normUrl(u) {
 }
 
 // 给块级输出的根标签注入 data-off（源码绝对偏移），预览点击据此回跳源码行。
-// @@占位符@@ 前缀（@@COLS@@ 等）跳过，注到第一个真实标签；没有标签则原样返回
+// 占位符前缀（\u0000COLS\u0000 等）跳过，注到第一个真实标签；没有标签则原样返回
 function withOff(html, off) {
   if (off == null) return html;
-  var m = String(html).match(/^((?:@@[A-Z]+@@)*)<([a-zA-Z][a-zA-Z0-9]*)/);
+  var m = String(html).match(/^((?:\x00[A-Z]+\x00)*)<([a-zA-Z][a-zA-Z0-9]*)/);
   if (!m) return html;
   return m[1] + '<' + m[2] + ' data-off="' + off + '"' + String(html).slice(m[0].length);
 }
@@ -169,6 +169,8 @@ function readGroup(s, i) {
 function readOpt(s, i) {
   i = skipWs(s, i);
   if (s.charAt(i) !== '[') return null;
+  // 没有 ] 就白扫一条尾巴：坏文件里每条 \caption[ 都扫一次，同样 O(N·L)
+  if (lastBracketOf(s) <= i) return null;
   var depth = 0;
   for (var j = i; j < s.length; j++) {
     var c = s.charAt(j);
@@ -180,30 +182,86 @@ function readOpt(s, i) {
   return null;
 }
 
-// 找 \begin{name}...\end{name} 的内容（处理同名嵌套）
-// fromIndex 开始搜索 \begin；返回 { inner, innerStart, innerEnd, outerStart, outerEnd, opt }
-function findEnv(s, fromIndex) {
-  var re = /\\(begin|end)\s*\{([^}]+)\}/g;
-  re.lastIndex = fromIndex || 0;
-  var m, depth = 0, name = null, beginMatch = null;
-  while ((m = re.exec(s))) {
-    if (m[1] === 'begin' && depth === 0) { name = m[2]; beginMatch = m; depth = 1; continue; }
-    if (m[1] === 'begin' && m[2] === name) depth++;
-    else if (m[1] === 'end' && m[2] === name) {
-      depth--;
-      if (depth === 0) {
-        var innerStart = beginMatch.index + beginMatch[0].length;
-        return {
-          name: name,
-          inner: s.slice(innerStart, m.index),
-          innerStart: innerStart, innerEnd: m.index,
-          outerStart: beginMatch.index, outerEnd: m.index + m[0].length,
-          opt: null
-        };
-      }
-    }
+// 「本段最后一个 } 的位置」按帧只需算一次：handleCommand 每条命令都要问一遍，逐次
+// lastIndexOf 等于把坏文件的 O(N·L) 换个写法继续 O(N·L)。同一段文本引用相等即命中。
+var _wcSrc = null, _wcVal = -1, _wbSrc = null, _wbVal = -1;
+function lastCloseOf(s) {
+  if (s !== _wcSrc) { _wcSrc = s; _wcVal = s.lastIndexOf('}'); }
+  return _wcVal;
+}
+function lastBracketOf(s) {
+  if (s !== _wbSrc) { _wbSrc = s; _wbVal = s.lastIndexOf(']'); }
+  return _wbVal;
+}
+
+// 从 p 起读「可选 [..] + 必选 {..}」——\caption / \bibitem 这类前缀共用。
+// 旧写法 (?:\[[^\]]*\])?\s*\{ 加 braceEnd 在缺右界的坏文件里会把余文逐个候选重扫：
+// 11KB 的 \caption[ ×16000 实测卡主线程 5s。st 记住「此后已无 ] / }」的水位线，
+// 后续候选直接照结论走，整轮回到线性。
+function optGroup(s, p, st) {
+  p = skipWs(s, p);
+  if (s.charAt(p) === '[' && !(st.noBr >= 0 && p >= st.noBr)) {
+    var ce = s.indexOf(']', p + 1);
+    if (ce < 0) st.noBr = p; else p = skipWs(s, ce + 1);
   }
-  return null;
+  if (s.charAt(p) !== '{') return null;
+  if (st.noClose >= 0 && p >= st.noClose) return null;
+  if (lastCloseOf(s) <= p) { st.noClose = p; return null; }   // 起点后连 } 都没有：其余候选同样闭合不了
+  var e = braceEnd(s, p);
+  if (e < 0) {
+    // 有 } 但被前面的多括号吃掉：后面的候选仍可能配平，不能一刀断掉；
+    // 只给这类昂贵尝试设次数上限，坏文件里最多扫 64 次尾巴就按未闭合降级
+    if ((st.fails = (st.fails || 0) + 1) >= 64) st.noClose = p;
+    return null;
+  }
+  return { text: s.slice(p + 1, e), start: p + 1, end: e };
+}
+
+// 引用/目录占位符落在纯文本场合（大纲、TOC 标题）回填不到，按未定义引用的既有口径显示 ?
+function flattenMarks(s) {
+  return String(s).replace(/\x00[RC]:[^\x00]*\x00|\x00(?:TOC|COLS)\x00/g, '?');
+}
+
+// 找出串内全部 \label{key}（真 LaTeX 一个环境可以有多个 \label，都指向同一编号）。
+// 正则 [^}]+ 在缺右括号时同样把余文重扫，这里用单调游标：一次 indexOf 定终身。
+function labelsOf(s) {
+  var out = [], p = 0;
+  while (p < s.length) {
+    var b = s.indexOf('\\label{', p);
+    if (b < 0) break;
+    var start = b + 7, e = s.indexOf('}', start);
+    if (e < 0) break;                 // 此后全无 }：后面的候选一样闭合不了
+    if (e > start) out.push(s.slice(start, e));
+    p = e > start ? e + 1 : start;    // 空 {} 只前移候选起点，不重复扫同一段
+  }
+  return out;
+}
+
+// 环境配对：一次线性扫描把每个 \begin{name} 配到它的 \end{name}（只数同名，与旧
+// findEnv 语义一致），返回 begin 下标 → 环境信息。旧实现逐个 \begin 用正则扫到串尾，
+// 坏文件里 N 个未闭合就是 O(N·L)：240KB 的截断 .tex 实测锁死主线程 8s。
+function matchEnvs(s) {
+  var re = /\\(begin|end)\s*\{([^}]+)\}/g, m, open = {}, pairs = new Map();
+  while ((m = re.exec(s))) {
+    var name = m[2];
+    if (m[1] === 'begin') {
+      if (!open[name]) open[name] = [];
+      open[name].push(m);
+      continue;
+    }
+    var stack = open[name];
+    if (!stack || !stack.length) continue;   // 多出来的 \end：不算任何环境的收尾
+    var b = stack.pop();
+    var innerStart = b.index + b[0].length;
+    pairs.set(b.index, {
+      name: name,
+      inner: s.slice(innerStart, m.index),
+      innerStart: innerStart, innerEnd: m.index,
+      outerStart: b.index, outerEnd: m.index + m[0].length,
+      opt: null
+    });
+  }
+  return pairs;
 }
 
 // ---------------- 宏展开 ----------------
@@ -291,8 +349,18 @@ function findMathEnd(s, i, term) {
   while (j < s.length) {
     var c = s.charAt(j);
     if (c === '\\') {
+      // 行内 $ 忘闭别一路吞到文档尾：撞上 \begin 就判未闭合，否则整段正文加章节标题
+      // 都进了 KaTeX（实测 costs $50 … \section{Results} 少一节）
+      if (term === '$' && s.substr(j, 6) === '\\begin') return -1;
       if ((term === '\\]' && s.charAt(j + 1) === ']') || (term === '\\)' && s.charAt(j + 1) === ')')) return j;
       j += 2; continue;
+    }
+    // 行内公式跨空行同样是漏写闭合符的笔误，正文不该为它让路
+    if (term === '$' && c === '\n') {
+      var k = j + 1;
+      while (k < s.length && (s.charAt(k) === ' ' || s.charAt(k) === '\t')) k++;
+      if (s.charAt(k) === '\n') return -1;
+      j = k; continue;
     }
     if (term === '$' && c === '$') return j;
     if (term === '$$' && c === '$' && s.charAt(j + 1) === '$') return j;
@@ -365,12 +433,12 @@ function renderLatex(srcRaw, opts) {
     html = hEnd < 0 ? kwHtml + html : html.slice(0, hEnd + 9) + kwHtml + html.slice(hEnd + 9);
   }
   // 跨栏标题带之后的正文收进双栏容器（脚注仍在文档末尾、栏外）
-  if (ctx._colsMarked) html = html.replace('@@COLS@@', '<div class="doc-cols">') + '</div>';
+  if (ctx._colsMarked) html = html.replace('\x00COLS\x00', '<div class="doc-cols">') + '</div>';
 
   // ---- 回填 ----
   var refSeen = {};
-  html = html.replace(/@@R:([^@]*)@@/g, function (_, enc) {
-    // key 编码后入占位符：label/cite 键可含 @（如 eq:a@b），原样放会截断占位符泄漏正文
+  html = html.replace(/\x00R:([^\x00]*)\x00/g, function (_, enc) {
+    // key 编码后入占位符：label/cite 键可含控制字符，原样放会截断占位符泄漏正文
     var key = decodeURIComponent(enc);
     if (ctx.labels[key] !== undefined) return esc(ctx.labels[key]);
     // 同一个 key 可能被引用多次，按出现次序取各自的出处
@@ -378,12 +446,12 @@ function renderLatex(srcRaw, opts) {
     ctx.warn(t('render.undefinedRef', { key }), (ctx.refPos[key] || [])[n - 1], 'ref');
     return '<span class="bad-ref">?</span>';
   });
-  html = html.replace(/@@C:([^@]*)@@/g, function (_, enc) {
+  html = html.replace(/\x00C:([^\x00]*)\x00/g, function (_, enc) {
     var key = decodeURIComponent(enc);
     if (ctx.cites[key] !== undefined) return String(ctx.cites[key]);
     return '<span class="bad-ref" title="' + esc(t('render.missingCite')) + '">?</span>';
   });
-  html = html.replace(/@@TOC@@/g, function () { return buildToc(ctx); });
+  html = html.replace(/\x00TOC\x00/g, function () { return buildToc(ctx); });
   if (ctx.footnotes.length) html += '<section class="footnotes"><hr/><ol>' + ctx.footnotes.map(function (f) { return '<li id="fn' + f.n + '">' + f.html + '</li>'; }).join('') + '</ol></section>';
 
   var stats = { chars: src.replace(/\s/g, '').length, words: countWords(src), cjk: (src.match(/[\u4e00-\u9fff]/g) || []).length };
@@ -549,11 +617,25 @@ function breakSpace(s, pos) {
 
 // ---------------- 正文流式渲染 ----------------
 // 返回 HTML；块级与段落自动分组。inlineMode=true 时不产生 <p> 段落（用于宏展开/标题/题注）
+// 递归深度封顶：\textbf{ 套 2000 层实测把 JS 栈打爆（RangeError），App 捕获后整篇预览
+// 只剩一个「渲染出错」框。超限的这一段按纯文本排，其余正文照旧可读。
+var MAX_FLOW_DEPTH = 200, flowDepth = 0;
 function renderFlow(str, ctx, base, isTop, inlineMode) {
+  if (flowDepth >= MAX_FLOW_DEPTH) {
+    ctx.warn(t('render.tooDeep', { n: MAX_FLOW_DEPTH }), base, 'structure');
+    return typesetText(str);
+  }
+  flowDepth++;
+  try { return flowInner(str, ctx, base, isTop, inlineMode); }
+  finally { flowDepth--; }
+}
+
+function flowInner(str, ctx, base, isTop, inlineMode) {
   var tokens = [];  // {block:bool, html}
   var i = 0, n = str.length;
   var inlineBuf = '';
   var paraStart = null;  // 当前段落起始的源码绝对偏移，写入 <p data-off> 供预览点击回跳
+  var envPairs = null;   // 环境配对表：按帧惰性建一次，见 matchEnvs
   function touch() { if (paraStart === null) paraStart = base + i; }
   function flushP() {
     if (inlineMode) {
@@ -616,9 +698,12 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
       }
     }
 
-    // 环境（\begin 与 { 之间的空格是合法 TeX；闸门只看 \begin 前缀，细节交给 envAt/findEnv）
+    // 环境（\begin 与 { 之间的空格是合法 TeX，配对表按原样保留那种写法）
     if (c === '\\' && str.substr(i, 6) === '\\begin') {
-      var probe = envAt(str, i);
+      // 只认锚定在 i 处的配对：\beginfoo{x} 这类命令名不在表里，走命令分支，
+      // 不 then 把中间正文整段吞掉
+      if (!envPairs) envPairs = matchEnvs(str);
+      var probe = envPairs.get(i);
       if (probe) {
         flushP();
         tokens.push({ block: true, html: withOff(renderEnv(probe, ctx, base + probe.innerStart), base + i) });
@@ -692,21 +777,10 @@ function typesetText(t) {
   return s;
 }
 
-// i 处是否是 \begin{env}（返回 findEnv 结果或 null）
-function envAt(str, i) {
-  // 便宜的前缀闸（挡住 \beginx 这类命令名），真正解析交给 findEnv：
-  // 它的 /\\(begin|end)\s*\{/ 本就允许 \begin {center} 这种空格写法（合法 TeX）
-  if (str.slice(i, i + 6) !== '\\begin') return null;
-  const env = findEnv(str, i);
-  // findEnv 从 fromIndex 起找「下一个」环境：\beginfoo 这种命令名不在 i 处命中时，
-  // 它可能把后文某个真正的环境捞回来——不锚定 outerStart 就会把中间的正文整段吞掉
-  return env && env.outerStart === i ? env : null;
-}
-
 // 引用占位符记下出处偏移：回填不到编号时，警告才知道该挂在哪一行
 function refPlaceholder(ctx, at, key) {
   (ctx.refPos[key] || (ctx.refPos[key] = [])).push(at);
-  return '@@R:' + encodeURIComponent(key) + '@@';
+  return '\x00R:' + encodeURIComponent(key) + '\x00';
 }
 
 // ---------------- 命令处理 ----------------
@@ -716,7 +790,13 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
   var starred = str.charAt(i + name.length + 1) === '*';
   var g1, g2, o1;
 
-  function G(pos) { return readGroup(str, pos); }
+  // 截断/坏文件里 braceEnd 会把每个 \xxx{ 候选一路扫到串尾：8000 处 \section{ 实测卡 4s。
+  // 起点后面连一个 } 都没有的候选必然闭合不了，按帧水位直接判失败（见 lastCloseOf）。
+  function G(pos) {
+    var p = skipWs(str, pos);
+    if (str.charAt(p) !== '{') return readGroup(str, pos);
+    return lastCloseOf(str) <= p ? null : readGroup(str, pos);
+  }
 
   // 宏命令：抓参数展开后递归渲染（保持外层偏移不变）
   if (ctx.macros[name]) {
@@ -759,15 +839,14 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       }
       var inner = renderFlow(g1.text, ctx, base + g1.start, false, true);
       var hid = 'h-' + ctx.headings.length;
-      ctx.headings.push({ level: lvl, num: num, text: stripTags(inner), id: hid, offset: base + i });
+      ctx.headings.push({ level: lvl, num: num, text: flattenMarks(stripTags(inner)), id: hid, offset: base + i });
       // 标题内的 \label
-      var lm = g1.text.match(/\\label\{([^}]+)\}/);
-      if (lm) ctx.labels[lm[1]] = num || '';
+      labelsOf(g1.text).forEach(function (k) { ctx.labels[k] = num || ''; });
       var tag = lvl <= 3 ? 'h' + (lvl + 1) : 'p';
       var cls = lvl === 1 ? 'sec1' : lvl === 2 ? 'sec2' : lvl === 3 ? 'sec3' : 'parag';
       var secHtml = '<' + tag + ' id="' + hid + '" class="' + cls + '">' + (num ? '<span class="secnum">' + num + '</span> ' : '') + inner + '</' + tag + '>';
       // IEEE 期刊版式：标题/摘要/术语跨栏，正文从第一个 \section 起进入双栏
-      if (ctx.meta.layout.spanHead && !ctx._colsMarked) { ctx._colsMarked = true; secHtml = '@@COLS@@' + secHtml; }
+      if (ctx.meta.layout.spanHead && !ctx._colsMarked) { ctx._colsMarked = true; secHtml = '\x00COLS\x00' + secHtml; }
       return { next: g1.end + 1, block: true, html: secHtml };
     }
     case 'maketitle': return { next: afterName, block: true, html: renderTitleBlock(ctx) };
@@ -776,7 +855,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       ctx.appendix = true;
       ctx.counters.sec = 0; ctx.counters.subsec = 0; ctx.counters.subsubsec = 0;
       return afterName;
-    case 'tableofcontents': return { next: afterName, block: true, html: '@@TOC@@' };
+    case 'tableofcontents': return { next: afterName, block: true, html: '\x00TOC\x00' };
     case 'today': return { next: afterName, html: zhToday() };
     case 'newpage': case 'clearpage': return { next: afterName, block: true, html: '<div class="pagebreak"></div>' };
     case 'par': flushP(); return afterName;
@@ -826,7 +905,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       var pos = o1 ? o1.closeIdx + 1 : afterName;
       g1 = G(pos); if (!g1) return null;
       var keys = g1.text.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-      var parts = keys.map(function (k) { return '@@C:' + encodeURIComponent(k) + '@@'; });
+      var parts = keys.map(function (k) { return '\x00C:' + encodeURIComponent(k) + '\x00'; });
       return { next: g1.end + 1, html: '<span class="cite">[' + parts.join(',') + ']</span>' };
     }
     case 'label': g1 = G(afterName); if (g1) { /* 编号由所属环境处理，单独出现忽略 */ return g1.end + 1; } return afterName;
@@ -1095,8 +1174,9 @@ function renderEnv(env, ctx, absInnerStart) {
     case 'equation': case 'equation*': case 'gather': case 'gather*': case 'align': case 'align*': case 'alignat': case 'alignat*': case 'multline': case 'multline*': case 'flalign': case 'flalign*': {
       var numbered = env.name.indexOf('*') < 0;
       var tex = inner;
-      var label = null;
-      tex = tex.replace(/\\label\{([^}]+)\}/g, function (_, k) { label = k; return ''; });
+      var eqLabels = [];
+      // 一个环境可以有多个 \label，真 LaTeX 让它们都指向同一编号
+      tex = tex.replace(/\\label\{([^}]+)\}/g, function (_, k) { eqLabels.push(k); return ''; });
       tex = expandMacros(tex, ctx.macros, 0);
       var body2;
       var noNum = /\\notag|\\nonumber/.test(tex);
@@ -1112,30 +1192,29 @@ function renderEnv(env, ctx, absInnerStart) {
       if (numbered && !noNum) {
         ctx.counters.eq++;
         num2 = '(' + ctx.counters.eq + ')';
-        if (label) ctx.labels[label] = String(ctx.counters.eq);
-      } else if (label) ctx.labels[label] = '';
+        eqLabels.forEach(function (k) { ctx.labels[k] = String(ctx.counters.eq); });
+      } else eqLabels.forEach(function (k) { ctx.labels[k] = ''; });
       return '<div class="equation" data-eq="' + ctx.counters.eq + '"><span class="eq-body">' + body2 + '</span>' + (num2 ? '<span class="eq-no">' + num2 + '</span>' : '') + '</div>';
     }
 
     case 'figure': case 'figure*': case 'table': case 'table*': {
       var isFig = env.name.indexOf('figure') === 0;
-      var cap = null, label = null;
-      // 提取 \caption{...}（括号配平）
-      var capRe = /\\caption\s*(?:\[[^\]]*\])?\s*\{/g, m;
+      var cap = null, capSt = {}, m;
+      // 提取 \caption{...}（括号配平）：候选定位交给 optGroup，缺 ] / } 时不再逐个重扫余文
+      var capRe = /\\caption(?![A-Za-z])/g;
       while ((m = capRe.exec(inner))) {
-        var be = braceEnd(inner, m.index + m[0].length - 1);
-        if (be < 0) continue;
-        cap = inner.slice(m.index + m[0].length, be);
+        var cg = optGroup(inner, m.index + m[0].length, capSt);
+        if (!cg) { if (capSt.noClose >= 0) break; continue; }
+        cap = cg.text;
         break;
       }
-      var labM = inner.match(/\\label\{([^}]+)\}/);
-      if (labM) label = labM[1];
+      var labels = labelsOf(inner);
       // caption/label 命令渲染为空（由本环境统一编号），无需从内容中删除
       // 浮动体位置选项（[h]/[!htbp] 等）不参与排版，吞掉避免渲染成正文
       var content = inner.replace(/^\s*\[[^\]]*\]/, '');
 
       var n2 = isFig ? ++ctx.counters.fig : ++ctx.counters.tab;
-      if (label) ctx.labels[label] = String(n2);
+      labels.forEach(function (k) { ctx.labels[k] = String(n2); });
 
       var capHtml = cap !== null ? renderFlow(cap, ctx, base, false, true) : '';
       // content 相对 inner 截去了前导 [..]，base 需同步平移，否则子环境（tikzpicture）的源码偏移会错位
@@ -1163,13 +1242,13 @@ function renderEnv(env, ctx, absInnerStart) {
     }
 
     case 'thebibliography': {
-      // 先收集全部 \bibitem 位置，再两两切片
-      var bibRe = /\\bibitem\s*(?:\[[^\]]*\])?\s*\{/g, m2;
+      // 先收集全部 \bibitem 位置，再两两切片（缺右界的坏文件交给 optGroup 的水位线截断）
+      var bibRe = /\\bibitem(?![A-Za-z])/g, m2, bibSt = {};
       var bibMatches = [];
       while ((m2 = bibRe.exec(inner))) {
-        var kEnd = braceEnd(inner, m2.index + m2[0].length - 1);
-        if (kEnd < 0) continue;
-        bibMatches.push({ key: inner.slice(m2.index + m2[0].length, kEnd), bodyStart: kEnd + 1, cmdStart: m2.index });
+        var bg = optGroup(inner, m2.index + m2[0].length, bibSt);
+        if (!bg) { if (bibSt.noClose >= 0) break; continue; }
+        bibMatches.push({ key: bg.text, bodyStart: bg.end + 1, cmdStart: m2.index });
       }
       var out2 = '<section class="bibliography"><h2 class="sec1">' + esc(t('render.references')) + '</h2><ol class="bib-list">';
       bibMatches.forEach(function (bm, ix) {
@@ -1210,20 +1289,18 @@ function renderEnv(env, ctx, absInnerStart) {
         lt = chars.join('');
       }
       // longtable 自带题注（不套在 table 浮动体里），按表编号
-      var ltCap = null, ltLabel = null;
-      var ltCapRe = /\\caption\s*(?:\[[^\]]*\])?\s*\{/g, lcm;
+      var ltCap = null, ltSt = {}, ltLabels = labelsOf(lt);
+      var ltCapRe = /\\caption(?![A-Za-z])/g, lcm;
       while ((lcm = ltCapRe.exec(lt))) {
-        var lbe = braceEnd(lt, lcm.index + lcm[0].length - 1);
-        if (lbe < 0) continue;
-        ltCap = lt.slice(lcm.index + lcm[0].length, lbe);
+        var lg = optGroup(lt, lcm.index + lcm[0].length, ltSt);
+        if (!lg) { if (ltSt.noClose >= 0) break; continue; }
+        ltCap = lg.text;
         break;
       }
-      var ltLab = lt.match(/\\label\{([^}]+)\}/);
-      if (ltLab) ltLabel = ltLab[1];
       var tableHtml = renderTabular(lt, ctx, ltBase, false, 'width:100%');
       if (ltCap === null) return tableHtml;
       var ltN = ++ctx.counters.tab;
-      if (ltLabel) ctx.labels[ltLabel] = String(ltN);
+      ltLabels.forEach(function (k) { ctx.labels[k] = String(ltN); });
       return '<figure class="float tab">' + tableHtml + '<figcaption>' + esc(t('render.table')) + '&nbsp;' + ltN +
         esc(t('render.captionSeparator')) + renderFlow(ltCap, ctx, base, false, true) + '</figcaption></figure>';
     }
@@ -1271,10 +1348,14 @@ function renderEnv(env, ctx, absInnerStart) {
 // itemize/enumerate 的 \item 拆分（含 description 的 [label]）
 function splitItems(inner) {
   var items = [];
-  var re = /\\item(?![A-Za-z])/g, m;
-  var first = null;
-  var matches = [];
-  while ((m = re.exec(inner))) matches.push({ index: m.index, end: m.index + m[0].length });
+  // 只切顶层 \item：内层 \begin{itemize}\item b\end{itemize} 交给递归渲染。
+  // 旧版不数嵌套，嵌套列表塌平成两个平级 <li>，内层标记还漏成正文里的 \beginitemize
+  var re = /\\(begin|end)\s*\{[^}]*\}|\\item(?![A-Za-z])/g, m, depth = 0, matches = [];
+  while ((m = re.exec(inner))) {
+    if (m[1] === 'begin') { depth++; continue; }
+    if (m[1] === 'end') { if (depth > 0) depth--; continue; }
+    if (depth === 0) matches.push({ index: m.index, end: m.index + m[0].length });
+  }
   if (!matches.length) return [{ text: inner, start: 0, label: undefined }];
   for (var k = 0; k < matches.length; k++) {
     var st = matches[k].end;
@@ -1311,7 +1392,7 @@ function skipRowDecls(s) {
 // ---------------- tabular ----------------
 // widthArg=true：{宽度} 在列格式之前（tabularx/tabular*），误当成列格式会让整行错位（\toprule 掉进首格）
 // tableStyle：表格整体宽度等附加样式
-// env：来自 findEnv 的环境对象（outerStart/innerStart 等，相对当前流）。
+// env：来自 matchEnvs 的环境对象（outerStart/innerStart 等，相对当前流）。
 // 可视化表格编辑需要每个单元格/行/列格式的源码区间——渲染时顺手记录进 ctx.tables，
 // id 写到 <table data-tid>，TablePanel 据此把面板编辑精确写回源码（TikZ 图样式同款思路）。
 function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
@@ -1508,7 +1589,7 @@ function parseColspec(spec) {
 // ---------------- TikZ 环境接线 ----------------
 function renderTikzEnv(env, ctx, absInnerStart) {
   if (!TIKZ) return '<div class="render-error">' + esc(t('render.tikzMissing')) + '</div>';
-  // tikzpicture 的 [opts] 紧跟 \begin{tikzpicture} 之后 —— 我们的 findEnv 已把 opts 含进 inner
+  // tikzpicture 的 [opts] 紧跟 \begin{tikzpicture} 之后 —— 配对表 matchEnvs 已把 opts 含进 inner
   var inner = env.inner;
   var optStr = '';
   var m = inner.match(/^\s*\[([^\]]*)\]/);
