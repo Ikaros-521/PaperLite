@@ -68,7 +68,8 @@ assert.equal(JSON.parse(stored.get(DRAFT_KEY))[0].text, 'new content');
 assert.equal(flashes.at(-1), 'app.draftSaved', 'Retry can persist and acknowledge a successful save');
 
 // Run the graphics effect against persistent DOM nodes, as React does when only
-// assetTabs changes. A second run must resolve the original path, not a dead Blob.
+// result changes (typing). Same-signature restarts must reuse the cached live URL
+// (no disk re-read); a real asset change must revoke the old URL and install a new one.
 const preview = source('components/PreviewPane.jsx');
 const effectBegin = preview.indexOf('  useEffect(() => {');
 const effectEnd = preview.indexOf('  }, [result, assetDir, assetTabs]);', effectBegin)
@@ -83,24 +84,37 @@ function image(src) {
 const localImage = image('figure.png'), remoteImage = image('https://example.test/figure.png');
 const graphicsContext = {
   useEffect: callback => { graphicsEffect = callback; }, result: {}, assetDir: null,
+  imgCacheRef: { current: null },
   paperRef: { current: { querySelectorAll: () => [localImage, remoteImage] } },
-  assetTabs: [{ name: 'figure.png', uploadedFile: { name: 'figure.png' } }],
+  assetTabs: [{ name: 'figure.png', uploadedFile: { name: 'figure.png', lastModified: 1, size: 10 } }],
   URL: { createObjectURL: () => 'blob:figure-' + ++nextUrl, revokeObjectURL: url => revoked.add(url) },
 };
 vm.runInNewContext(preview.slice(effectBegin, effectEnd), graphicsContext);
 let cleanup = graphicsEffect();
-await tick();
+await tick(); await tick();
 const firstUrl = localImage.src;
 assert.match(firstUrl, /^blob:/);
-cleanup();
-assert.ok(revoked.has(firstUrl));
+assert.equal(remoteImage.src, 'https://example.test/figure.png', 'Remote schemes stay untouched');
+assert.equal(revoked.has(firstUrl), false, 'Cached URL stays live across effect restarts');
+
+// 打字重渲：innerHTML 换出全新 <img> 节点，同路径同资产 —— 复用缓存 URL，不重读资产
+const reNode = image('figure.png');
+graphicsContext.paperRef.current.querySelectorAll = () => [reNode, remoteImage];
+cleanup && cleanup();
 cleanup = graphicsEffect();
-await tick();
-assert.notEqual(localImage.src, firstUrl);
-assert.equal(revoked.has(localImage.src), false, 'Effect restart installs a live URL');
-assert.equal(remoteImage.src, 'https://example.test/figure.png');
-cleanup();
-assert.ok(revoked.has(localImage.src), 'Unmount releases the final URL');
+await tick(); await tick();
+assert.equal(reNode.src, firstUrl, 'Same signature reuses the cached URL');
+assert.equal(revoked.has(firstUrl), false);
+cleanup && cleanup();
+
+// 资产真变了（重传同名文件）：旧 URL 吊销、新活 URL 安装
+graphicsContext.assetTabs[0] = { name: 'figure.png', uploadedFile: { name: 'figure.png', lastModified: 2, size: 11 } };
+cleanup = graphicsEffect();
+await tick(); await tick();
+assert.ok(revoked.has(firstUrl), 'Replacing the asset revokes the old URL');
+assert.notEqual(reNode.src, firstUrl);
+assert.equal(revoked.has(reNode.src), false, 'A fresh run installs a live URL');
+cleanup && cleanup();
 
 // Mock only browser transports; execute the engine module and lifecycle logic.
 function engineHarness({ manifestPending = false, prepareGraphics } = {}) {

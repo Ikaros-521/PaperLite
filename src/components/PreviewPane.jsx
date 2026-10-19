@@ -25,10 +25,35 @@ export default function PreviewPane({
   const [mmdTick, setMmdTick] = useState(0); // Mermaid 异步渲染完成后自增，驱动选中态重放
   const [noteOpen, setNoteOpen] = useState(false);
 
+  // 图片解析结果缓存：键为「图片路径列表 + 资产文件签名」。打字会让 result 每拍
+  // 重渲（innerHTML 换掉全部 <img>），不缓存的话每键都重读磁盘重造 blob——
+  // 签名不变时复用上次的 URL；资产真的变了（重传/换目录）才重新解析
+  const imgCacheRef = useRef(null);
   useEffect(() => {
     let cancelled = false;
-    const urls = [], tasks = [];
     const images = paperRef.current?.querySelectorAll('img.includegraphics') || [];
+    const original_ = img => {
+      const o = img.getAttribute('data-graphics-source') || img.getAttribute('src') || '';
+      return /^(?:[a-z]+:|\/\/)/i.test(o) ? null : o;
+    };
+    const sig = JSON.stringify([
+      [...images].map(original_),
+      assetTabs.map(t => [t.name, t.uploadedFile ? String(t.uploadedFile.lastModified) + ':' + t.uploadedFile.size : '']),
+    ]);
+    const cache = imgCacheRef.current;
+    if (cache && cache.sig === sig && cache.done) {
+      // 复用：innerHTML 换新了 <img> 节点，src 还得重新指到仍有效的 URL 上；
+      // 路径标记也要补，否则下一轮 effect 会把 blob: 当外部 scheme 跳过
+      for (const img of images) {
+        const o = original_(img); const u = o && cache.urls.get(o);
+        if (u) { img.setAttribute('data-graphics-source', o); img.src = u; }
+      }
+      return undefined;
+    }
+    // 换一批资产：先释放上一轮的 blob 与 pdf 文档
+    if (cache) { cache.urls.forEach(u => { if (u.startsWith('blob:')) URL.revokeObjectURL(u); }); cache.tasks.forEach(task => task.destroy()); }
+    const urls = new Map(), tasks = [], pending = [];
+    imgCacheRef.current = { sig, urls, tasks, done: false };
     const resolve = async name => {
       const parts = name.replace(/\\/g, '/').replace(/^\.\//, '').split('/');
       if (parts.some(p => !p || p === '..')) return null;
@@ -40,12 +65,10 @@ export default function PreviewPane({
       return assetTabs.find(tab => tab.name === name)?.uploadedFile || null;
     };
     for (const img of images) {
-      // src becomes a Blob/data URL after resolution. Retain the project path
-      // across effect restarts so a revoked URL is never mistaken for the input.
-      const original = img.getAttribute('data-graphics-source') || img.getAttribute('src') || '';
-      if (/^(?:[a-z]+:|\/\/)/i.test(original)) continue;
+      const original = original_(img);
+      if (!original) continue;
       img.setAttribute('data-graphics-source', original);
-      (async () => {
+      pending.push((async () => {
         let file;
         const names = /\.[a-z\d]+$/i.test(original) ? [original]
           : [original, ...['pdf', 'png', 'jpg', 'jpeg'].map(ext => original + '.' + ext)];
@@ -53,7 +76,7 @@ export default function PreviewPane({
           try { file = await resolve(name); } catch { /* Try next graphics extension. */ }
           if (file) break;
         }
-        if (!file || cancelled) return;
+        if (!file) return;
         if (/\.pdf$/i.test(file.name)) {
           const lib = await loadPdfLibrary();
           if (cancelled) return;
@@ -66,15 +89,31 @@ export default function PreviewPane({
           const canvas = document.createElement('canvas');
           canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
           await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-          if (!cancelled) img.src = canvas.toDataURL('image/png');
+          const data = canvas.toDataURL('image/png');
+          urls.set(original, data);
+          if (!cancelled) img.src = data;
         } else {
-          const url = URL.createObjectURL(file); urls.push(url);
+          const url = URL.createObjectURL(file);
+          urls.set(original, url);
           if (!cancelled) img.src = url;
         }
-      })().catch(error => { if (!cancelled) img.title = original + ': ' + error.message; });
+      })().catch(error => { if (!cancelled) img.title = original + ': ' + error.message; }));
     }
-    return () => { cancelled = true; urls.forEach(url => URL.revokeObjectURL(url)); tasks.forEach(task => task.destroy()); };
+    // done 只看「本轮解析是否全部落定」，不受 cancelled 影响：打字重渲会先 cleanup
+    // 旧轮（cancelled=true），若据此不置 done，下一轮同签名仍会重读磁盘——缓存失效。
+    // 以 sig 匹配防止被更早一轮的迟到回执误标。
+    Promise.all(pending).then(() => { const c = imgCacheRef.current; if (c && c.sig === sig) c.done = true; });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result, assetDir, assetTabs]);
+
+  // 卸载兜底：缓存里的 blob URL 与 pdf 文档此时不再有人持有
+  useEffect(() => () => {
+    const cache = imgCacheRef.current;
+    if (!cache) return;
+    cache.urls.forEach(u => { if (u.startsWith('blob:')) URL.revokeObjectURL(u); });
+    cache.tasks.forEach(task => task.destroy());
+  }, []);
 
   useEffect(() => {
     const paper = paperRef.current;

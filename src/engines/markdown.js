@@ -41,26 +41,46 @@ export function renderMarkdown(src) {
   return renderMarkdownFull(src).html;
 }
 
+// 引用块前缀剥掉后按普通行匹配：markdown-it 会把 `> # x` 渲染成 <blockquote><h1>
+const stripBqMark = s => s.replace(/^\s*(?:>\s?)+/, '');
+// 锚点按文本配对：两侧都去掉标签/实体/多余空白后比较
+const normHeading = s => String(s == null ? '' : s)
+  .replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/\s+/g, ' ').trim();
+
 // 渲染 + 提取大纲（标题层级/行号/锚点 id），供大纲面板跳转
 export function renderMarkdownFull(src) {
   const str = String(src || '');
-  // 扫描标题（跳过代码围栏），生成与渲染顺序一致的 id
+  // 扫描标题（跳过代码围栏），生成与渲染顺序一致的 id。除 ATX 外也认 setext
+  // （Title\n=====）与引用块内标题——markdown-it 都会渲染成 <hN>，漏扫会让
+  // 后续锚点整体前移、大纲点跳到上一个标题。围栏按 CommonMark 要求缩进 ≤3 空格。
   const headings = [];
   let inFence = false;
-  str.split('\n').forEach((line, idx) => {
-    if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return; }
+  const lines = str.split('\n');
+  lines.forEach((line, idx) => {
+    if (/^ {0,3}(```|~~~)/.test(line)) { inFence = !inFence; return; }
     if (inFence) return;
-    const m = line.match(/^(#{1,6})\s+(.*)$/);
-    if (m) headings.push({ level: m[1].length, text: m[2].replace(/[*`_#]/g, '').trim(), line: idx, id: 'mdh-' + headings.length });
+    const plain = stripBqMark(line);
+    const m = plain.match(/^(#{1,6})\s+(.*)$/);
+    if (m) { headings.push({ level: m[1].length, text: m[2].replace(/[*`_#]/g, '').trim(), line: idx, id: 'mdh-' + headings.length }); return; }
+    // setext 只认 `=` 下划线：`-` 与主题线/列表记号有歧义，误认会造出假标题
+    const next = lines[idx + 1] || '';
+    if (line.trim() && /^ {0,3}=+\s*$/.test(next)) {
+      headings.push({ level: 1, text: line.replace(/[*`_#]/g, '').trim(), line: idx, id: 'mdh-' + headings.length });
+    }
   });
 
   let html = md.render(str);
-  // 按顺序注入 id
-  let hi = 0;
-  html = html.replace(/<(h[1-6])>/g, (_, tag) => {
-    const id = hi < headings.length ? headings[hi].id : '';
-    hi++;
-    return id ? '<' + tag + ' id="' + id + '">' : '<' + tag + '>';
+  // 注入锚点：优先按标题文本配对而不是纯按顺序——扫描与渲染偶有形态出入
+  // （漏扫的标题形态），纯位置配对会把锚点装到别的标题上；文本没对上再退回顺序
+  const pending = headings.slice();
+  html = html.replace(/<h([1-6])>([^<]*)<\/h\1>/g, (full, lvl, inner) => {
+    const innerN = normHeading(inner);
+    let k = pending.findIndex(h => normHeading(h.text) === innerN);
+    if (k < 0 && pending.length) k = 0;
+    if (k < 0) return full;
+    const h = pending.splice(k, 1)[0];
+    return '<h' + lvl + ' id="' + h.id + '">' + inner + '</h' + lvl + '>';
   });
 
   // mermaid 代码块 → 占位 div（由 PreviewPane 懒渲染）
