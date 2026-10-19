@@ -124,7 +124,7 @@ function resolvePlaceholder(token, match, before, after) {
   const n = parseInt(token, 10);
   if (!n) return '$' + token;                       // $0 不是分组，按原样保留
   const g = match.groups[n - 1];
-  return g === undefined || g === null ? '' : g;
+  return g === undefined || g === null ? '' : g;    // 越界分组替换成空（findModel.mjs 钉住的既有语义）
 }
 
 /** 计算某个匹配对应的替换文本（支持 $1 / $<name> / ${name} / $& / $` / $' 与保留大小写）。 */
