@@ -125,8 +125,15 @@ export default function PreviewPane({
       if (cancelled) return;
       const mermaid = mod.default;
       if (!mermaidInited) {
-        // strict：SVG 输出经 DOMPurify 清洗，图源码里的 click/href 指令不再原样放行
-        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, fontFamily: 'Georgia, "Noto Serif SC", serif' });
+        // strict：SVG 输出经 DOMPurify 清洗，图源码里的 click/href 指令不再原样放行。
+        // secure 还得自己补：mermaid 10 默认只护 secure/securityLevel/startOnLoad/
+        // maxTextSize/maxEdges，而文档自带的 %%{init}%% 指令能改 dompurifyConfig 与
+        // htmlLabels——等于让被渲染的那份文稿自己配置消毒器，而 SVG 是 innerHTML 进页面的。
+        mermaid.initialize({
+          startOnLoad: false, securityLevel: 'strict', htmlLabels: false,
+          fontFamily: 'Georgia, "Noto Serif SC", serif',
+          secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'dompurifyConfig', 'htmlLabels'],
+        });
         mermaidInited = true;
       }
       blocks.forEach(b => {

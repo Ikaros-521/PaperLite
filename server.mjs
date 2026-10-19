@@ -22,6 +22,18 @@ const MIME = {
   '.woff2': 'font/woff2', '.json': 'application/json'
 };
 
+// 静态页与 API 共用的响应头。同源页面仍可能被别的站点用 iframe 套住（配合 localStorage
+// 里的渠道 API Key 与本机 TeX），先把套壳、引用外泄与摄像头/麦克风一类能力关死。
+// 没下 script-src 那条 CSP：XeLaTeX 的 wasm-unsafe-eval、KaTeX 内联样式与 blob Worker
+// 都要例外项，漏一项就是整页预览白屏，代价比收益大 —— 需要时按实测再收紧。
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  'Content-Security-Policy': "frame-ancestors 'none'",
+};
+
 // ---------------- 引擎检测 ----------------
 const ENGINE_CMDS = { pdflatex: 'pdflatex', latex: 'latex', xelatex: 'xelatex', lualatex: 'lualatex' };
 // 结果缓存 30s：where/which 是子进程调用，/api/health 与每次 /api/compile 各探测
@@ -85,7 +97,7 @@ async function compile(body) {
   fs.mkdirSync(dir, { recursive: true });
   try {
     fs.writeFileSync(path.join(dir, 'main.tex'), String(source || ''), 'utf8');
-    const args = ['-interaction=nonstopmode', '-halt-on-error', 'main.tex'];
+    const args = ['-interaction=nonstopmode', '-halt-on-error', '-no-shell-escape', 'main.tex'];
     // 跑两遍以解析目录/交叉引用
     let r1 = await runCmd(cmd, args, dir);
     if (r1.code === 0) r1 = await runCmd(cmd, args, dir);
@@ -156,7 +168,7 @@ function forbiddenOrigin(req) {
 }
 
 function json(res, code, obj, extra) {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...(extra || {}) });
+  res.writeHead(code, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', ...(extra || {}) });
   res.end(JSON.stringify(obj));
 }
 // 统一成 { ok, value } / { ok:false, code, error }：解析失败与超限要分开回 400 / 413，
@@ -273,7 +285,7 @@ async function route(req, res) {
     const reply = mockReply(q);
     const pt = reqTokens(body), ct = estTok(reply);
     if (body.stream) {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
       const g = sseGuard(res);
       const deltas = reply.match(/[\s\S]{1,12}/g) || [];
       let i = 0;
@@ -312,7 +324,7 @@ async function route(req, res) {
     blocks.push({ type: 'text', text: reply });
 
     if (body.stream) {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
       const g = sseGuard(res);
       g.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock', content: [], usage: { input_tokens: pt, output_tokens: 1 } } })}\n\n`);
       let bi = 0;
@@ -376,12 +388,12 @@ async function route(req, res) {
       // SPA 兜底
       fs.readFile(path.join(ROOT, 'index.html'), (e2, d2) => {
         if (e2) { res.writeHead(404); return res.end('Not Found（请先 npm run build）'); }
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
+        res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'text/html; charset=utf-8' });
         res.end(d2);
       });
       return;
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
+    res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream' });
     res.end(data);
   });
 }
