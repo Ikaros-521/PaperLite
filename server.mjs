@@ -173,16 +173,25 @@ function json(res, code, obj, extra) {
 }
 // 统一成 { ok, value } / { ok:false, code, error }：解析失败与超限要分开回 400 / 413，
 // 把坏 JSON 当空对象交给 compile 只会得到一句莫名其妙的编译错误
-function readBody(req) {
+// 超限时先把 413 写出去再断流：直接 destroy 的话 socket 当场没了，调用方那个 413
+// 永远发不出去，客户端只看到连接被重置（curl: (56)）
+function readBody(req, res, extra) {
   return new Promise((resolve) => {
     const chunks = [];
     let bytes = 0;
     let settled = false;
     const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
-    // 超限时 destroy 后不会再有 'end' 事件：立即 resolve
     req.on('data', c => {
       bytes += c.length;   // 按字节限：UTF-8 一个汉字三字节，按字符数限等于把预算放大三倍
-      if (bytes > 20e6) { try { req.destroy(); } catch (e) {} finish({ ok: false, code: 413, error: 'payload too large' }); return; }
+      if (bytes > 20e6) {
+        try {
+          res.writeHead(413, { ...SECURITY_HEADERS, ...(extra || {}), 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: 'payload too large' }));
+        } catch (e) { /* 已经断开就别再折腾 */ }
+        try { req.destroy(); } catch (e) {}
+        finish({ ok: false, code: 413, error: 'payload too large', sent: true });
+        return;
+      }
       // 必须攒够 Buffer 再整体解码：`data += chunk` 会让每个分块单独 toString，
       // 跨 TCP 包的 UTF-8 序列断成 U+FFFD —— 中文文稿带着坏字符交给 TeX，
       // 用户只会看到一句莫名其妙的编译错误
@@ -230,6 +239,11 @@ const server = http.createServer((req, res) => {
     else { try { res.end(); } catch (e2) { /* 已经断开就别再折腾 */ } }
   });
 });
+// 慢客户端不该长期占住 socket 和那份 20MB 缓冲：Node 默认 requestTimeout 是 300s，
+// 对只做本机同源服务来说太宽。编译/AI 请求的正文都在毫秒级送达，30s 绰绰有余；
+// 它只管「收完请求」，不掐正在流式返回的 SSE 响应。
+server.requestTimeout = 30_000;
+server.headersTimeout = 15_000;
 
 async function route(req, res) {
   const url = (req.url || '/').split('?')[0];
@@ -253,8 +267,8 @@ async function route(req, res) {
     return json(res, 200, { ok: true, engines: list, dvi2pdf: !!engines.dvipdfmx }, cors);
   }
   if (url === '/api/compile' && req.method === 'POST') {
-    const b = await readBody(req);
-    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    const b = await readBody(req, res, cors);
+    if (!b.ok) { if (!b.sent) json(res, b.code, { ok: false, error: b.error }, cors); return; }
     if (compiling >= MAX_COMPILE) {
       res.writeHead(429, { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '2' });
       return res.end(JSON.stringify({ ok: false, error: '本机编译队列已满，请稍候再试' }));
@@ -277,8 +291,8 @@ async function route(req, res) {
     }, cors);
   }
   if (url === '/v1/chat/completions' && req.method === 'POST') {
-    const b = await readBody(req);
-    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    const b = await readBody(req, res, cors);
+    if (!b.ok) { if (!b.sent) json(res, b.code, { ok: false, error: b.error }, cors); return; }
     const body = b.value;
     const last = (body.messages || []).filter(m => m.role === 'user').pop();
     const q = String(last && last.content || '');
@@ -307,8 +321,8 @@ async function route(req, res) {
 
   // ---- Anthropic 协议 Mock（/v1/messages，供「Anthropic (Claude)」协议离线体验）----
   if (url === '/v1/messages' && req.method === 'POST') {
-    const b = await readBody(req);
-    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    const b = await readBody(req, res, cors);
+    if (!b.ok) { if (!b.sent) json(res, b.code, { ok: false, error: b.error }, cors); return; }
     const body = b.value;
     const last = [...(body.messages || [])].reverse().find(m => m.role === 'user');
     const q = typeof (last && last.content) === 'string'
@@ -362,8 +376,8 @@ async function route(req, res) {
   }
 
   if (url === '/v1/embeddings' && req.method === 'POST') {
-    const b = await readBody(req);
-    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    const b = await readBody(req, res, cors);
+    if (!b.ok) { if (!b.sent) json(res, b.code, { ok: false, error: b.error }, cors); return; }
     const body = b.value;
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
     const data = inputs.map((t, i) => ({
@@ -440,6 +454,9 @@ process.on('uncaughtException', (e) => console.error('[paperlite] 未捕获异�
 process.on('unhandledRejection', (e) => console.error('[paperlite] 未处理的 rejection：', (e && e.stack) || e));
 
 sweepStaleTempDirs();
+// 长时间挂着的实例：Windows 上 TeX 与杀软常常还攥着 main.log，compile 里的 rm 会失败
+// 留下 paperlite-* 僵尸目录。启动清一次不够，按小时再扫一遍（只动一小时前的）
+setInterval(sweepStaleTempDirs, 60 * 60 * 1000).unref?.();
 
 // 端口被占时默认抛一整段栈然后退出；给一句能照着做的提示
 server.on('error', (e) => {
