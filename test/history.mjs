@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { compareVersions, inlineChanges } from '../src/historyDiff.js';
 import { readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage, unusedHistory, pruneHistory } from '../src/fileActions.js';
 import { noteLiveTabs } from '../src/liveTabs.js';
-import { HISTORY_LIMITS } from '../src/historyStorage.js';
+import { HISTORY_LIMITS, takeCorruptNotice } from '../src/historyStorage.js';
 
 // Reconstruct both original byte strings, including CRLF and missing final newlines.
 const cases = [['', ''], ['', 'hello\n'], ['hello', ''], ['a\nb\nc\n', 'a\nB\nc\n'],
@@ -241,4 +241,15 @@ prunedMW = pruneHistory([]);
 assert.equal(readHistory('["x","y"]').length, 0, '本窗口的心跳不算「其他窗口」');
 data.delete(LIVE_KEY);
 
-console.log('History: exact diff reconstruction, CRLF/EOF, large edits, labels, restore backups, storage failure and multi-window prune protection passed.');
+// ---- 历史库整份坏掉：原文先备份到隔离键，提示只报一次 ----
+data.clear();
+const broken = '{"doc":[{"id":"a","date":1,"text":"还没写完';
+localStorage.setItem('paperlite.history.v1', broken);
+assert.equal(readHistory('doc').length, 0, '解析失败当空库处理，不抛');
+assert.equal(localStorage.getItem('paperlite.history.v1.corrupt'), broken, '原文进隔离键');
+assert.equal(takeCorruptNotice(), true, '坏库要提示一次');
+assert.equal(takeCorruptNotice(), false, '提示只报一次');
+recordVersion('doc', 'fresh start');
+assert.equal(localStorage.getItem('paperlite.history.v1.corrupt'), broken, '写回新历史不覆盖隔离副本');
+
+console.log('History: exact diff reconstruction, CRLF/EOF, large edits, labels, restore backups, storage failure, multi-window prune protection and corrupt-store quarantine passed.');

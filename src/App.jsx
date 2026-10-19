@@ -414,7 +414,7 @@ export default function App() {
             await fs.writeFileText(fh, bibtex + '\n');      // 新建文件直接带上首条
             setTreeKey(n => n + 1);
             const info = infoFor(name);
-            target = makeTab({ name, kind: info.kind, handle: fh, parentDir: rootDir, text: bibtex + '\n', modeSpec: info.mode, saved: bibtex + '\n', historyScope: rootDir.name || '' });
+            target = makeTab({ name, kind: info.kind, handle: fh, parentDir: rootDir, text: bibtex + '\n', modeSpec: info.mode, saved: bibtex + '\n', historyScope: rootDir.name || '', disk: await fs.diskStamp(fh) });
             setTabs(ts => ts.concat(target));
             prefilled = true;
           } catch (err) { /* 写不了盘就退回内存标签 */ }
@@ -1114,8 +1114,15 @@ export default function App() {
   snapshotTabRef.current = snapshotTab;
   const createFileForAgent = useCallback(async (path, content) => {
     const L = getLang();
-    const clean = String(path || '').replace(/^[./\\]+/, '').replace(/\/+/g, '/').trim();
-    if (!clean || /[\\:*?"<>|]/.test(clean)) return { ok: false, msg: tr(L, 'app.badFileName') };
+    // 旧写法 replace(/^[./\\]+/, '') 把 ../x 静默改成 x、.latexmkrc 改成 latexmkrc：
+    // 悄悄换目标比直接拒绝更糟（模型以为建在 a/ 下，实际落在别处）。现在按段校验。
+    const segs = String(path || '').replace(/\/+/g, '/').split('/').filter(Boolean);
+    if (!segs.length || /[\\:*?"<>|\u0000-\u001f]/.test(String(path || ''))) return { ok: false, msg: tr(L, 'app.badFileName') };
+    if (segs.some(s => s.startsWith('.'))) return { ok: false, msg: tr(L, 'agent.errHiddenPath', { path: String(path || '') }) };
+    const clean = segs.join('/');
+    if (String(content == null ? '' : content).length > 2 * 1024 * 1024) {
+      return { ok: false, msg: tr(L, 'fs.tooLarge', { size: (String(content).length / 1048576).toFixed(1) }) };
+    }
     const root = rootDirRef.current;
     if (root) {
       try {

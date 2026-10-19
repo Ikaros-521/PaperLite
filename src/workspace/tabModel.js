@@ -26,6 +26,22 @@ export function renameHistoryKey(key, from, to) {
 export const LS_DOC = 'paperlite.doc.v2';
 /** 当前多草稿键：[{ id: draftId, name, text }] */
 export const LS_DRAFTS = 'paperlite.drafts.v1';
+/** 解析失败/条目认不出来时的原文隔离位：下一次自动保存会覆盖原键，先留一份可捞的 */
+export const LS_DRAFT_CORRUPT = LS_DRAFTS + '.corrupt';
+let draftCorruptKept = false;
+
+function quarantineDrafts(raw) {
+  try {
+    if (raw && !localStorage.getItem(LS_DRAFT_CORRUPT)) { localStorage.setItem(LS_DRAFT_CORRUPT, raw); draftCorruptKept = true; }
+  } catch (e) { /* 塞不下就算了，至少原键上的数据没被我们主动删 */ }
+}
+
+/** 取走「草稿库坏了、原文已备份」的提示：报一次清零 */
+export function takeDraftCorruptNotice() {
+  if (!draftCorruptKept) return false;
+  draftCorruptKept = false;
+  return true;
+}
 
 let tabSeq = 0;
 
@@ -35,12 +51,14 @@ let tabSeq = 0;
  * historyPath：历史键用的路径（默认取 path）。未落盘标签的 path 是本地化的
  * 「(未保存)/x.tex」，直接进键会导致换语言后历史键漂移，调用方传稳定的字面量。
  */
-export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', historyPath, draftId, updatedAt }) {
+export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', historyPath, draftId, updatedAt, disk }) {
   const id = ++tabSeq;
   if (kind === 'draft') draftId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
   const tab = {
     id, name, path: path || name, kind, handle: handle || null, parentDir: parentDir || null,
     draftId,
+    // 打开/上次保存时的磁盘指纹，保存前用来发现外部改动（见 fs.diskStamp）
+    disk: disk || null,
     historyKey: JSON.stringify([kind === 'draft' ? 'draft' : historyScope, kind === 'draft' ? draftId : historyPath ?? (path || name)]),
     saved: saved !== undefined ? saved : (text || ''),
     imageUrl: imageUrl || null,
@@ -55,8 +73,10 @@ export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, s
 /** 启动恢复：优先多草稿键，退回旧单篇键，都没有给示例论文。读取阶段不截断，避免把原始数据写坏 */
 export function readDrafts() {
   const nameOf = n => String(n || '').slice(0, 80);
+  let raw;
+  try { raw = localStorage.getItem(LS_DRAFTS); } catch (e) { raw = null; }
   try {
-    const arr = JSON.parse(localStorage.getItem(LS_DRAFTS) || 'null');
+    const arr = JSON.parse(raw || 'null');
     if (Array.isArray(arr)) {
       const list = arr.filter(d => d && typeof d.text === 'string').map(d => ({
         name: nameOf(d.name),
@@ -64,9 +84,11 @@ export function readDrafts() {
         ...(typeof d.id === 'string' && d.id ? { id: d.id } : {}),
         ...(Number.isFinite(d.updated) ? { updated: d.updated } : {}),
       }));
+      // 认不出来的条目一旦被丢弃，800ms 后的自动保存就把它们连同原键一起覆盖掉
+      if (list.length !== arr.length) quarantineDrafts(raw);
       if (list.length) return list;
-    }
-  } catch (e) { /* 落盘格式坏了，退回旧键 */ }
+    } else if (raw) quarantineDrafts(raw);
+  } catch (e) { quarantineDrafts(raw); /* 落盘格式坏了，退回旧键 */ }
   try { const s = localStorage.getItem(LS_DOC); if (s && s.trim()) return [{ name: '', text: s }]; } catch (e) { /* ignore */ }
   return [{ name: '', text: samples.demo }];
 }

@@ -43,6 +43,15 @@ export async function readFileText(fileHandle, maxBytes) {
   return text;
 }
 
+/** 磁盘指纹（lastModified + size）：保存前比对它，才知道文件在外部被改过。
+ *  拿不到就返回 null——权限掉线或测试夹具没有 getFile，此时不该拦下用户的保存。 */
+export async function diskStamp(fileHandle) {
+  try {
+    const f = await fileHandle.getFile();
+    return { m: f.lastModified, s: f.size };
+  } catch (e) { return null; }
+}
+
 export async function writeFileText(fileHandle, text) {
   const w = await fileHandle.createWritable();
   try {

@@ -1,32 +1,64 @@
 import { foreignLiveKeys } from './liveTabs.js';
 
 const HISTORY_KEY = 'paperlite.history.v1';
+// 解析失败的原文挪到这里，至少让用户能手动捞回来
+const CORRUPT_KEY = HISTORY_KEY + '.corrupt';
 export const HISTORY_LIMITS = Object.freeze({ perFile: 20, total: 200, characters: 1000000 });
 let cachedRaw, cachedStore;
 let lastDropped = 0;
+let corruptKept = false;
+
+function quarantine(raw) {
+  // 整份 blob 解析失败时返回空库，下一次快照就把坏数据覆盖成空历史——用户连捞的机会都没有。
+  // 先把原文复制进隔离键（已有隔离副本就不覆盖，坏掉的历史只留最早那份可考古）
+  try {
+    if (raw && !localStorage.getItem(CORRUPT_KEY)) { localStorage.setItem(CORRUPT_KEY, raw); corruptKept = true; }
+  } catch (e) { /* 隔离键也塞不下就只能作罢 */ }
+}
+
+/** 取走「历史库坏掉、原文已备份」的提示：报一次就清零，别每帧刷屏 */
+export function takeCorruptNotice() {
+  if (!corruptKept) return false;
+  corruptKept = false;
+  return true;
+}
+
+/** 逐条校验：坏条目丢掉，而不是让整库不可用（历史键与旧版本共存） */
+function normalize(parsed) {
+  const data = Object.create(null);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return data;
+  for (const [key, entries] of Object.entries(parsed)) {
+    if (!Array.isArray(entries)) continue;
+    const valid = entries.filter(v => v && typeof v.text === 'string' && typeof v.id === 'string' && Number.isFinite(v.date));
+    if (valid.length) data[key] = valid.map(v => ({ id: v.id, date: v.date, text: v.text,
+      label: typeof v.label === 'string' ? v.label.slice(0, 100) : '',
+      reason: ['auto', 'manual', 'save', 'beforeRestore', 'restore'].includes(v.reason) ? v.reason : 'auto' }));
+  }
+  return data;
+}
 
 function historyStore() {
+  let raw;
   try {
-    const raw = localStorage.getItem(HISTORY_KEY) || '{}';
+    raw = localStorage.getItem(HISTORY_KEY) || '{}';
     if (raw === cachedRaw && cachedStore) return cachedStore;
-    const parsed = JSON.parse(raw);
-    const data = Object.create(null);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      for (const [key, entries] of Object.entries(parsed)) {
-        if (!Array.isArray(entries)) continue;
-        const valid = entries.filter(v => v && typeof v.text === 'string' && typeof v.id === 'string' && Number.isFinite(v.date));
-        if (valid.length) data[key] = valid.map(v => ({ id: v.id, date: v.date, text: v.text,
-          label: typeof v.label === 'string' ? v.label.slice(0, 100) : '',
-          reason: ['auto', 'manual', 'save', 'beforeRestore', 'restore'].includes(v.reason) ? v.reason : 'auto' }));
-      }
-    }
+  } catch (e) { return Object.create(null); }
+  try {
+    const data = normalize(JSON.parse(raw));
     cachedRaw = raw; cachedStore = data;
     return data;
-  } catch { return Object.create(null); }
+  } catch {
+    quarantine(raw);
+    cachedRaw = undefined; cachedStore = undefined;
+    return Object.create(null);
+  }
 }
 
 // One sort and a running size estimate replace repeated serialization of the full store.
 // Writes, renames and Save As all share the same limits. Protected restore backups survive.
+// 每个公开入口都是「先 historyStore() 取新快照再整体写回」，中间没有 await：
+// 另一窗口的写入要么已被 storage 事件作废掉本窗口缓存，要么在下一次读时自然看见。
+// 重构时别把这条同步链拆开（引入 await 就等于开一个整库覆盖对方的窗口）。
 function persistHistory(input, protectedIds = []) {
   const protect = new Set(protectedIds);
   const all = Object.create(null);

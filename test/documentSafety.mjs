@@ -12,14 +12,14 @@ const extract = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, a
 const tabModelBody = readFileSync(new URL('../src/workspace/tabModel.js', import.meta.url), 'utf8')
   .split('\n').filter(line => !line.startsWith('import ')).join('\n').replace(/^export /gm, '');
 const modelWith = sandbox => vm.runInNewContext(
-  tabModelBody + '\n({ makeTab, readDrafts, draftsOf, persistDrafts, markDraftsStored, hasUnsavedWork })', sandbox);
+  tabModelBody + '\n({ makeTab, readDrafts, draftsOf, persistDrafts, markDraftsStored, hasUnsavedWork, takeDraftCorruptNotice })', sandbox);
 // 自动保存 effect 已从 App.jsx 抽到 useWorkspace，测试改切这份真实实现
 const workspaceSrc = readFileSync(new URL('../src/workspace/useWorkspace.js', import.meta.url), 'utf8');
 let value = 'A', disk = '', finish, fail = false;
 let tabs = [{ id: 1, kind: 'tex', name: 'paper.tex', handle: {}, historyKey: 'h', saved: 'old', dirty: true,
-  doc: { getValue: () => value, setValue: text => { value = text; } } }];
+  disk: { m: 1, s: 1 }, doc: { getValue: () => value, setValue: text => { value = text; } } }];
 const common = {
-  useCallback: fn => fn, activeId: 1, rootDir: null, flash() {},
+  useCallback: fn => fn, activeId: 1, rootDir: null, flash() {}, confirm: async () => true,
   tabsRef: { get current() { return tabs; } }, setTabs: fn => { tabs = fn(tabs); },
   recordVersion: () => ({ ok: true }), setHistoryError() {}, setHistoryTick() {},
   getLang: () => 'zh', tr: (_, key) => key, t: key => key, alert() {}, infoFor,
@@ -29,20 +29,52 @@ const writeFileText = async (_, text) => {
   if (fail) throw new Error('write failed');
   disk = text;
 };
+// 保存链路要先读磁盘指纹（外部改动检测），沙箱里的 fs 得提供它
+let stamp = { m: 1, s: 1 };
+const fsStub = { writeFileText, diskStamp: async () => stamp };
 const SAVE_DEPS = '  }, [activeId, rootDir, saveTabAs, alertBox]);';
 const saveBegin = workspaceSrc.indexOf('  const saveActive = useCallback(');
 const saveSource = workspaceSrc.slice(saveBegin, workspaceSrc.indexOf(SAVE_DEPS, saveBegin) + SAVE_DEPS.length);
 const save = vm.runInNewContext(saveSource + '\nsaveActive', {
-  ...common, fs: { writeFileText }, flashRef: { current: () => {} }, alertBox: () => {}, saveTabAs: async () => false,
+  ...common, fs: fsStub, flashRef: { current: () => {} }, alertBox: () => {}, saveTabAs: async () => false,
 });
-let pending = save(); assert.equal(saveState(tabs[0]), 'saving'); value = 'B'; finish(); await pending;
+// saveActive 落盘前要先读一次磁盘指纹，写入不再是同步进入的：给微任务放行再收尾
+const tick = () => new Promise(resolve => setImmediate(resolve));
+let pending = save(); assert.equal(saveState(tabs[0]), 'saving'); value = 'B'; await tick(); finish(); await pending;
 assert.equal(disk, 'A'); assert.equal(tabs[0].saved, 'A'); assert.equal(tabs[0].dirty, true);
-pending = save(); finish(); await pending;
+pending = save(); await tick(); finish(); await pending;
 assert.equal(disk, 'B'); assert.equal(tabs[0].saved, 'B'); assert.equal(tabs[0].dirty, false);
 value = 'C'; tabs[0].dirty = true; fail = true;
-pending = save(); finish(); await pending;
+pending = save(); await tick(); finish(); await pending;
 assert.equal(tabs[0].saved, 'B'); assert.equal(tabs[0].dirty, true); fail = false;
 assert.equal(saveState(tabs[0]), 'failed');
+
+// 磁盘指纹与打开时不一致 = 外部程序或另一个窗口改过：整写前必须先问，不许静默吃掉对方的改动
+tabs[0] = { ...tabs[0], saveError: '', dirty: true };
+value = 'C'; stamp = { m: 99, s: 7 };
+const asked = [];
+const conflictSave = vm.runInNewContext(saveSource + '\nsaveActive', {
+  ...common, fs: fsStub, confirm: async (msg) => { asked.push(msg); return false; },
+  flashRef: { current: () => {} }, alertBox: () => {}, saveTabAs: async () => false,
+});
+await conflictSave();
+assert.deepEqual(asked, ['app.diskChanged', 'app.diskReloadAsk'], '先问是否覆盖，被拒后再问是否重读磁盘');
+assert.equal(disk, 'B', '两问都取消：磁盘内容一个字没动');
+assert.equal(saveState(tabs[0]), 'diskUnsaved', '取消保存后仍是未保存状态');
+
+// 同意覆盖就照旧整写，并把新指纹记回标签（否则下一次保存又要多问一次）
+const overwrite = vm.runInNewContext(saveSource + '\nsaveActive', {
+  ...common, fs: fsStub, confirm: async () => true,
+  flashRef: { current: () => {} }, alertBox: () => {}, saveTabAs: async () => false,
+});
+const op = overwrite();
+assert.equal(saveState(tabs[0]), 'saving', '确认后进入写入中');
+await tick(); finish();
+await op;
+assert.equal(disk, 'C', '确认覆盖后写入编辑器内容');
+assert.deepEqual(tabs[0].disk, { m: 99, s: 7 }, '写后刷新磁盘指纹');
+assert.equal(saveState(tabs[0]), 'diskSaved');
+value = 'B'; stamp = { m: 1, s: 1 };
 
 // Both Save As paths must preserve changes typed while the picker/write waits.
 for (const kind of ['tex', 'draft']) for (const inFolder of [true, false]) {
@@ -55,7 +87,7 @@ for (const kind of ['tex', 'draft']) for (const inFolder of [true, false]) {
   const saveAs = vm.runInNewContext(asSource + '\nsaveTabAs', {
     ...common, rootDir: inFolder ? { name: 'project', getFileHandle: async () => { throw new Error('missing'); } } : null,
     window: { showSaveFilePicker: async () => ({ name: 'paper.tex' }) },
-    fs: { createFile: async () => ({}), writeFileText },
+    fs: { createFile: async () => ({}), writeFileText, diskStamp: async () => stamp },
     copyHistory: (from, to, opts) => { copies.push([from, to, opts]); return true; },
     confirm: async () => true, alertBox: () => {}, flashRef: { current: () => {} },
     onTreeChanged() {}, downloadFile() {},
@@ -123,6 +155,31 @@ const { readDrafts } = modelWith({
   samples: { demo: 'demo' },
 });
 assert.deepEqual(JSON.parse(JSON.stringify(readDrafts())), inputDrafts);
+
+// 草稿库坏掉：认不出的条目先备份原文，别让 800ms 后的自动保存静默覆盖掉它们
+{
+  const brokenDrafts = '[{"name":"a.tex","text":"A"},{"name":"b.tex"}]';
+  const store = new Map([['paperlite.drafts.v1', brokenDrafts]]);
+  const model = modelWith({
+    localStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v) },
+    samples: { demo: 'demo' },
+    CodeMirror: { Doc: function (text) { this.getValue = () => text; } },
+  });
+  assert.equal(model.readDrafts().length, 1, '认得出的那条照常恢复');
+  assert.equal(store.get('paperlite.drafts.v1.corrupt'), brokenDrafts, '整份原文进隔离键');
+  assert.equal(model.takeDraftCorruptNotice(), true, '坏草稿库要提示一次');
+  assert.equal(model.takeDraftCorruptNotice(), false, '提示只报一次');
+}
+{
+  const truncated = '[{"name":"a.tex","text":"截断';
+  const store = new Map([['paperlite.drafts.v1', truncated]]);
+  const model = modelWith({
+    localStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v) },
+    samples: { demo: 'demo' },
+  });
+  assert.equal(model.readDrafts()[0].text, 'demo', '解析失败退回示例稿');
+  assert.equal(store.get('paperlite.drafts.v1.corrupt'), truncated, '解析失败同样先备份');
+}
 
 // Resource URLs must honor GitHub Pages subpaths for URL and byte-backed PDFs.
 const pdfSource = readFileSync(new URL('../src/pdf.js', import.meta.url), 'utf8');

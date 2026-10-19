@@ -13,11 +13,11 @@ import * as fs from '../fs.js';
 import { infoFor } from '../fileTypes.js';
 import { validName } from '../fileActions.js';
 import { downloadFile } from '../exporter.js';
-import { recordVersion, copyHistory } from '../historyStorage.js';
+import { recordVersion, copyHistory, takeCorruptNotice } from '../historyStorage.js';
 import { noteLiveTabs } from '../liveTabs.js';
 import { samples } from '../engines/samples.js';
 import { tr, getLang, detectLang } from '../i18n.js';
-import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedWork, renameHistoryKey, mergeRemoteDrafts, LS_DRAFTS } from './tabModel.js';
+import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedWork, renameHistoryKey, mergeRemoteDrafts, takeDraftCorruptNotice, LS_DRAFTS } from './tabModel.js';
 
 /** 未落盘标签进历史键的稳定路径前缀：本地化的「(未保存)」会随界面语言漂移，
  * 直接当键用，切一次语言历史就全部查无此键 */
@@ -112,17 +112,31 @@ export function useWorkspace(ui) {
   // 另一窗口「清理未打开的历史」时会跳过这些键（见 liveTabs.js / historyStorage.js）
   const liveSig = tabs.map(x => x.historyKey || '').join('\n');
   useEffect(() => {
-    noteLiveTabs(liveSig ? liveSig.split('\n') : []);
-    const iv = setInterval(() => noteLiveTabs(tabsRef.current.filter(x => x.historyKey).map(x => x.historyKey)), 60_000);
-    return () => clearInterval(iv);
+    const beat = () => noteLiveTabs(tabsRef.current.filter(x => x.historyKey).map(x => x.historyKey));
+    beat();
+    const iv = setInterval(beat, 60_000);
+    // 后台窗口的心跳会被浏览器限流：重新可见时立刻补一次，否则 10 分钟 TTL 一到，
+    // 另一个窗口的「清理未打开的历史」就把这边还开着的文件判成孤儿，连带删掉版本历史
+    const onVisible = () => { if (document.visibilityState === 'visible') beat(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVisible); };
   }, [liveSig]);
+
+  // 启动恢复时发现草稿库坏掉（已备份原文）要说出来：静默回退到示例论文，
+  // 800ms 后的自动保存就把原键盖掉了
+  useEffect(() => {
+    if (takeDraftCorruptNotice()) flashRef.current(tr(getLang(), 'app.draftCorruptKept'));
+  }, []);
 
   // ---- 版本历史快照 ----
   // 失败只在历史对话框页脚常驻；超限文档（>1M 字符）每次快照都失败，对话框外
   // 也要 flash 一次，否则用户以为历史一直在积累。恢复成功后允许再次提醒。
   const histWarnedRef = useRef(false);
   const noteHistory = useCallback(result => {
-    setHistoryError(result.ok ? '' : tr(getLang(), 'hist.storageError'));
+    // 整库解析失败但原文已备份进隔离键：这条比「存不下」更该先让用户看见
+    const corrupt = takeCorruptNotice();
+    setHistoryError(corrupt ? tr(getLang(), 'hist.corruptKept') : result.ok ? '' : tr(getLang(), 'hist.storageError'));
+    if (corrupt) flashRef.current(tr(getLang(), 'hist.corruptKept'));
     // 超上限淘汰旧版本是静默的（README 记为有意取舍），但用户必须看得见被清了几条
     if (result.ok && result.dropped) flashRef.current(tr(getLang(), 'hist.dropped', { n: result.dropped }));
     if (!result.ok && !histWarnedRef.current) {
@@ -217,6 +231,7 @@ export function useWorkspace(ui) {
       const tab = makeTab({
         name, path, kind: info.kind, handle: fileHandle, parentDir, text,
         modeSpec: info.mode, saved: text, historyScope: parentDir ? rootDir?.name || '' : '',
+        disk: await fs.diskStamp(fileHandle),
       });
       setTabs(ts => ts.concat([tab])); setActiveId(tab.id); setActiveValue(text);
       return tab;
@@ -322,6 +337,7 @@ export function useWorkspace(ui) {
         const h = await fs.createFile(rootDir, tab.name);
         setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
         await fs.writeFileText(h, value);
+        const stamp = await fs.diskStamp(h);
         const nextKey = JSON.stringify([rootDir.name, tab.name]);
         // 草稿键按 draftId 索引且只有这一个标签用，转存后标签已不是草稿 → 迁移即回收源键；
         // 未落盘标签的键是 [范围, 路径]，可能与其他同名内存标签共用，照旧只复制
@@ -330,7 +346,7 @@ export function useWorkspace(ui) {
         setTabs(ts => ts.map(x => x.id === tab.id ? {
           ...x, historyKey: copied ? nextKey : x.historyKey,
           kind: x.kind === 'draft' ? infoFor(tab.name).kind : x.kind,
-          handle: h, parentDir: rootDir, path: tab.name, saved: value,
+          handle: h, parentDir: rootDir, path: tab.name, saved: value, disk: stamp || x.disk,
           dirty: x.doc.getValue() !== value, saving: false, saveError: '',
         } : x));
         onTreeChanged();
@@ -347,13 +363,14 @@ export function useWorkspace(ui) {
         const h = await window.showSaveFilePicker({ suggestedName: tab.name });
         setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
         await fs.writeFileText(h, value);
+        const stamp = await fs.diskStamp(h);
         const nextKey = JSON.stringify(['', h.name]);
         const copied = copyHistory(tab.historyKey, nextKey, { move: tab.kind === 'draft' });
         if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
         setTabs(ts => ts.map(x => x.id === tab.id ? {
           ...x, historyKey: copied ? nextKey : x.historyKey,
           kind: x.kind === 'draft' ? infoFor(h.name).kind : x.kind,
-          name: h.name, handle: h, path: h.name, saved: value,
+          name: h.name, handle: h, path: h.name, saved: value, disk: stamp || x.disk,
           dirty: x.doc.getValue() !== value, saving: false, saveError: '',
         } : x));
         flashRef.current(t('app.saved', { name: h.name }));
@@ -393,9 +410,31 @@ export function useWorkspace(ui) {
     if (!tab.handle) { await saveTabAs(tab); return; }
     try {
       const value = tab.doc.getValue();
+      // 先立 saving 再去问磁盘：问话期间同样挡住第二次保存，UI 不出现「按了没反应」的窗口
       setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
+      // 外部改动检测：createWritable 是整写截断，文件在我们打开后被别的程序或另一个
+      // 窗口改过时照写下去就是把那份改动吃掉，而且一声不吭（用户口中的「保存后我的改动没了」）。
+      // 上面已按 save 记过一次历史，所以「重读磁盘」不会丢用户自己的版本。
+      const now = await fs.diskStamp(tab.handle);
+      if (now && tab.disk && (now.m !== tab.disk.m || now.s !== tab.disk.s)) {
+        if (!await confirm(tr(getLang(), 'app.diskChanged', { name: tab.name }))) {
+          const reload = await confirm(tr(getLang(), 'app.diskReloadAsk', { name: tab.name }));
+          flashRef.current(tr(getLang(), reload ? 'app.diskReloaded' : 'app.diskSkipped', { name: tab.name }));
+          setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: false } : x));
+          if (reload) {
+            const diskText = await fs.readFileText(tab.handle);
+            tab.doc.setValue(diskText);
+            const stamp = await fs.diskStamp(tab.handle);
+            setTabs(ts => ts.map(x => x.id === tab.id ? {
+              ...x, saved: diskText, disk: stamp || x.disk, dirty: x.doc.getValue() !== diskText, saveError: '',
+            } : x));
+          }
+          return;
+        }
+      }
       await fs.writeFileText(tab.handle, value);
-      setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saved: value, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
+      const stamp = await fs.diskStamp(tab.handle);
+      setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saved: value, disk: stamp || x.disk, dirty: x.doc.getValue() !== value, saving: false, saveError: '' } : x));
       flashRef.current(tr(getLang(), 'app.saved', { name: tab.name }));
     } catch (e) {
       setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: false, saveError: String(e.message || e) } : x));
