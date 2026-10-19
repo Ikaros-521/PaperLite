@@ -25,6 +25,16 @@ function clampResult(text) {
 function ok(result) { return { ok: true, result: clampResult(result) }; }
 function fail(msg) { return { ok: false, result: String(msg) }; }
 
+// 嵌套量词的粗判：组内已带量词、组外面又跟量词（(a+)+ / (a*)* 这类爆炸串）。
+// 不做完整的安全分析，挡住模型最常写出的那种就够了——正则是逐行在 UI 线程 exec 的。
+const NESTED_QUANT = /\([^()]*(?:[+*?])\)[+*?{]/;
+const SEARCH_QUERY_MAX = 200;
+
+/** 路径任一段以 . 开头 = 隐藏文件或点开头的目录（. 与 .. 一起挡在门外） */
+function hiddenPath(p) {
+  return String(p || '').split('/').some(seg => seg.startsWith('.'));
+}
+
 /* ---- 模型侧工具清单（描述随界面语言） ---- */
 
 export function toolsSchema() {
@@ -153,7 +163,9 @@ export function makeAgentExecutor(deps) {
       ...((fi.texFiles || []).map(f => f.path)),
       ...((fi.bibFiles || []).map(f => f.path)),
       ...((fi.textFiles || []).map(f => f.path)),
-      ...((fi.imageFiles || []).map(f => (f.path || f.name))),
+      // 图片清单存的是字符串路径（App 扫描时 push 的就是 path），旧写法取 f.path/f.name
+      // 会得到一串 undefined，模型看不见图名只能瞎猜
+      ...((fi.imageFiles || []).map(f => (typeof f === 'string' ? f : (f && (f.path || f.name))) || '').filter(Boolean)),
     ];
     if (disk.length) {
       const opened = new Set(tabs.map(deps.tabPath));
@@ -177,6 +189,9 @@ export function makeAgentExecutor(deps) {
     if (entry && typeof entry.source === 'string') return ok(entry.source);
     // 3) 直读磁盘（未进索引的文件类型）；区分「不存在」与「读取失败」——
     //    权限/超大/非法路径等原因如实回传，避免模型误以为文件不存在而反复重读或盲目重建
+    //    磁盘兜底不放开隐藏文件：用户选的目录可能很宽（家目录/文档），.env、.git/config
+    //    一旦被模型指名读到，就变成下一次请求里发给第三方渠道的素材
+    if (hiddenPath(path)) return fail(tr(L, 'agent.errHiddenPath', { path }));
     try {
       const text = await readFromDisk(path);
       if (text != null) return ok(text);
@@ -191,6 +206,8 @@ export function makeAgentExecutor(deps) {
     const L = getLang();
     const query = String(args.query || '');
     if (!query) return fail(tr(L, 'agent.errNoQuery'));
+    if (query.length > SEARCH_QUERY_MAX) return fail(tr(L, 'agent.errQueryTooLong', { n: SEARCH_QUERY_MAX }));
+    if (args.regex === true && NESTED_QUANT.test(query)) return fail(tr(L, 'agent.errRegexUnsafe'));
     const r = searchInFiles(searchFiles(), {
       query,
       regex: args.regex === true,
@@ -278,7 +295,10 @@ export function makeAgentExecutor(deps) {
     // 插入点定义就是「用户眼前的光标」：跨文档插入没有语义，宁可拒绝也不写进别的文件
     if (path && path !== activePath) return fail(tr(L, 'agent.errInsertActiveOnly', { path, active: labelOf(activePath) }));
     if (deps.beforeEdit) deps.beforeEdit(null);
-    c.replaceSelection(text);
+    // 插入点的语义是「光标处插入」：CM5 的 replaceSelection 在有选区时是*替换*，
+    // 划词问 Agent 之后它插一段话，用户选中的正文就没了
+    const cur = c.getCursor();
+    c.replaceRange(text, cur, cur);
     return ok(tr(L, 'agent.insertDone', { path: labelOf(activePath) }));
   }
 

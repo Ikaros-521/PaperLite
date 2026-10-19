@@ -23,6 +23,15 @@ export const TOOL_RESULT_KEEP = 5;
 // Agent 行为参数（步数上限 / 全文保留条数）随浏览器保存；常量只作默认值与钳制边界
 export const AGENT_STEPS_MAX = 50;
 export const AGENT_KEEP_MAX = 10;
+// 单步工具调用上限：畸形或循环中的输出可以一次点名几十处改动，全执行等于没有刹车
+export const AGENT_TOOLS_PER_STEP = 8;
+// 整轮改盘次数上限（edit_file / insert_text / create_file）：配合上面的单步上限，
+// 让「模型自己跟自己绕圈」最多改 20 处就停
+export const AGENT_WRITES_PER_RUN = 20;
+// 整轮挂钟上限：流式长回答不能掐单次请求（见 llm.js 的 timeoutMs 注释），但一轮 Agent
+// 总得有尽头，超了就当作步数用尽——只收口回答，不再执行工具
+export const AGENT_DEADLINE_MIN = 10;
+const WRITE_TOOLS = new Set(['edit_file', 'insert_text', 'create_file']);
 const AGENT_CFG_KEY = 'paperlite.agentSettings.v1';
 
 function clampInt(v, min, max, dflt) {
@@ -111,10 +120,16 @@ export async function runAgentLoop(opts) {
   };
 
   let usage = null;
+  const startedAt = Date.now();
+  let writes = 0;
   for (let step = 0; step <= maxSteps; step++) {
-    const last = step === maxSteps;   // 用尽步数：允许再答一次，但不许再调工具
+    // 用尽步数或超过整轮挂钟：允许再答一次，但不许再调工具
+    const overTime = Date.now() - startedAt > AGENT_DEADLINE_MIN * 60_000;
+    const last = step === maxSteps || overTime;
     if (last) {
-      push({ role: 'user', kind: 'agent-limit', content: tr(L, 'agent.limitNote', { n: maxSteps }) });
+      push({ role: 'user', kind: 'agent-limit', content: overTime
+        ? tr(L, 'agent.deadlineNote', { n: AGENT_DEADLINE_MIN })
+        : tr(L, 'agent.limitNote', { n: maxSteps }) });
     }
 
     // 装配要在追加 assistant 占位之前：占位的空消息没有信息量，不该占预算
@@ -162,6 +177,21 @@ export async function runAgentLoop(opts) {
           push({ role: 'user', kind: 'tool-result', tool: calls[j].tool, args: calls[j].args, running: false, ok: false, content: tr(L, 'agent.toolSkipped') });
         }
         const e = new Error('aborted'); e.name = 'AbortError'; throw e;
+      }
+      // 单步调用数与整轮改盘数是两道刹车：超出的每条都要有「未执行」回执，
+      // 否则 UI 照样画卡片，模型也以为自己改过了
+      if (i >= AGENT_TOOLS_PER_STEP) {
+        push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
+          content: tr(L, 'agent.toolBatchLimit', { n: AGENT_TOOLS_PER_STEP }) });
+        continue;
+      }
+      if (WRITE_TOOLS.has(c.tool)) {
+        if (writes >= AGENT_WRITES_PER_RUN) {
+          push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
+            content: tr(L, 'agent.errWriteBudget', { n: AGENT_WRITES_PER_RUN }) });
+          continue;
+        }
+        writes++;
       }
       push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: true, content: '' });
       const r = await execute(c.tool, c.args);

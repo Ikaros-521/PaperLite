@@ -4,7 +4,7 @@
  * user 消息进入 buildPayload）。
  */
 import assert from 'node:assert/strict';
-import { runAgentLoop, agentSystemPrompt, loadAgentSettings, saveAgentSettings } from '../src/workspace/agentRuntime.js';
+import { runAgentLoop, agentSystemPrompt, loadAgentSettings, saveAgentSettings, AGENT_TOOLS_PER_STEP, AGENT_WRITES_PER_RUN } from '../src/workspace/agentRuntime.js';
 import * as ctxBudget from '../src/context.js';
 import { setLang } from '../src/i18n.js';
 
@@ -158,5 +158,32 @@ assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4 }, '合法�
 memStore['paperlite.agentSettings.v1'] = '{oops';
 assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5 }, '损坏数据回退默认值');
 delete globalThis.localStorage;
+
+// 单步工具数与整轮改盘次数：畸形或自我循环的输出不该一口气改几十处，
+// 而且被拒的每一条都要有「未执行」回执（UI 照样画卡片，模型不能以为已经改过）
+{
+  const did = [];
+  let n = 0;
+  globalThis.fetch = async () => sseResponse(
+    Array.from({ length: 10 }, () => '```tool\n{"tool":"edit_file","args":{"old_text":"x' + (++n) + '","new_text":"y"}}\n```').join('\n')
+  );
+  const lists = [];
+  await runAgentLoop({
+    channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+    budget: 4000, maxSteps: 6, keepResults: 6,
+    execute: async (name, args) => { did.push(args.old_text); return { ok: true, result: 'EDIT-OK' }; },
+    onUpdate: l => lists.push(l),
+  });
+  globalThis.fetch = realFetch;
+  const receipts = lists[lists.length - 1].filter(m => m.kind === 'tool-result');
+  assert.ok(did.length <= AGENT_WRITES_PER_RUN, '整轮改盘不超过上限：' + did.length);
+  assert.equal(did.length, AGENT_WRITES_PER_RUN, '上限内的改动手要真的执行');
+  // 6 个执行步 + 1 个收口步，每步 10 条调用都要有回执（收口步只回执不执行）
+  assert.equal(receipts.length, 70, '每条调用都要有回执');
+  assert.ok(receipts.filter(m => !m.ok && /未执行/.test(m.content)).length >= 70 - AGENT_WRITES_PER_RUN,
+    '被拦下的调用标注未执行');
+  assert.equal(receipts.filter(m => /单步/.test(m.content)).length, (10 - AGENT_TOOLS_PER_STEP) * 6,
+    '每步超额的两条都用「分批」文案');
+}
 
 console.log('agentRuntime: all tests passed');

@@ -106,12 +106,32 @@ export function newChannel() {
 
 // ---------------- URL / 请求头 ----------------
 
+/** Base URL 必须是带协议的绝对 http(s) 地址。漏写协议（api.openai.com/v1）会被解析成
+ *  同源相对路径，Bearer / x-api-key 就原样发给托管本站的服务器了；javascript:、data:
+ *  之类同理挡掉。返回 '' 表示没问题，否则是一条可以直接显示的文案。 */
+export function baseUrlProblem(base) {
+  const s = String(base || '').trim();
+  if (!s) return t('llm.needBaseUrl');
+  let u;
+  try { u = new URL(s); } catch (e) { return t('llm.badBaseUrl'); }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return t('llm.badBaseUrl');
+  if (!u.hostname) return t('llm.badBaseUrl');
+  return '';
+}
+
+function checkedBase(channel) {
+  const base = String(channel.baseUrl || '').replace(/\/+$/, '');
+  const problem = baseUrlProblem(base);
+  if (problem) throw new Error(problem);
+  return base;
+}
+
 function url(channel, path) {
-  return String(channel.baseUrl || '').replace(/\/+$/, '') + path;
+  return checkedBase(channel) + path;
 }
 // Anthropic：Base URL 视为服务根（自动补 /v1，已带 /v1 则直接拼）
 function anthropicUrl(channel, name) {
-  let base = String(channel.baseUrl || '').replace(/\/+$/, '');
+  let base = checkedBase(channel);
   if (!/\/v1$/.test(base)) base += '/v1';
   return base + '/' + name;
 }
@@ -138,7 +158,9 @@ export async function fetchModels(channel) {
   const u = protocolOf(channel) === 'anthropic'
     ? anthropicUrl(channel, 'models')
     : url(channel, '/models');
-  const r = await fetch(u, { headers: headers(channel) });
+  // redirect:'error'：跨源重定向只剥 Authorization/Cookie，自定义头（Anthropic 的
+  // x-api-key）是原样转发的——跟着 302 走就等于把 Key 交给重定向目标
+  const r = await fetch(u, { headers: headers(channel), redirect: 'error' });
   if (!r.ok) throw new Error('HTTP ' + r.status + '：' + (await r.text()).slice(0, 160));
   const j = await r.json().catch(() => null);
   const arr = (j && (j.data || j.models)) || (Array.isArray(j) ? j : []);
@@ -292,7 +314,7 @@ const OPTIONAL_FIELDS = ['stream_options', 'thinking'];
 
 async function postJson(u, channel, body, opts) {
   const send = () => fetch(u, {
-    method: 'POST', headers: headers(channel), body: JSON.stringify(body), signal: opts.signal
+    method: 'POST', headers: headers(channel), body: JSON.stringify(body), signal: opts.signal, redirect: 'error'
   });
   let r = await send();
   if (!r.ok && r.status === 400 && OPTIONAL_FIELDS.some(f => body[f])) {
@@ -309,6 +331,54 @@ async function postJson(u, channel, body, opts) {
     throw e;
   }
   return r;
+}
+
+// 响应体上限：服务端发一条超长 data: 行不该把整个标签页的内存吃掉
+const MAX_STREAM_BYTES = 8 * 1024 * 1024;
+
+function bodyOversize() {
+  const e = new Error(t('llm.streamTooLarge'));
+  e.code = 'client';
+  e.__llm = true;
+  return e;
+}
+
+// SSE 统一从这里读：字节数封顶 + 无论正常收尾还是抛错都 cancel 读流。
+// 旧写法在解析抛错时既不 cancel 也不 abort，连接就一直挂着
+async function* sseData(r) {
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', seen = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      seen += (value && value.length) || 0;
+      if (seen > MAX_STREAM_BYTES) throw bodyOversize();
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        const ln = line.trim();
+        if (!ln.startsWith('data:')) continue;
+        const payload = ln.slice(5).trim();
+        if (payload && payload !== '[DONE]') yield payload;
+      }
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    throw e;
+  } finally {
+    try { reader.cancel(); } catch (e) { /* 已经关了 */ }
+  }
+}
+
+/** 非流式响应：先按上限取文本再解析，坏 JSON 给一句人话而不是 SyntaxError */
+async function readJson(r) {
+  const text = await r.text();
+  if (text.length > MAX_STREAM_BYTES) throw bodyOversize();
+  try { return JSON.parse(text); }
+  catch (e) { const err = new Error(t('llm.badJson')); err.code = 'client'; err.__llm = true; throw err; }
 }
 
 function openAIUsage(u) {
@@ -335,32 +405,19 @@ async function parseOpenAIStream(u, channel, body, opts) {
   const r = await postJson(u, channel, body, opts);
 
   if (!body.stream) {
-    const j = await r.json();
+    const j = await readJson(r);
     const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
     return { content: msg.content || '', reasoning: msg.reasoning_content || '', usage: openAIUsage(j.usage) };
   }
 
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '', content = '', reasoning = '', usage = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() || '';
-    for (const line of lines) {
-      const ln = line.trim();
-      if (!ln.startsWith('data:')) continue;
-      const payload = ln.slice(5).trim();
-      if (payload === '[DONE]') continue;
-      let j;
-      try { j = JSON.parse(payload); } catch (e) { continue; }
-      const d = (j.choices && j.choices[0] && j.choices[0].delta) || {};
-      if (d.content) { content += d.content; opts.onDelta && opts.onDelta(d.content); }
-      if (d.reasoning_content) { reasoning += d.reasoning_content; opts.onReasoning && opts.onReasoning(d.reasoning_content); }
-      if (j.usage) usage = openAIUsage(j.usage) || usage;
-    }
+  let content = '', reasoning = '', usage = null;
+  for await (const payload of sseData(r)) {
+    let j;
+    try { j = JSON.parse(payload); } catch (e) { continue; }
+    const d = (j.choices && j.choices[0] && j.choices[0].delta) || {};
+    if (d.content) { content += d.content; opts.onDelta && opts.onDelta(d.content); }
+    if (d.reasoning_content) { reasoning += d.reasoning_content; opts.onReasoning && opts.onReasoning(d.reasoning_content); }
+    if (j.usage) usage = openAIUsage(j.usage) || usage;
   }
   return { content, reasoning, usage };
 }
@@ -370,7 +427,7 @@ async function parseAnthropicStream(u, channel, body, opts) {
   const r = await postJson(u, channel, body, opts);
 
   if (!body.stream) {
-    const j = await r.json();
+    const j = await readJson(r);
     if (j.type === 'error') throw new Error((j.error && j.error.message) || t('llm.anthropicErr'));
     let content = '', reasoning = '';
     for (const b of j.content || []) {
@@ -380,35 +437,22 @@ async function parseAnthropicStream(u, channel, body, opts) {
     return { content, reasoning, usage: anthropicUsage(j.usage) };
   }
 
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '', content = '', reasoning = '', usage = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() || '';
-    for (const line of lines) {
-      const ln = line.trim();
-      if (!ln.startsWith('data:')) continue;
-      const payload = ln.slice(5).trim();
-      if (!payload || payload === '[DONE]') continue;
-      let j;
-      try { j = JSON.parse(payload); } catch (e) { continue; }
-      if (j.type === 'error') throw new Error((j.error && j.error.message) || t('llm.anthropicErr'));
-      // message_start 带输入计量，message_delta 带输出计量，需分别合并
-      if (j.type === 'message_start') usage = anthropicUsage((j.message || {}).usage) || usage;
-      else if (j.type === 'message_delta') {
-        const d = anthropicUsage(j.usage);
-        if (d && usage) usage = { ...usage, output: d.output, cached: d.cached || usage.cached };
-        else if (d) usage = d;
-      }
-      if (j.type !== 'content_block_delta') continue;
-      const d = j.delta || {};
-      if (d.type === 'text_delta' && d.text) { content += d.text; opts.onDelta && opts.onDelta(d.text); }
-      else if (d.type === 'thinking_delta' && d.thinking) { reasoning += d.thinking; opts.onReasoning && opts.onReasoning(d.thinking); }
+  let content = '', reasoning = '', usage = null;
+  for await (const payload of sseData(r)) {
+    let j;
+    try { j = JSON.parse(payload); } catch (e) { continue; }
+    if (j.type === 'error') throw new Error((j.error && j.error.message) || t('llm.anthropicErr'));
+    // message_start 带输入计量，message_delta 带输出计量，需分别合并
+    if (j.type === 'message_start') usage = anthropicUsage((j.message || {}).usage) || usage;
+    else if (j.type === 'message_delta') {
+      const d = anthropicUsage(j.usage);
+      if (d && usage) usage = { ...usage, output: d.output, cached: d.cached || usage.cached };
+      else if (d) usage = d;
     }
+    if (j.type !== 'content_block_delta') continue;
+    const d = j.delta || {};
+    if (d.type === 'text_delta' && d.text) { content += d.text; opts.onDelta && opts.onDelta(d.text); }
+    else if (d.type === 'thinking_delta' && d.thinking) { reasoning += d.thinking; opts.onReasoning && opts.onReasoning(d.thinking); }
   }
   return { content, reasoning, usage };
 }
@@ -433,7 +477,8 @@ export async function embed(channel, texts) {
     const r = await fetch(url(channel, '/embeddings'), {
       method: 'POST',
       headers: headers(channel),
-      body: JSON.stringify({ model: channel.embedModel, input: texts })
+      body: JSON.stringify({ model: channel.embedModel, input: texts }),
+      redirect: 'error'
     });
     if (!r.ok) return null;
     const j = await r.json();

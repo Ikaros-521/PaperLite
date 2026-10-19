@@ -93,10 +93,15 @@ ok(bib.includes('\\_Cost'), '_ 转义');
 ok(bib.includes('author = {A, B and C, D}'), '作者 and 连接');
 console.log('== besc 危险原语中和 ==');
 bib = entryToBibTeX({ title: 'Evil \\input{secrets} and \\write18{rm -rf /}, but $\\alpha$ ok', year: 2024 }, 'evil');
-ok(/\\\\input\{secrets\}/.test(bib), '高危控制序列前置反斜杠翻倍');
-ok(/\\\\write18\{rm -rf \/\}/.test(bib), 'write18 同样中和');
+ok(bib.includes('\\\\input\\{secrets\\}'), '高危控制序列前置反斜杠翻倍');
+ok(bib.includes('\\\\write18\\{rm -rf /\\}'), 'write18 同样中和');
 ok(bib.includes('\\$\\alpha\\$') && !bib.includes('\\\\alpha'), '普通数学内容不被误伤（$ 照常转义，反斜杠不翻倍）');
-bib = entryToBibTeX({ title: 'A & B % 100 #x _y $z', year: 2024 }, 'esc');
+// 投稿者可控的元数据不该跨出字段：花括号必须转义，内核原语与 \csname 拼装也在内
+bib = entryToBibTeX({ title: 'X}, note = {Y \\@@input zzz', year: 2024 }, 'cross');
+ok(!bib.includes('note = {Y'), '不能靠右花括号跨出 title 字段注入新字段');
+ok(bib.includes('\\\\@@input'), '\\@@input 原语形式同样被中和');
+bib = entryToBibTeX({ title: 'A \\csname input\\endcsname secret', year: 2024 }, 'cs');
+ok(bib.includes('\\\\csname') && bib.includes('\\\\endcsname'), '\\csname…\\endcsname 拼装挡住');bib = entryToBibTeX({ title: 'A & B % 100 #x _y $z', year: 2024 }, 'esc');
 ok(bib.includes('A \\& B \\% 100 \\#x \\_y \\$z'), '常规特殊字符转义不变');
 bib = entryToBibTeX({ title: 'T', venue: 'Proc. of X', type: 'inproceedings', year: 2023 }, 'k');
 ok(bib.includes('@inproceedings{k,') && bib.includes('booktitle = {Proc. of X}'), 'inproceedings 用 booktitle');

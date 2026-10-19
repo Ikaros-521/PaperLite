@@ -121,11 +121,16 @@ export function makeBibKey(entry, existingKeys) {
 // 字段值里的 LaTeX 特殊字符转义；花括号保护大小写由调用侧不干预。
 // 已知危险原语先中和（前置反斜杠翻倍成字面量）：外部 API 的标题不该能往导言区
 // 塞 \input/\write18 这类控制序列——真编译路径会照单执行。不全面禁反斜杠：
-// 物理/数学类标题里 $\alpha$ 这类数学是正当内容
+// 物理/数学类标题里 $\alpha$ 这类数学是正当内容。
+// 黑名单必须带内核形式（\@@input 就是 \input 的原语名，名字里没有字母边界）与
+// 定义/展开家族（\def、\csname…\endcsname 能把任意控制序列拼出来）。
+const BIB_UNSAFE = /\\(input|@@input|@@@input|include|openin|openout|read|write18?|write|special|immediate|catcode|csname|endcsname|expandafter|noexpand|unexpanded|directlua|luaexec|shellescape|stopmode|batchmode|endinput|def|edef|gdef|xdef|let|futurelet|font|meaning|loop|repeat|dump|global|newcount|newdimen|newbox|relax)\b/gi;
+
 function besc(s) {
   return String(s || '')
-    .replace(/\\(input|include|openin|openout|read|write18?|special|immediate|catcode|csname|expandafter|noexpand|unexpanded|directlua|luaexec|shellescape|stopmode|batchmode|endinput)\b/gi, '\\\\$1')
-    .replace(/([&%$#_])/g, '\\$1');
+    .replace(BIB_UNSAFE, '\\\\$1')
+    // 花括号也要转义：不转义就等于跨出字段，投稿者可控的 DOI/标题能注入任意 BibTeX 字段
+    .replace(/([{}&%$#_])/g, '\\$1');
 }
 
 /** 条目 → BibTeX 文本。期刊用 @article(journal=)，会议用 @inproceedings(booktitle=)，其余 @misc */

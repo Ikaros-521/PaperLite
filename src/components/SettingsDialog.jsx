@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
-import { testConnection, fetchModels, newChannel, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
+import { testConnection, fetchModels, newChannel, baseUrlProblem, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
 import { resolveWindow, inputBudget, formatTokens } from '../context.js';
 import { showConfirm } from '../dialogs.js';
 import { AGENT_STEPS_MAX, AGENT_KEEP_MAX } from '../workspace/agentRuntime.js';
@@ -214,6 +214,8 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                       </div>
                       <label>{t('set.name')}<input value={ch.name} onChange={e => patch(ch.id, 'name', e.target.value)} /></label>
                       <label>Base URL<input value={ch.baseUrl} onChange={e => patch(ch.id, 'baseUrl', e.target.value)} placeholder={proto === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.deepseek.com/v1'} /></label>
+                      {/* 漏写协议的 Base URL 会变成同源相对路径，Key 就发给托管本站的服务器了 */}
+                      {baseUrlProblem(ch.baseUrl) ? <div className="hint">{baseUrlProblem(ch.baseUrl)}</div> : null}
                       <label>API Key
                         <span className="kv-wrap">
                           <input type={reveal[ch.id] ? 'text' : 'password'} value={ch.apiKey}

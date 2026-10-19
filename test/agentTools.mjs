@@ -11,13 +11,15 @@ import { setLang, tr } from '../src/i18n.js';
 setLang('zh');
 
 // CodeMirror 最小面 + 可变文档（edit_file 真的会改它）
-function fakeCm(text) {
+function fakeCm(text, opts = {}) {
   let value = text;
-  return {
+  const cm = {
     getValue: () => value,
     setValue: v => { value = v; },
-    getSelection: () => '',
-    replaceSelection: v => { value += v; },
+    getSelection: () => opts.selection || '',
+    getCursor: () => opts.cursor || { line: 0, ch: value.length },
+    usedReplaceSelection: false,
+    replaceSelection: v => { value += v; cm.usedReplaceSelection = true; },
     posFromIndex: i => {
       const lines = value.split('\n');
       let n = 0;
@@ -39,16 +41,27 @@ function fakeCm(text) {
       value = value.slice(0, a) + newText + value.slice(b);
     },
   };
+  return cm;
 }
 
 function fakeTab(path, text, id = path) {
   return { id, name: path, path, kind: 'tex', doc: fakeCm(text) };
 }
 
-function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, diagnostics = [] } = {}) {
-  const cm = fakeCm(cmText);
+function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, diagnostics = [], cmOpts = {}, disk = null } = {}) {
+  const cm = fakeCm(cmText, cmOpts);
   let edited = false;
-  const seen = { beforeTabs: [], dirtied: [] };
+  const seen = { beforeTabs: [], dirtied: [], diskReads: [] };
+  // disk 给的是「磁盘兜底能读到的文件」表：路径段 → 文本，用来验证隐藏文件根本不去读
+  const rootDir = disk ? {
+    async getDirectoryHandle(name) { seen.diskReads.push('dir:' + name); return rootDir; },
+    async getFileHandle(name) {
+      seen.diskReads.push(name);
+      if (!(name in disk)) throw Object.assign(new Error('missing'), { name: 'NotFoundError' });
+      const text = disk[name];
+      return { getFile: async () => ({ size: text.length, text: async () => text }) };
+    },
+  } : null;
   return {
     cm,
     edits: () => edited,
@@ -59,7 +72,7 @@ function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, d
       activeId: () => activeId || (tabs[0] && tabs[0].id),
       tabPath: tb => tb.path,
       folderIndex: () => folderIndex,
-      rootDir: () => null,
+      rootDir: () => rootDir,
       getDiagnostics: () => diagnostics,
       beforeEdit: (tb) => { edited = true; seen.beforeTabs.push(tb ? tb.path : null); },
       markDirty: (tb) => seen.dirtied.push(tb.path),
@@ -215,6 +228,46 @@ assert.equal(stripToolBlocks('正文\n```tool\n{"tool":"a"'), '正文');
   const r = await executor('insert_text', { text: 'y' });
   assert.ok(r.ok && r.ok === true);
   assert.equal(edits(), true);
+}
+
+// insert_text 的语义是「光标处插入」：有选区时走 replaceSelection 等于把用户选中的正文吃掉
+{
+  const { executor, cm } = makeDeps({ cmText: 'abc', cmOpts: { selection: 'bc', cursor: { line: 0, ch: 0 } } });
+  const r = await executor('insert_text', { text: 'Z' });
+  assert.ok(r.ok);
+  assert.equal(cm.getValue(), 'Zabc', '选中的 bc 必须还在');
+  assert.equal(cm.usedReplaceSelection, false, '不再走 replaceSelection');
+}
+
+// ---------- search_files：模型给的正则在 UI 线程逐行 exec，得挡住爆炸串与超长串 ----------
+{
+  const { executor } = makeDeps({ tabs: [fakeTab('main.tex', 'aaa\nbbb')] });
+  const nested = await executor('search_files', { query: '(a+)+b', regex: true });
+  assert.ok(!nested.ok, '嵌套量词正则直接拒绝，否则整页冻住');
+  const long = await executor('search_files', { query: 'q'.repeat(201) });
+  assert.ok(!long.ok, '超长查询拒绝');
+  const safe = await executor('search_files', { query: 'a+', regex: true });
+  assert.ok(safe.ok, '正常正则照常执行');
+}
+
+// ---------- read_file 的磁盘兜底不碰隐藏文件（宽选目录时 .env 不该成为可外发素材） ----------
+{
+  const { executor, seen } = makeDeps({ disk: { 'ch1.tex': '正文', 'env': 'SECRET' } });
+  const hidden = await executor('read_file', { path: '.env' });
+  assert.ok(!hidden.ok, '隐藏文件读不到');
+  assert.equal(seen.diskReads.length, 0, '拒绝发生在打开句柄之前，根本没去读磁盘');
+  const dotDir = await executor('read_file', { path: '.git/config' });
+  assert.ok(!dotDir.ok, '点开头的目录同样拒绝');
+  const plain = await executor('read_file', { path: 'ch1.tex' });
+  assert.equal(plain.result, '正文', '普通磁盘文件照常可读');
+}
+
+// ---------- list_files：图片清单是字符串路径，别再显示成 undefined ----------
+{
+  const { executor } = makeDeps({ folderIndex: { imageFiles: ['fig/架构图.png', { path: 'fig/old.tex', name: 'x' }], texFiles: [], bibFiles: [], textFiles: [] } });
+  const r = await executor('list_files', {});
+  assert.ok(r.result.includes('fig/架构图.png'), '字符串路径原样列出：' + r.result);
+  assert.ok(!r.result.includes('undefined'), '不再出现 undefined');
 }
 
 // ---------- 未知工具 / 异常工具都归一为 ok:false ----------
