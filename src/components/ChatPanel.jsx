@@ -396,7 +396,11 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       </div>
 
       <div className="chat-config">
-        <select value={channel ? channel.id : ''} onChange={e => setActiveChannelId(e.target.value)}>
+        <select value={channel ? channel.id : ''} onChange={e => {
+          setActiveChannelId(e.target.value);
+          // 换渠道就换口径：旧渠道的实测/装配用量对新渠道的窗口没有意义，清掉防误导
+          setReqUsage(null); setRealUsage(null);
+        }}>
           {!channels.length && <option value="">{t('chat.noChannelOpt')}</option>}
           {channels.map(c => <option key={c.id} value={c.id}>{c.name} · {c.chatModel || t('chat.noModel')}</option>)}
         </select>
@@ -557,7 +561,6 @@ function beginPointerDrag(e, cursor, onMove) {
 function miniMd(t) {
   const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let h = esc(t);
-  h = h.replace(/```[\s\S]*?```/g, m => m); // 代码块由外层处理
   h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   h = h.replace(/`([^`\n]+)`/g, '<code>$1</code>');
   h = h.replace(/^[-*]\s+(.+)$/gm, '• $1');

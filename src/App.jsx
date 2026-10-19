@@ -552,7 +552,8 @@ export default function App() {
   useEffect(() => {
     window.__plInject = (name, content) => {
       const info = infoFor(name);
-      const nt = makeTab({ name, path: t('app.memPath') + ' ' + name, kind: info.kind, text: content, modeSpec: info.mode, saved: content });
+      // tr+getLang 按调用时语言取文案：mount-only effect 里的 t 闭包是首渲染语言，切语言后不跟随
+      const nt = makeTab({ name, path: tr(getLang(), 'app.memPath') + ' ' + name, kind: info.kind, text: content, modeSpec: info.mode, saved: content });
       setTabs(ts => ts.concat([nt])); setActiveId(nt.id); setActiveValue(content);
       return nt.id;
     };
@@ -925,6 +926,7 @@ export default function App() {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
+      window.removeEventListener('blur', finish);
       if (handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
       document.body.classList.remove('dragging');
       const c = cmRef.current; if (c) c.refresh();
@@ -932,6 +934,8 @@ export default function App() {
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', finish);
     window.addEventListener('pointercancel', finish);
+    // 拖拽中切走窗口（blur）pointerup 不会来，不补清理会拖着 dragging 遮罩不放
+    window.addEventListener('blur', finish);
     document.body.classList.add('dragging');
     try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 捕获失败由遮罩兜底 */ }
   };

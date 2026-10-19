@@ -920,7 +920,8 @@ export function Flow2_Workspace() {
   } | null
 
   const value = tab?.doc ? tab.doc.getValue() : ''
-  const issues = useMemo(() => (tab?.kind === 'md' ? [] : lintLaTeX(value)), [value, tab?.kind])
+  // LaTeX 规则只对 tex/draft 生效：code/text 类标签按 LaTeX 检查只会产误报（桌面对齐 isTexLike）
+  const issues = useMemo(() => ((tab?.kind === 'tex' || tab?.kind === 'draft') ? lintLaTeX(value) : []), [value, tab?.kind])
 
   // 只渲染一次：预览与大纲共用同一份 result（renderLatex 对长文不便宜）
   const result = useMemo(() => {

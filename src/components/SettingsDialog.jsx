@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
 import { testConnection, fetchModels, newChannel, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
 import { resolveWindow, inputBudget, formatTokens } from '../context.js';
@@ -36,6 +36,10 @@ function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
+  // 卸载守卫：列表拉取是异步的，渠道行被删/弹窗关掉后 setState 不再打已卸载组件
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
+  const safeSet = fn => { if (aliveRef.current) fn(); };
 
   const list = models || suggestions || [];
   const kw = String(value || '').trim().toLowerCase();
@@ -45,13 +49,12 @@ function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
     setLoading(true); setErr('');
     try {
       const ids = await fetchModels(channel);
-      setModels(ids);
-      setOpen(true);
-      if (!ids.length) setErr(t('set.emptyList'));
+      safeSet(() => { setModels(ids); setOpen(true); });
+      if (!ids.length) safeSet(() => setErr(t('set.emptyList')));
     } catch (e) {
-      setErr(e.message || String(e));
+      safeSet(() => setErr(e.message || String(e)));
     } finally {
-      setLoading(false);
+      safeSet(() => setLoading(false));
     }
   };
 
@@ -62,7 +65,7 @@ function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
         placeholder={placeholder}
         onChange={e => { onChange(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onBlur={() => setTimeout(() => { if (aliveRef.current) setOpen(false); }, 150)}
         onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }}
       />
       <button
@@ -94,7 +97,7 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
   const lang = useLang();
   const [tab, setTab] = useState('channels'); // 'channels' 渠道管理 | 'agent' Agent 行为
   const [editId, setEditId] = useState(null);
-  const [testing, setTesting] = useState(null); // {id, result}
+  const [testing, setTesting] = useState(null); // {id, result}；多渠道并发测试时后点的赢
   const [reveal, setReveal] = useState({});     // 各渠道 API Key 是否明文显示
 
   if (!open) return null;
@@ -107,7 +110,8 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
     setTesting({ id: ch.id, result: null });
     const importMod = await import('../llm.js');
     const r = await importMod.testConnection(ch);
-    setTesting({ id: ch.id, result: r });
+    // 只认「最后一次点击」的结果：A 测试中再点 B，A 的迟到回执不该覆盖 B 的状态
+    setTesting(cur => (cur && cur.id === ch.id ? { id: ch.id, result: r } : cur));
   };
 
   // 选预设：自动填协议 / Base URL / 默认模型（名称与已填模型不覆盖）

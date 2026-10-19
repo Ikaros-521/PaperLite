@@ -419,7 +419,13 @@ export function Flow3_Compile() {
   const ws = useMobileWorkspace()
   const t = useT()
 
-  const [stage, setStage] = useState<Stage>('config')
+  const [stage, setStage] = useState<Stage>(() => {
+    // 路由页重挂载（从结果页返回再点「编译」）不该把已编译的结果丢掉重编一遍：
+    // 结果由共享层持有，且属于本文档时直接落回对应结果态；他文档的结果不认
+    const r = ws.compileResult
+    if (!r || String(r.tabId) !== String(docId)) return 'config'
+    return r.ok ? 'done' : 'failed'
+  })
   const [elapsed, setElapsed] = useState(0)
   const [backgrounded, setBackgrounded] = useState(false)
   const backgroundedRef = useRef(false)
