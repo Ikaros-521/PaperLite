@@ -141,11 +141,25 @@ export function lintLaTeX(src) {
       out.push({ line, msg: t('lint.badRef', { key }), severity: 'warn', kind: 'ref' });
     }
   }
-  let citeRe = /\\cite[pt]?\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/g;
+  // \cite[..]{..} 手扫代替 (?:\[[^\]]*\])?\s*\{([^}]*)\}：缺右界时 [^\]]* 与 [^}]*
+  // 会对每个候选把余文重扫一遍（\cite[a ×16000 实测 1.0s）。水位线记录「此后已无 ] / }」，
+  // 后续候选直接照结论跳过，整轮回到线性。
+  let citeRe = /\\cite[pt]?(?![A-Za-z])/g;
+  let noOpt = -1, noArg = -1;
+  const skipWs = (s, i) => { while (i < s.length && /\s/.test(s.charAt(i))) i++; return i; };
   while ((m = citeRe.exec(clean))) {
     if (!checkCite) continue;
+    let p = skipWs(clean, m.index + m[0].length);
+    if (clean.charAt(p) === '[' && !(noOpt >= 0 && p >= noOpt)) {
+      const ce = clean.indexOf(']', p + 1);
+      if (ce < 0) noOpt = p; else p = skipWs(clean, ce + 1);
+    }
+    if (clean.charAt(p) !== '{') continue;
+    if (noArg >= 0 && p >= noArg) continue;
+    const ae = clean.indexOf('}', p + 1);
+    if (ae < 0) { noArg = p; continue; }
     const line = lineAt(m.index);
-    m[1].split(',').map(s => s.trim()).filter(Boolean).forEach(key => {
+    clean.slice(p + 1, ae).split(',').map(s => s.trim()).filter(Boolean).forEach(key => {
       if (!bibs.has(key)) out.push({ line, msg: t('lint.badCite', { key }), severity: 'warn', kind: 'cite' });
     });
   }

@@ -535,5 +535,33 @@ ok(fakeBegin.html.includes('内文'), '后接的真实环境照常渲染');
   ok(!headMark.headings.some(h => (h.text || '').includes('\u0000')), '大纲标题不含占位符控制字符');
 }
 
+// 大表与坏 \cite 的线性守卫：行→原始行回填以前每行都从 rawRows[0] 重找，
+// 64000 行实测 4.3s；linter 的 (?:\[[^\]]*\])?\{ 在缺 ] 时逐个候选重扫余文
+{
+  const bigRows = String.raw`\documentclass{article}\begin{document}` + '\n' +
+    String.raw`\begin{tabular}{c}a` + '\\\\a'.repeat(16000) + String.raw`\end{tabular}` + '\n' + String.raw`\end{document}`;
+  const t0 = Date.now();
+  const res = renderLatex(bigRows);
+  ok(Date.now() - t0 < 1500, '64k 行级大表保持线性, got ' + (Date.now() - t0) + 'ms');
+  ok(res.tables.length === 1 && res.tables[0].rows.length > 15000, '大表仍逐行登记元数据（可视化表格编辑要靠它写回）');
+  const lastRow = res.tables[0].rows.at(-1);
+  ok(lastRow.hasFollowingRow === false, '末行不该认为自己还有后继行');
+  const badCite = String.raw`\documentclass{article}\begin{document}` + '\n' + (String.raw`\cite[` + 'a').repeat(16000);
+  const t1 = Date.now();
+  lintLaTeX(badCite);
+  ok(Date.now() - t1 < 1500, '未闭合 \\cite[ 大批量 lint 保持线性, got ' + (Date.now() - t1) + 'ms');
+  const okCite = lintLaTeX(String.raw`\documentclass{article}\begin{document}\cite[a,2020]{k1} 与 \citep{k2,k3}\end{document}`);
+  ok(okCite.filter(i => i.kind === 'cite').length === 3, '\\cite 可选参数与多键列表照常逐条校验');
+}
+
+// \end{verbatim} 紧跟的 % 是注释（以前的偏移多算一个字符，把它一起吃掉）
+{
+  const verbTail = renderLatex(String.raw`\documentclass{article}\begin{document}` + '\n' +
+    String.raw`\begin{verbatim}` + '\n% 示例注释\n' + String.raw`\end{verbatim}` + '%这行是注释\n\n正文\n' + String.raw`\end{document}`);
+  ok(verbTail.html.includes('% 示例注释'), '逐字环境内的 % 不当注释');
+  ok(!verbTail.html.includes('这行是注释'), '逐字环境结束后的 % 正常当注释');
+  ok(verbTail.html.includes('正文'), '后续正文照常渲染');
+}
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

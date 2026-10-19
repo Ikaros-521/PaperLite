@@ -127,7 +127,8 @@ function blankComments(src) {
       var vEnv = src.slice(i, i + 40).match(/^\\begin\s*\{(verbatim\*?|lstlisting|minted)\}/);
       if (vEnv) {
         var eV = src.indexOf('\\end{' + vEnv[1] + '}', i);
-        i = eV < 0 ? i + vEnv[0].length : eV + 7 + vEnv[1].length;
+        // \end{ = 5 字符 + 环境名 + } = 1，多算一个会把紧跟其后的 % 一起吃掉
+        i = eV < 0 ? i + vEnv[0].length : eV + 6 + vEnv[1].length;
         continue;
       }
       // \verb 定界符内的 % 不是注释，整段原样跳过（等长原则不受影响）
@@ -1500,13 +1501,15 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
   }
 
   // 行删除/插入需要「下一原始行的起点」：行内容 + 其 \\ 一并处理，规则线留给下一行
-  var nRaw = rawRows.length;
+  var nRaw = rawRows.length, hostCursor = 0;
   tblRows.forEach(function (rowInfo) {
-    // 找到该行对应的 rawRows 序号（contentStart 落在哪个 raw row 的区间里）
+    // 行与原始行都按源码顺序递增，游标只向前走：以前每行都从 rawRows[0] 重找，
+    // 64000 行的表实测 4.3s（O(行²)）
     var hostRi = -1;
-    for (var ri = 0; ri < nRaw; ri++) {
-      var s = base + bodyStart + rawRows[ri].start;
-      if (s <= rowInfo.contentStart && rowInfo.contentStart < s + Math.max(rawRows[ri].text.length, 1)) { hostRi = ri; break; }
+    while (hostCursor < nRaw) {
+      var s = base + bodyStart + rawRows[hostCursor].start;
+      if (s <= rowInfo.contentStart && rowInfo.contentStart < s + Math.max(rawRows[hostCursor].text.length, 1)) { hostRi = hostCursor; break; }
+      hostCursor++;
     }
     rowInfo.nextStart = hostRi >= 0 && hostRi + 1 < nRaw ? base + bodyStart + rawRows[hostRi + 1].start : rowInfo.contentEnd;
     rowInfo.hasFollowingRow = hostRi >= 0 && hostRi + 1 < nRaw;
