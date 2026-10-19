@@ -31,10 +31,8 @@ function collectStyleTags() {
 
 // 打印为 PDF：调起浏览器打印，选「另存为 PDF」得到矢量文档
 export function exportPDF(contentHtml, meta) {
-  const w = window.open('', '_blank');
-  if (!w) { alert(t('exp.popupBlocked')); return; }
   const title = meta && meta.title ? meta.title.replace(/<[^>]*>/g, '') : t('exp.docTitle');
-  // 排版语法（\documentclass[选项]{类}）解析出的类名与变量要一起带进打印窗口，
+  // 排版语法（\documentclass[选项]{类}）解析出的类名与变量要一起带进打印文档，
   // 否则预览看到的双栏/字号在导出 PDF 里全丢
   const layout = (meta && meta.layout) || {};
   const paperCls = 'paper' + (layout.classes ? ' ' + layout.classes : (meta && meta.twocolumn ? ' twocolumn' : ''));
@@ -43,23 +41,41 @@ export function exportPDF(contentHtml, meta) {
     collectStyleTags() +
     '<style>' + PRINT_CSS + '</style></head><body class="print-body">' +
     '<div class="' + esc(paperCls) + '"' + (paperVars ? ' style="' + esc(paperVars) + '"' : '') + '>' + contentHtml + '</div></body></html>';
-  w.document.open(); w.document.write(html); w.document.close();
+
+  // 不用 window.open + document.write：about:blank 继承应用源，写进去的 <script> 与
+  // onerror 会真的执行。当前渲染链的转义是完备的，但这个入口会把未来任何一处漏转义
+  // 从「标记错乱」放大成同源 XSS（能读 localStorage 里的 API key）。
+  // 沙箱 iframe 不给 allow-scripts → 脚本一律不执行；allow-same-origin 保留，
+  // 我们仍要读它的 readyState / fonts 并调 print()。
+  const frame = document.createElement('iframe');
+  if (!('srcdoc' in frame)) { alert(t('exp.popupBlocked')); return; }
+  frame.setAttribute('aria-hidden', 'true');
+  frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  frame.srcdoc = html;
+  document.body.appendChild(frame);
+
+  const cleanup = () => { setTimeout(() => frame.remove(), 500); };
   let tries = 0;
+  const doc = () => { try { return frame.contentDocument; } catch (e) { return null; } };
   (function goPrint() {
     tries++;
-    try {
-      if (w.document.readyState === 'complete' && w.document.fonts && w.document.fonts.status === 'loaded') {
-        setTimeout(() => { w.focus(); w.print(); }, 120);
-        return;
-      }
-      if (w.document.readyState === 'complete' && tries > 8) {
-        setTimeout(() => { w.focus(); w.print(); }, 120);
-        return;
-      }
-      setTimeout(goPrint, 250);
-    } catch (e) {
-      if (tries > 12) { try { w.print(); } catch (e2) { /* give up */ } }
+    const d = doc();
+    if (!d) { cleanup(); return; }
+    const fontsReady = !(d.fonts && d.fonts.status !== 'loaded');
+    if (d.readyState === 'complete' && fontsReady) {
+      setTimeout(() => {
+        try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) { /* 用户取消打印 */ }
+        cleanup();
+      }, 120);
+      return;
     }
+    if (tries > 40) { // 字体迟迟不加载完也要出稿，只是可能回落成系统衬线
+      try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) { /* 同上 */ }
+      cleanup();
+      return;
+    }
+    setTimeout(goPrint, 250);
   })();
 }
 

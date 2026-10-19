@@ -108,31 +108,66 @@ async function compile(body) {
 
 // ---------------- HTTP ----------------
 
+// 本机开发源：vite dev（任意端口）与自身（127.0.0.1:PORT）。
+const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+
 // CORS：仅放行本机开发源（vite dev server 等任意端口的 localhost/127.0.0.1）。
 // 不再回 *：任意网页都能跨源 POST /api/compile 驱动本机 TeX，等于把本机算力与
 // 文件系统暴露给访问的每个站点；同源页面（localhost:8788 自己）无 Origin 头，不受影响。
 function corsHeaders(req) {
   const o = String(req.headers.origin || '');
   if (!o) return {};
-  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(o)
+  return LOCAL_ORIGIN.test(o)
     ? { 'Access-Control-Allow-Origin': o, Vary: 'Origin' }
     : {};
+}
+
+// CORS 头只决定「响应能不能被读走」，请求照发不误；而且 GET/无预检的 text/plain POST
+// 根本不看 CORS。本机服务没有网页访客：浏览器发起的跨站请求一定带 Origin，
+// 非浏览器（curl / 本机脚本）不带，所以直接按 Origin 拒，外部站点就驱动不了本机 TeX。
+function forbiddenOrigin(req) {
+  const o = String(req.headers.origin || '');
+  return !!o && !LOCAL_ORIGIN.test(o);
 }
 
 function json(res, code, obj, extra) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...(extra || {}) });
   res.end(JSON.stringify(obj));
 }
+// 统一成 { ok, value } / { ok:false, code, error }：解析失败与超限要分开回 400 / 413，
+// 把坏 JSON 当空对象交给 compile 只会得到一句莫名其妙的编译错误
 function readBody(req) {
   return new Promise((resolve) => {
     let data = '';
-    // 超限时 destroy 后不会再有 'end' 事件：立即 resolve(null)，调用方回 413
-    req.on('data', c => { data += c; if (data.length > 20e6) { try { req.destroy(); } catch (e) {} resolve(null); } });
-    req.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { resolve({}); } });
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    // 超限时 destroy 后不会再有 'end' 事件：立即 resolve
+    req.on('data', c => {
+      data += c;
+      if (data.length > 20e6) { try { req.destroy(); } catch (e) {} finish({ ok: false, code: 413, error: 'payload too large' }); }
+    });
+    req.on('error', () => finish({ ok: false, code: 400, error: 'request stream error' }));
+    req.on('end', () => {
+      try { finish({ ok: true, value: JSON.parse(data) }); }
+      catch (e) { finish({ ok: false, code: 400, error: 'invalid JSON body' }); }
+    });
   });
 }
 
-const server = http.createServer(async (req, res) => {
+// 一次 TeX 编译能吃掉几十秒 CPU：并发上限挡住「同一页面连点编译」把本机打成排队机房
+const MAX_COMPILE = 2;
+let compiling = 0;
+
+// 包一层：处理器里任何抛出（含 decodeURIComponent 的 URIError）都必须回响应，
+// 否则 async 回调的 rejection 会变成 unhandledRejection，Node 15+ 默认直接结束进程
+const server = http.createServer((req, res) => {
+  route(req, res).catch((e) => {
+    if (!res.headersSent) json(res, 500, { ok: false, error: String((e && e.message) || e) });
+    else { try { res.end(); } catch (e2) { /* 已经断开就别再折腾 */ } }
+  });
+});
+
+async function route(req, res) {
   const url = (req.url || '/').split('?')[0];
   const cors = corsHeaders(req);
 
@@ -145,6 +180,8 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  if (forbiddenOrigin(req)) return json(res, 403, { ok: false, error: 'forbidden origin' }, cors);
+
   // ---- API ----
   if (url === '/api/health' && req.method === 'GET') {
     const engines = availableEngines();
@@ -152,10 +189,16 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, engines: list, dvi2pdf: !!engines.dvipdfmx }, cors);
   }
   if (url === '/api/compile' && req.method === 'POST') {
-    const body = await readBody(req);
-    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
-    try { return json(res, 200, await compile(body), cors); }
+    const b = await readBody(req);
+    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    if (compiling >= MAX_COMPILE) {
+      res.writeHead(429, { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '2' });
+      return res.end(JSON.stringify({ ok: false, error: '本机编译队列已满，请稍候再试' }));
+    }
+    compiling++;
+    try { return json(res, 200, await compile(b.value), cors); }
     catch (e) { return json(res, 200, { ok: false, error: String(e && e.message || e) }, cors); }
+    finally { compiling--; }
   }
 
   // ---- LLM Mock（仅离线演示用，含 OpenAI 兼容与 Anthropic 协议）----
@@ -170,8 +213,9 @@ const server = http.createServer(async (req, res) => {
     }, cors);
   }
   if (url === '/v1/chat/completions' && req.method === 'POST') {
-    const body = await readBody(req);
-    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
+    const b = await readBody(req);
+    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    const body = b.value;
     const last = (body.messages || []).filter(m => m.role === 'user').pop();
     const q = String(last && last.content || '');
     const reply = mockReply(q);
@@ -198,8 +242,9 @@ const server = http.createServer(async (req, res) => {
 
   // ---- Anthropic 协议 Mock（/v1/messages，供「Anthropic (Claude)」协议离线体验）----
   if (url === '/v1/messages' && req.method === 'POST') {
-    const body = await readBody(req);
-    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
+    const b = await readBody(req);
+    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    const body = b.value;
     const last = [...(body.messages || [])].reverse().find(m => m.role === 'user');
     const q = typeof (last && last.content) === 'string'
       ? last.content
@@ -250,8 +295,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url === '/v1/embeddings' && req.method === 'POST') {
-    const body = await readBody(req);
-    if (!body) return json(res, 413, { ok: false, error: 'payload too large' }, cors);
+    const b = await readBody(req);
+    if (!b.ok) return json(res, b.code, { ok: false, error: b.error }, cors);
+    const body = b.value;
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
     const data = inputs.map((t, i) => ({
       index: i,
@@ -261,7 +307,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- 静态文件 ----
-  let file = url === '/' ? '/index.html' : decodeURIComponent(url);
+  // 非法 % 序列（GET /%）会抛 URIError：在 async 处理器里就是 unhandledRejection，
+  // Node 15+ 默认直接结束进程 —— 一个 <img src="http://127.0.0.1:8788/%"> 就能打死本机服务
+  let decoded;
+  try { decoded = decodeURIComponent(url); } catch (e) { res.writeHead(400); return res.end('Bad request'); }
+  if (decoded.includes('\0')) { res.writeHead(400); return res.end('Bad request'); }
+  let file = decoded === '/' ? '/index.html' : decoded;
   file = path.normalize(path.join(ROOT, file));
   // 前缀必须对齐目录边界：startsWith(ROOT) 会让 normalize 出的 /dist-x 同级目录钻空子
   if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end(); }
@@ -278,7 +329,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
     res.end(data);
   });
-});
+}
 
 // 确定性伪向量（供 Mock 检索）
 function simpleVec(text) {
