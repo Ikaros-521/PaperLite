@@ -357,9 +357,11 @@ export function useWorkspace(ui) {
   }, [activeId, rootDir, saveTabAs, alertBox]);
 
   // ---- 关闭标签 ----
+  // 返回是否真正关闭：脏标签在确认框点「取消」时返回 false，调用方（如移动端
+  // 删除路径）据此中止后续的「已删除」提示与撤销横幅
   const closeTab = useCallback(async (id) => {
     const tab = tabsRef.current.filter(x => x.id === id)[0];
-    if (tab && tab.dirty && !await confirm(tr(getLang(), 'app.dirtyClose', { name: tab.name }))) return;
+    if (tab && tab.dirty && !await confirm(tr(getLang(), 'app.dirtyClose', { name: tab.name }))) return false;
     if (tab && tab.imageUrl) URL.revokeObjectURL(tab.imageUrl);
     setTabs(ts => {
       const rest = ts.filter(x => x.id !== id);
@@ -376,6 +378,7 @@ export function useWorkspace(ui) {
       }
       return rest;
     });
+    return true;
   }, [activeId, confirm]);
 
   /** 编辑器内容变化：脏标记 + 让旧的编译诊断失效 */
@@ -417,7 +420,15 @@ export function useWorkspace(ui) {
     if (!trimmed) return false;
     if (!validName(trimmed)) { alertBox(t('app.badFileName')); return false; }
     setTabs(ts => {
-      const next = ts.map(x => x.id === id ? { ...x, name: trimmed, path: x.kind === 'draft' ? x.path : trimmed } : x);
+      const next = ts.map(x => {
+        if (x.id !== id) return x;
+        if (x.kind === 'draft') return { ...x, name: trimmed };
+        // 只换最后一段文件名：chapters/intro.tex 改名不能把子目录段抹掉
+        // （path 用于主文档解析、搜索去重与 zip 导出命名，丢了前缀会全线错乱）
+        const slash = x.path && x.path.lastIndexOf('/');
+        const dir = slash > 0 ? x.path.slice(0, slash + 1) : '';
+        return { ...x, name: trimmed, path: dir + trimmed };
+      });
       try { persistDrafts(next); } catch (e) { /* 自动保存会再报 */ }
       return next;
     });

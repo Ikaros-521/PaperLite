@@ -166,6 +166,7 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
+  touch-action: manipulation; /* 连点不触发双击缩放 */
   width: 56px;
   height: 56px;
   padding: 0;
@@ -216,6 +217,7 @@ body,
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  touch-action: manipulation; /* 连点不触发双击缩放 */
   gap: 2px;
   min-width: 60px;
   min-height: 48px;
@@ -556,6 +558,8 @@ body,
   color: var(--ink);
   font-size: 17px;
   cursor: pointer;
+  /* 快速连点（连续插符号）不触发 iOS 双击缩放 */
+  touch-action: manipulation;
 }
 
 .pl-sym:active {

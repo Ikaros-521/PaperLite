@@ -469,6 +469,9 @@ export function Flow4_History() {
           recordVersion(tab.historyKey, current, { reason: 'beforeRestore', force: true })
           const result = recordVersion(tab.historyKey, version.text, { reason: 'restore', label: version.label, force: true })
           tab.doc?.setValue(version.text)
+          // 历史页是独立路由，编辑器已卸载，Doc 的 change 事件链不存在——必须手动
+          // 通知共享层，否则脏标记与草稿落盘都不更新（参照 docAsCm 的同类处理）
+          ws.onDocChange(tab.doc, version.text)
           setStage('list')
           setTick(t => t + 1)
           Toast.show({

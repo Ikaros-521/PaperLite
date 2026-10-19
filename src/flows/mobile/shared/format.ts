@@ -34,9 +34,10 @@ export function formatDuration(ms: number): string {
   return t('mb.fmt.sec', { n: (ms / 1000).toFixed(1) })
 }
 
-/** 诊断/编译错误的行号文案；line 为 null 表示引擎级失败（对齐 xelatex.js） */
+/** 诊断/编译错误的行号文案；line 为 null 表示引擎级失败（对齐 xelatex.js）。
+ *  入参是 parseLog 的 0 基行号，显示时 +1 对齐桌面 statusbar 口径 */
 export function formatLine(line: number | null): string {
-  return line === null ? t('mb.fmt.engineError') : t('mb.fmt.line', { n: line })
+  return line === null ? t('mb.fmt.engineError') : t('mb.fmt.line', { n: line + 1 })
 }
 
 export function wait(ms: number): Promise<void> {

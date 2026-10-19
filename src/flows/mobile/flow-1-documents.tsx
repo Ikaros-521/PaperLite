@@ -42,6 +42,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { formatRelative, formatWords, wait } from './shared/format'
 import { DOC_KIND_LABEL, SAVE_STATE } from './shared/labels'
+import { validName } from '../../fileActions.js'
 import { useLongPress } from './shared/hooks'
 import { useMobileWorkspace, type MobileTab } from './mobileWorkspace'
 import { useT } from '../../useI18n.js'
@@ -211,7 +212,8 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
   const removeTab = async (tab: MobileTab) => {
     setActionTab(null)
     const text = tab.doc?.getValue() || ''
-    await ws.closeTab(tab.id)
+    const removed = await ws.closeTab(tab.id)
+    if (!removed) return   // 确认框点「取消」：没有删掉，不提示也不给撤销横幅（点了会造出重复草稿）
     if (tab.doc) setUndoDraft({ name: tab.name, text })
     Toast.show({ content: t('mb.doc.deleted', { name: tab.name }) })
   }
@@ -435,6 +437,9 @@ function NewDraftSheet({
   const create = () => {
     const picked = TEMPLATES.find(item => item.id === template) || TEMPLATES[0]
     const fileName = /\.(tex|md|bib|txt)$/i.test(trimmed) ? trimmed : `${trimmed}.tex`
+    // 与桌面 newFile 同口径：非法名（含 /、* 等或尾点尾空格）当场拒绝，
+    // 不要拖到「另存为/导出」写磁盘时才报错
+    if (!validName(fileName)) { Toast.show({ content: t('app.badFileName'), icon: 'fail' }); return }
     onCreated(ws.addDraft(fileName, picked.text))
     setName('')
   }

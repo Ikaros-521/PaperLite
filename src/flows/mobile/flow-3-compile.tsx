@@ -245,7 +245,8 @@ function Screen3_PdfResult({ url, title, stale, onBack }: { url: string; title: 
       a.href = objectUrl
       a.download = title.replace(/\.(tex|md|txt)$/i, '.pdf')
       a.click()
-      URL.revokeObjectURL(objectUrl)
+      // iOS Safari 对 click 后立即 revoke 的 blob 下载可能静默失败（桌面 exporter 同款延时）
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 500)
       Toast.show({ content: t('mb.cp.pdfDownloaded'), icon: 'success' })
     } catch {
       Toast.show({ content: t('mb.cp.downloadFailed'), icon: 'fail' })
@@ -357,9 +358,9 @@ function Screen4_CompileFailed({
               extra={error.line !== null ? <RightOutline /> : undefined}
               description={<span style={{ whiteSpace: 'normal' }}>{error.msg}</span>}
               title={<span className="pl-num">{formatLine(error.line)}</span>}
-              onClick={() => error.line !== null && onJump(error.line)}
+              onClick={() => error.line !== null && onJump(error.line + 1)}
             >
-              <span className="pl-num">L{error.line ?? '—'}</span>
+              <span className="pl-num">L{error.line === null ? '—' : error.line + 1}</span>
             </List.Item>
           ))}
         </List>

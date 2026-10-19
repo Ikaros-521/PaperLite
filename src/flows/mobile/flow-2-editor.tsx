@@ -342,14 +342,17 @@ function CiteSheet({
     abortRef.current?.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
-    const timer = setTimeout(() => ctrl.abort(), 15000)
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; ctrl.abort() }, 15000)
     setLoading(true); setError(''); setResults([])
     try {
       const list = (await searchCitations(provider, q, ctrl.signal)) as MobileCiteEntry[]
       setResults(list)
       if (!list.length) setError(t('cite.empty'))
     } catch (err) {
-      if ((err as Error)?.name !== 'AbortError') setError(t('cite.error', { msg: (err as Error)?.message || String(err) }))
+      // 超时 abort 与用户取消都是 AbortError，不分流的话超时看起来像「没搜到」
+      if (timedOut && abortRef.current === ctrl) setError(t('cite.timeout'))
+      else if ((err as Error)?.name !== 'AbortError') setError(t('cite.error', { msg: (err as Error)?.message || String(err) }))
     } finally {
       clearTimeout(timer)
       if (abortRef.current === ctrl) setLoading(false)
@@ -1301,7 +1304,8 @@ export function Flow2_Workspace() {
                   a.href = url
                   a.download = tab.name
                   a.click()
-                  URL.revokeObjectURL(url)
+                  // iOS Safari 对 click 后立即 revoke 的 blob 下载可能静默失败（桌面 exporter 同款延时）
+                  setTimeout(() => URL.revokeObjectURL(url), 500)
                 },
               })
             },
