@@ -135,6 +135,11 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
         const files = await collectCompileFiles({ ...tab, parentDir }, tabsRef.current, abort.signal);
         if (abort.signal.aborted) { flashRef.current(t('app.compileCancelled')); return 'cancelled'; }
         const r = await compileXeLaTeX(source, files);
+        // 引擎级互斥挡下的重入：compiling 守卫没拦住说明是调用逻辑错误，不是文档编译失败
+        if (r.error === 'busy') {
+          console.warn('[PaperLite] compileXeLaTeX 重入：上一趟编译尚未释放就被再次调用');
+          return 'blocked';
+        }
         ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
         wasCancelled = !!r.cancelled;
         if (!ok && !wasCancelled) errText = (errors[0] && errors[0].msg) || t('app.compileFailed');

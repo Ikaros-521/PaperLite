@@ -31,16 +31,33 @@ let loadPromise = null;
 let texWorker = null;
 let pdfWorker = null;
 let warming = false;
-let warmCompile = null; // 定向预热占用 Worker 期间的 promise，正式编译需等它
 let warmPromise = null;
 let pendingWarmSource = null;
 let resourcesWarmed = false;
 let generation = 0;
 let loadAbort = null;
+// 引擎级互斥。Worker 的命令队列是串行的，两条命令序列交错就会双双错拿对方的 compile 回执。
+// useCompile 的 compiling 是渲染期闭包值，同一 tick 内两次调用都读到 false，重入只能在引擎里挡。
+let compileGuard = null;            // 占住编译槽的标记，再进一趟 compileXeLaTeX 直接拒绝
+let workerLockTail = Promise.resolve(); // Worker 使用权队列，正式编译与定向预热共用
+const workerLockReleases = new Set();   // cancelCompile 用它放行排队者，避免拆掉 Worker 后锁死
+let nextReqId = 1;
 const listeners = new Set();
 
 function checkGeneration(expected) {
   if (generation !== expected) throw new Error('cancelled');
+}
+
+// 排队取 Worker 使用权：前一个持有者结算（成功/失败/取消）后才轮到下一个。
+// run 一定会结算，所以锁不会因异常而漏放；cancelCompile 另有强制放行兜底。
+function withWorkerLock(run) {
+  const waiting = workerLockTail;
+  let release;
+  workerLockTail = new Promise(resolve => { release = resolve; });
+  workerLockReleases.add(release);
+  return waiting.then(async () => {
+    try { return await run(); } finally { workerLockReleases.delete(release); release(); }
+  });
 }
 
 function setStatus(s) {
@@ -85,7 +102,7 @@ async function prefetchResources() {
   checkGeneration(expected);
   const workers = [texWorker, pdfWorker];
   const cached = await Promise.all(workers.map(w => call(w, 'TeX cache inventory',
-    () => w.postMessage({ cmd: 'gettexlivecache' }), d => d.cmd === 'gettexlivecache')));
+    reqId => w.postMessage({ cmd: 'gettexlivecache', reqId }), d => d.cmd === 'gettexlivecache')));
   const cacheKeys = cached.map(d => new Set(d.files));
   const usage = list.engines ? [new Set(list.engines.tex), new Set(list.engines.pdf)] : null;
   const files = list.files;
@@ -101,7 +118,7 @@ async function prefetchResources() {
         const bytes = await fetchResource(repoUrl(key), signal);
         checkGeneration(expected);
         await Promise.all(targets.map(w => call(w, 'TeX cache upload',
-          () => w.postMessage({ cmd: 'cachetexlivefile', key, src: bytes }),
+          reqId => w.postMessage({ cmd: 'cachetexlivefile', key, src: bytes, reqId }),
           d => d.cmd === 'cachetexlivefile' && d.key === key).then(result => {
           if (result.result !== 'ok') throw new Error(result.error || 'TeX cache upload failed');
         })));
@@ -128,16 +145,14 @@ export function warmEngine(source) {
     warming = true;
     try {
       do {
-        // 切换文档时若正式编译尚未完成，保留预热请求，等 Worker 空闲再执行。
-        if (status === 'busy') await new Promise(resolve => {
-          const off = onEngineStatus(s => { if (s !== 'busy') { off(); resolve(); } });
-        });
         checkGeneration(expected);
-        setStatus('warming');
         const text = pendingWarmSource;
         pendingWarmSource = null;
+        // 切换文档时若正式编译尚未完成，warmUpDocument 在锁上排队，不会插进它的命令序列
         if (/\\documentclass/.test(text)) await warmUpDocument(text);
         checkGeneration(expected);
+        // 预取阶段不独占 Worker：编译在跑时状态栏继续显示 busy，别把它盖成 warming
+        if (status !== 'busy') setStatus('warming');
         await prefetchResources();
       } while (pendingWarmSource !== null);
     } finally {
@@ -154,21 +169,30 @@ export function warmEngine(source) {
 // 仅预取 HTTP 缓存无法覆盖 no-store 或开发者工具禁用缓存的情况。
 async function warmUpDocument(source) {
   const expected = generation;
-  warmCompile = (async () => {
-    // /work 的辅助文件属于上一篇文档；/tex 的资源缓存由两个引擎继续复用。
-    texWorker.postMessage({ cmd: 'flushcache' });
-    pdfWorker.postMessage({ cmd: 'flushcache' });
-    texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
-    texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
-    const result = await call(texWorker, 'XeTeX warm-up', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
-    checkGeneration(expected);
-    if (result.result !== 'ok' || result.status !== 0 || !result.pdf) return;
-    pdfWorker.postMessage({ cmd: 'writefile', url: 'main.xdv', src: new Uint8Array(result.pdf) });
-    pdfWorker.postMessage({ cmd: 'setmainfile', url: 'main.xdv' });
-    await call(pdfWorker, 'dvipdfmx warm-up', () => pdfWorker.postMessage({ cmd: 'compilepdf' }), d => d.cmd === 'compile');
-  })();
-  try { await warmCompile; } catch (e) { /* 预热编译报错不影响，文件已经拉到了 */ }
-  if (generation === expected) warmCompile = null;
+  // 预热要独占两个 Worker（flushcache 会清掉工作目录）：与正式编译共用同一把锁，
+  // 编译侧排队等它，warm 的 flushcache/writefile 就不会打进正在进行的编译。
+  try {
+    await withWorkerLock(() => {
+      checkGeneration(expected);
+      // 拿到 Worker 才标 warming：排队等锁期间进行中的编译该继续显示 busy
+      setStatus('warming');
+      // /work 的辅助文件属于上一篇文档；/tex 的资源缓存由两个引擎继续复用。
+      texWorker.postMessage({ cmd: 'flushcache' });
+      pdfWorker.postMessage({ cmd: 'flushcache' });
+      texWorker.postMessage({ cmd: 'writefile', url: 'main.tex', src: prepareXeLaTeXSource(source) });
+      texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
+      return call(texWorker, 'XeTeX warm-up',
+        reqId => texWorker.postMessage({ cmd: 'compilelatex', reqId }), d => d.cmd === 'compile')
+        .then(result => {
+          checkGeneration(expected);
+          if (result.result !== 'ok' || result.status !== 0 || !result.pdf) return;
+          pdfWorker.postMessage({ cmd: 'writefile', url: 'main.xdv', src: new Uint8Array(result.pdf) });
+          pdfWorker.postMessage({ cmd: 'setmainfile', url: 'main.xdv' });
+          return call(pdfWorker, 'dvipdfmx warm-up',
+            reqId => pdfWorker.postMessage({ cmd: 'compilepdf', reqId }), d => d.cmd === 'compile');
+        });
+    });
+  } catch (e) { /* 预热编译报错不影响，文件已经拉到了 */ }
 }
 
 // Worker 装载完成时胶水会 postMessage({result:'ok'})
@@ -242,10 +266,14 @@ export function preloadEngine() {
 // 所有等待（包括初始化）共享取消和清理机制。
 const inFlight = new Set();
 function call(w, label, send, match, timeoutMs) {
+  const reqId = nextReqId++;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { cleanup(); reject(new Error(label + ' timeout')); }, timeoutMs || COMPILE_TIMEOUT);
     function onmsg(ev) {
       const d = ev.data || {};
+      // Worker 回带 reqId 时只认自己这条：上一趟超时后的迟到回执不能喂给这一条命令。
+      // 缓存里的旧 Worker 脚本不带 reqId，那种情况退回原来的 cmd 匹配。
+      if (d.reqId !== undefined && d.reqId !== reqId) return;
       if (!match(d)) return;
       cleanup();
       resolve(d);
@@ -256,7 +284,7 @@ function call(w, label, send, match, timeoutMs) {
     inFlight.add(cancel);
     w.addEventListener('message', onmsg);
     w.addEventListener('error', onerr);
-    try { send(); } catch (e) { cleanup(); reject(e); }
+    try { send(reqId); } catch (e) { cleanup(); reject(e); }
   });
 }
 
@@ -266,11 +294,15 @@ export function cancelCompile() {
   loadAbort?.abort();
   loadAbort = null;
   [...inFlight].forEach(cancel => cancel());
+  // 在途调用已被拒绝，排队者却可能还挂在锁上；强制放行后它们各自撞上 generation 检查退出
+  [...workerLockReleases].forEach(release => release());
+  workerLockReleases.clear();
+  workerLockTail = Promise.resolve();
+  compileGuard = null;
   try { texWorker && texWorker.terminate(); } catch (e) { /* noop */ }
   try { pdfWorker && pdfWorker.terminate(); } catch (e) { /* noop */ }
   texWorker = pdfWorker = null;
   loadPromise = null;
-  warmCompile = null;
   warmPromise = null;
   pendingWarmSource = null;
   warming = false;
@@ -296,26 +328,47 @@ function parseLog(log) {
   return errors.slice(0, 30);
 }
 
-/** 编译 LaTeX 源码。返回 { ok, pdfBytes?, log, errors, engine:'builtin' } */
 // 用户取消不算报错：单独标记，让 UI 说「已取消」而不是甩一条红色异常
 function cancelled(e) {
   return String(e && e.message || e) === 'cancelled'
     ? { ok: false, cancelled: true, log: '', errors: [], engine: 'builtin' } : null;
 }
 
+/**
+ * 编译 LaTeX 源码。返回 { ok, pdfBytes?, log, errors, engine:'builtin' }
+ * 引擎已被上一趟编译占住时返回 { ok:false, cancelled:false, error:'busy' }：
+ * 正常 UI 走不到（useCompile 有 compiling 守卫），出现即为调用方逻辑错误。
+ */
 export async function compileXeLaTeX(source, files = []) {
+  if (compileGuard) return { ok: false, cancelled: false, error: 'busy', log: '', errors: [], engine: 'builtin' };
+  const guard = {};
   const expected = generation;
+  compileGuard = guard;
   try {
-    await preloadEngine();
-    checkGeneration(expected);
-  } catch (e) {
-    const c = cancelled(e);
-    if (c) return c;
-    return { ok: false, log: '', errors: [{ line: null, msg: e.message || String(e) }], engine: 'builtin' };
+    // 装载不占锁：它只建 Worker 与设端点，且和预热共用同一个 loadPromise，
+    // 放到锁后面会让 Worker 的创建时机变成微任务，取消/替换的竞态就变了
+    try {
+      await preloadEngine();
+      checkGeneration(expected);
+    } catch (e) {
+      const c = cancelled(e);
+      if (c) return c;
+      return compileError(e.message || String(e));
+    }
+    // 定向预热可能正占着两个 Worker：排队等它跑完，否则会错拿它的回执
+    return await withWorkerLock(() => runCompile(source, files, expected));
+  } finally {
+    if (compileGuard === guard) compileGuard = null;
   }
-  // 定向预热正在用 Worker：等它跑完再发自己的命令，否则会错拿它的回执
-  if (warmCompile) { try { await warmCompile; } catch (e) { /* 交给下面的正式编译 */ } }
+}
+
+function compileError(message) {
+  return { ok: false, log: '', errors: [{ line: null, msg: message }], engine: 'builtin' };
+}
+
+async function runCompile(source, files, expected) {
   try {
+    // 排队等锁期间可能已被取消：此时 Worker 已销毁，一条命令都不能再发
     checkGeneration(expected);
     setStatus('busy');
     source = prepareXeLaTeXSource(source);
@@ -327,7 +380,7 @@ export async function compileXeLaTeX(source, files = []) {
     // XeTeX needs figure dimensions; dvipdfmx needs the original PDF/image bytes.
     for (const worker of [texWorker, pdfWorker]) {
       const uploaded = await call(worker, 'Project upload',
-        () => worker.postMessage({ cmd: 'writeproject', files }), d => d.cmd === 'writeproject');
+        reqId => worker.postMessage({ cmd: 'writeproject', files, reqId }), d => d.cmd === 'writeproject');
       checkGeneration(expected);
       if (uploaded.result !== 'ok') throw new Error(uploaded.error || 'Project upload failed');
     }
@@ -335,10 +388,11 @@ export async function compileXeLaTeX(source, files = []) {
     texWorker.postMessage({ cmd: 'setmainfile', url: 'main.tex' });
     let r1;
     try {
-      r1 = await call(texWorker, 'XeTeX pass 1', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+      r1 = await call(texWorker, 'XeTeX pass 1',
+        reqId => texWorker.postMessage({ cmd: 'compilelatex', reqId }), d => d.cmd === 'compile');
       checkGeneration(expected);
     } catch (e) {
-      return cancelled(e) || { ok: false, log: '', errors: [{ line: null, msg: e.message || String(e) }], engine: 'builtin' };
+      return cancelled(e) || compileError(e.message || String(e));
     }
     if (r1.result !== 'ok' || r1.status !== 0) {
       const log = r1.log || '';
@@ -346,7 +400,8 @@ export async function compileXeLaTeX(source, files = []) {
     }
     let r2 = r1;
     try {
-      r2 = await call(texWorker, 'XeTeX pass 2', () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+      r2 = await call(texWorker, 'XeTeX pass 2',
+        reqId => texWorker.postMessage({ cmd: 'compilelatex', reqId }), d => d.cmd === 'compile');
       checkGeneration(expected);
     } catch (e) {
       const c = cancelled(e);
@@ -362,7 +417,7 @@ export async function compileXeLaTeX(source, files = []) {
     if (/\\bibliography\s*\{/.test(source)) {
       try {
         r2 = await call(texWorker, 'XeTeX pass 3',
-          () => texWorker.postMessage({ cmd: 'compilelatex' }), d => d.cmd === 'compile');
+          reqId => texWorker.postMessage({ cmd: 'compilelatex', reqId }), d => d.cmd === 'compile');
         checkGeneration(expected);
       } catch (error) {
         return cancelled(error) || { ok: false, log: r2.log || '',
@@ -379,12 +434,13 @@ export async function compileXeLaTeX(source, files = []) {
     pdfWorker.postMessage({ cmd: 'setmainfile', url: 'main.xdv' });
     let r3;
     try {
-      r3 = await call(pdfWorker, 'dvipdfmx', () => pdfWorker.postMessage({ cmd: 'compilepdf' }), d => d.cmd === 'compile');
+      r3 = await call(pdfWorker, 'dvipdfmx',
+        reqId => pdfWorker.postMessage({ cmd: 'compilepdf', reqId }), d => d.cmd === 'compile');
       checkGeneration(expected);
     } catch (e) {
       const c = cancelled(e);
       if (c) return c;
-      return { ok: false, log: '', errors: [{ line: null, msg: 'dvipdfmx: ' + (e.message || String(e)) }], engine: 'builtin' };
+      return compileError('dvipdfmx: ' + (e.message || String(e)));
     }
     if (r3.result !== 'ok' || !r3.pdf) {
       const log = r3.log || '';
