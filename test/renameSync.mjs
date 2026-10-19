@@ -155,29 +155,40 @@ assert.equal(fixture.calls.renamed.length, 0);
 console.log('Rename sync: tree notification, handle/path/history migration, folder prefix moves, disk-first mobile rename and failure paths passed.');
 
 // ---- 跨窗口草稿合并（storage 事件整库写回的应答方）----
-// 谁正在编辑谁说了算：本地有未保存内容的草稿一律保留；干净的跟随远端增删改
-const mkDraft = (name, text, dirty = false) => {
-  const t = model.makeTab({ name, kind: 'draft', text, saved: dirty ? '' : text });
-  return { ...t, dirty };
+// 逐条比时钟：本地这条还有没落盘的字节才保留本地；远端是旧快照时按兵不动。
+// 时钟用可比较的小整数，别让 makeTab 的 Date.now() 参与判断（那会把远端永远判成旧的）。
+const T_OLD = 1000, T_NEW = 2000, T_LATE = 3000;
+const mkDraft = (name, text, o = {}) => {
+  const t = model.makeTab({ name, kind: 'draft', text, saved: o.saved !== undefined ? o.saved : text, updatedAt: o.updatedAt !== undefined ? o.updatedAt : T_OLD });
+  return { ...t, dirty: !!o.dirty };
 };
-const remoteOf = tabs => JSON.stringify(tabs.map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue(), updated: 500 })));
+const remoteOf = tabs => JSON.stringify(tabs.map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue(), updated: x.updatedAt })));
 
-let locals = [mkDraft('a.tex', 'local v1'), mkDraft('b.tex', 'local v1'), mkDraft('c.tex', 'dirty body', true)];
+let locals = [
+  mkDraft('a.tex', 'local v1'),                                   // 干净、旧 → 跟随远端
+  mkDraft('b.tex', 'local v1'),                                   // 干净 → 跟随远端改名
+  mkDraft('c.tex', 'dirty body', { saved: '' }),                  // 有未落盘字节 → 保留
+  mkDraft('d.tex', 'newer here', { updatedAt: T_NEW }),            // 远端这份更旧 → 按兵不动
+  mkDraft('e.tex', 'only mine', { updatedAt: T_LATE }),            // 远端没有且整库时钟更旧 → 不跟着删
+];
 let remote = JSON.stringify([
-  { id: locals[0].draftId, name: 'a.tex', text: 'remote v2', updated: 500 },   // 改：本地干净 → 跟随
-  { id: locals[1].draftId, name: 'b-renamed.tex', text: 'local v1', updated: 500 }, // 改名：跟随
-  // locals[2]（脏的）被远端删掉 → 保留本地
-  { id: 'new-1', name: 'd.tex', text: 'from other window', updated: 500 },     // 新增 → 追加
+  { id: locals[0].draftId, name: 'a.tex', text: 'remote v2', updated: T_NEW },
+  { id: locals[1].draftId, name: 'b-renamed.tex', text: 'local v1', updated: T_NEW },
+  { id: locals[3].draftId, name: 'd.tex', text: 'stale from old window', updated: T_OLD },
+  { id: 'new-1', name: 'f.tex', text: 'from other window', updated: T_NEW },
 ]);
 let merged = model.mergeRemoteDrafts(locals, remote);
-assert.equal(merged.length, 4, `脏的被删要保留、新增要追加（得到 ${merged.length}）`);
-assert.equal(merged[0].doc.getValue(), 'remote v2', '干净的草稿跟随远端更新');
+assert.equal(merged.length, 6, `保留 c/d/e、跟随 a/b、追加 f（得到 ${merged.length}）`);
+assert.equal(merged[0].doc.getValue(), 'remote v2', '干净的草稿跟随更新的远端文本');
 assert.equal(merged[0].saved, 'remote v2', 'saved 一并推进，避免 beforeunload 误报');
+assert.equal(merged[0].updatedAt, T_NEW, '时钟随远端推进，来回合并不再重复触发');
 assert.notEqual(merged[0].doc, locals[0].doc, '换新 Doc，不在更新器里原地改');
 assert.equal(merged[1].name, 'b-renamed.tex', '远端改名跟随');
-assert.equal(merged[2].name, 'c.tex', '本地脏的即使被远端删除也保留');
-assert.equal(merged[3].draftId, 'new-1', '远端新增草稿按原 draftId 追加');
-assert.equal(merged[3].doc.getValue(), 'from other window');
+assert.equal(merged[2].name, 'c.tex', '本地有未落盘内容的即使被远端删除也保留');
+assert.equal(merged[3].doc.getValue(), 'newer here', '远端这份是旧快照时不覆盖本地已落盘的新内容');
+assert.equal(merged[4].name, 'e.tex', '远端时钟早于本地这条 = 它没见过这条，不按删除处理');
+assert.equal(merged[5].draftId, 'new-1', '远端新增草稿按原 draftId 追加');
+assert.equal(merged[5].doc.getValue(), 'from other window');
 
 // 无变化必须返回原数组引用，让 setTabs 的 bail-out 生效
 let same = model.mergeRemoteDrafts(locals, remoteOf(locals));
@@ -187,10 +198,17 @@ assert.equal(same, locals, '远端载荷坏掉时按兵不动');
 same = model.mergeRemoteDrafts(locals, JSON.stringify([{ id: 'x', text: 42 }]));
 assert.equal(same, locals, '形状不对（text 非字符串）的条目忽略');
 
-// 本地脏 + 远端有更新：本地赢，远端文本在本地落盘后的下一轮合并再进来
-const dirtyLocal = mkDraft('e.tex', 'typing...', true);
-merged = model.mergeRemoteDrafts([dirtyLocal], JSON.stringify([{ id: dirtyLocal.draftId, name: 'e.tex', text: 'remote wins?', updated: 500 }]));
+// dirty 恒为 true 但内容已落盘（● 表示「没落到磁盘文件」的既有语义）：
+// 合并不能因此永久失效，否则两个窗口各写整库，后写的连坐覆盖先写的字节
+const storedButMarked = mkDraft('g.tex', 'both edited', { dirty: true });
+merged = model.mergeRemoteDrafts([storedButMarked], JSON.stringify([{ id: storedButMarked.draftId, name: 'g.tex', text: 'other window won', updated: T_NEW }]));
+assert.equal(merged[0].doc.getValue(), 'other window won', '已落盘的草稿照常跟随远端');
+assert.equal(merged[0].dirty, true, '● 的语义不受合并影响');
+
+// 本地确有未落盘字节 + 远端有更新：本地赢，远端文本在本地落盘后的下一轮合并再进来
+const dirtyLocal = mkDraft('h.tex', 'typing...', { saved: '' });
+merged = model.mergeRemoteDrafts([dirtyLocal], JSON.stringify([{ id: dirtyLocal.draftId, name: 'h.tex', text: 'remote wins?', updated: T_NEW }]));
 assert.equal(merged[0].doc.getValue(), 'typing...', '本地未保存内容优先');
 assert.equal(merged.length, 1, '不重复、不丢失');
 
-console.log('Draft multi-window merge: clean-follows-remote, dirty-wins, delete/new/bad-payload semantics passed.');
+console.log('Draft multi-window merge: per-draft clock, clean-follows-newer-remote, stale-remote-ignored, dirty-badge merge, delete/new/bad-payload semantics passed.');

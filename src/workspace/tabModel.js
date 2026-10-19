@@ -118,9 +118,11 @@ export function hasUnsavedWork(tabs) {
 }
 
 /** 跨窗口草稿合并：另一窗口整库写回 LS_DRAFTS 时（storage 事件），把它的草稿按 draftId 并进来。
- *  - 本地有未保存内容的草稿一律保留本地（谁正在编辑谁说了算），落盘后下一轮合并自然收敛
- *  - 本地干净的草稿跟随远端新文本（换一个 Doc 对象，不在 setState 更新器里做任何变更）
- *  - 远端删除的草稿：本地干净就跟着删，本地有未保存内容则保留
+ *  - 判据是「每条草稿各自比时间戳」，不是整库谁赢：本地这条还有没落盘的字节才保留本地
+ *  - 远端这条比本地新才跟随（文本/改名同理），远端那份是旧快照时按兵不动，
+ *    否则一个开着旧副本的窗口整库写回，就能把这边已经落盘的新内容覆盖成旧的
+ *  - 远端没有这条：本地干净、且远端快照的时钟不早于本地这条的时间，才跟着删
+ *    （时钟更早说明那个窗口根本还没见过这条草稿，不是它删的）
  *  - 远端新增的草稿：追加为标签（落在最后，不打断当前焦点）
  * 无变化时返回原数组引用，让 setTabs 的 bail-out 生效。 */
 export function mergeRemoteDrafts(tabs, remoteRaw) {
@@ -133,18 +135,24 @@ export function mergeRemoteDrafts(tabs, remoteRaw) {
     if (Array.isArray(arr) && arr.length && !remote.length) return tabs;
   } catch (e) { return tabs; }
   const remoteById = new Map(remote.map(d => [d.id, d]));
-  const localUnsaved = (tab) => tab.dirty || (tab.doc ? tab.doc.getValue() !== tab.saved : false);
+  const stampOf = d => (Number.isFinite(d.updated) ? d.updated : 0);
+  const remoteClock = remote.reduce((mx, d) => Math.max(mx, stampOf(d)), 0);
+  // 只看内容与已落盘快照是否一致，和 hasUnsavedWork 同一口径。不能掺 tab.dirty：
+  // markDraftsStored 有意不动 dirty（● 表示「没落到磁盘文件」），草稿敲过一次字后
+  // dirty 就恒为 true —— 合并从此永久失效，两个窗口各写整库，后写的连坐覆盖先写的。
+  const localUnsaved = (tab) => !!tab.doc && tab.doc.getValue() !== tab.saved;
   let changed = false;
   const next = [];
   for (const tab of tabs) {
     if (tab.kind !== 'draft' || !tab.doc) { next.push(tab); continue; }
     const r = remoteById.get(tab.draftId);
     if (!r) {
-      if (localUnsaved(tab)) { next.push(tab); continue; }   // 别的窗口删了，但这边还有没落盘的内容
-      changed = true; continue;                               // 干净：跟随删除
+      // 这边还有没落盘的字节，或远端快照早于本地这条（它压根没见过这条），都保留
+      if (localUnsaved(tab) || remoteClock < (tab.updatedAt || 0)) { next.push(tab); continue; }
+      changed = true; continue;                               // 干净且远端知情：跟随删除
     }
     remoteById.delete(tab.draftId);
-    if (!localUnsaved(tab)) {
+    if (!localUnsaved(tab) && stampOf(r) > (tab.updatedAt || 0)) {
       const remoteName = String(r.name || '').slice(0, 80);
       const textChanged = r.text !== tab.doc.getValue();
       const nameChanged = !!remoteName && remoteName !== tab.name;
@@ -157,7 +165,7 @@ export function mergeRemoteDrafts(tabs, remoteRaw) {
           name: nameChanged ? remoteName : tab.name,
           doc: textChanged ? new CodeMirror.Doc(r.text, 'stex') : tab.doc,
           saved: r.text, saveError: '',
-          updatedAt: Number.isFinite(r.updated) ? r.updated : tab.updatedAt,
+          updatedAt: stampOf(r),
         });
         continue;
       }

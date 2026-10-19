@@ -605,6 +605,15 @@ export function useWorkspace(ui) {
     }
   }, []);
 
+  // 手机端「打完字立刻切后台」正好落在 800ms 防抖窗口里：系统可以在这一刻杀页面，
+  // 而进后台不触发 beforeunload（桌面↔移动切换用的就是 reload，也不是 unload）。
+  // 可见性一转为 hidden 就走同一条落盘路径，把最后几秒的字接住。
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === 'hidden') persistNow(); };
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, [persistNow]);
+
   return {
     tabs, setTabs, tabsRef, activeId, setActiveId, activeValue, setActiveValue, activeTab,
     rootDir, setRootDir, restorePrompt, setRestorePrompt,
@@ -612,7 +621,7 @@ export function useWorkspace(ui) {
     noteHistory, snapshot, snapshotTab,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
-    addDraft, renameTab, renameTabPath, persistNow, dropDeletedTabs,
+    addDraft, renameTab, renameTabPath, dropDeletedTabs,
     onDocChange, activateTab,
   };
 }
