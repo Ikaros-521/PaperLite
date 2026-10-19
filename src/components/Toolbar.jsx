@@ -24,15 +24,31 @@ function Mi({ check, icon, label, hint, disabled, onClick, close }) {
 
 const MSep = () => <div className="mi-sep" role="separator"></div>;
 
-/* 悬停展开的二级子菜单（从模板新建 / 视图 / 预览缩放） */
+/* 悬停展开的二级子菜单（从模板新建 / 视图 / 预览缩放）。
+ * 悬停之外补点击切换：触屏没有 hover，纯 CSS 悬停在触屏上永远打不开。 */
 function MiSub({ icon, label, children }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    // 点击子菜单项后收起（子项 onClick 里拿不到这里的 setOpen，统一在外层监听）
+    const close = e => { if (!ref.current || ref.current.contains(e.target)) return; setOpen(false); };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [open]);
   return (
-    <div className="mi mi-sub" role="menuitem" tabIndex={0} aria-haspopup="menu">
+    <div
+      ref={ref}
+      className={'mi mi-sub' + (open ? ' sub-open' : '')}
+      role="menuitem" tabIndex={0} aria-haspopup="menu" aria-expanded={open}
+      onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+    >
       <span className="mi-check"></span>
       {icon ? <span className="mi-ico">{icon}</span> : null}
       <span className="mi-label">{label}</span>
       <span className="mi-hint">▸</span>
-      <div className="mb-menu sub" role="menu">{children}</div>
+      <div className="mb-menu sub" role="menu" onClick={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}>{children}</div>
     </div>
   );
 }

@@ -71,10 +71,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .mi-sep { height: 1px; background: var(--line-soft); margin: 5px 8px; }
 .mi-note { padding: 6px 10px; font-size: 12px; color: var(--ink-faint); max-width: 220px; line-height: 1.5; }
 
-/* 二级子菜单：悬停展开到右侧 */
+/* 二级子菜单：悬停展开到右侧；触屏无 hover，点击切换 .sub-open（MiSub 内联态） */
 .mi-sub { position: relative; cursor: default; }
 .mb-menu.sub { display: none; position: absolute; left: calc(100% - 4px); top: -7px; }
-.mi-sub:hover > .mb-menu.sub { display: block; }
+.mi-sub:hover > .mb-menu.sub,
+.mi-sub.sub-open > .mb-menu.sub { display: block; }
 
 .mb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .compact-control { display: none; }

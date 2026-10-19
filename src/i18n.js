@@ -237,6 +237,7 @@ export const DICT = {
     // ---- PDF ⇄ 源码 近似跳转（synctex-lite）----
     'sync.needPdf': '先编译出 PDF，再用 Ctrl+点击编辑器跳到对应位置',
     'sync.noHit': 'PDF 与源码文本没对上（断行/数学环境会影响匹配），没找到跳转目标',
+    'sync.mainNotOpen': '命中内容在主文档 {name}（未在标签中打开），请先打开它再跳转',
     // ---- 表格可视化编辑 ----
     'tb.openTip': '可视化编辑此表格',
     'tb.title': '表格编辑',
@@ -843,6 +844,7 @@ export const DICT = {
     'gs.truncated': 'truncated at 500 matches',
     'sync.needPdf': 'Compile a PDF first, then Ctrl+click the editor to jump to it',
     'sync.noHit': 'PDF and source text did not match (wrapping/math reduce accuracy); no jump target found',
+    'sync.mainNotOpen': 'The hit is in the main document {name} (not open as a tab); open it first to jump there',
     // ---- Visual table editing ----
     'tb.openTip': 'Edit this table visually',
     'tb.title': 'Table editor',

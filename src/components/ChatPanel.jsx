@@ -466,12 +466,19 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           <div key={i} className={'chat-msg ' + m.role}>
             {m.role === 'user' && m.ctxNote && <div className="chat-ctx">{m.ctxNote}</div>}
             {m.role === 'assistant' && m.reasoning ? (
-              <div className="chat-cot">
-                <button className="cot-toggle" onClick={() => setShowReasoning(s => ({ ...s, [i]: !s[i] }))}>
-                  {t('chat.cotToggle')} {showReasoning[i] ? '▾' : '▸'}
-                </button>
-                {showReasoning[i] && <div className="cot-body">{m.reasoning}</div>}
-              </div>
+              (() => {
+                // 折叠态按内容片段记忆而不是消息下标：压缩/清空会让下标漂移，
+                // 展开态会串到别的消息上
+                const rk = (m.reasoning || '').slice(0, 40);
+                return (
+                  <div className="chat-cot">
+                    <button className="cot-toggle" onClick={() => setShowReasoning(s => ({ ...s, [rk]: !s[rk] }))}>
+                      {t('chat.cotToggle')} {showReasoning[rk] ? '▾' : '▸'}
+                    </button>
+                    {showReasoning[rk] && <div className="cot-body">{m.reasoning}</div>}
+                  </div>
+                );
+              })()
             ) : null}
             {m.content ? renderWithTools(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
           </div>

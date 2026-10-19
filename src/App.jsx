@@ -457,6 +457,11 @@ export default function App() {
       // 编译入口是别的标签（主文档）：切到那个标签再跳行
       const tab = tabsRef.current.find(x => x.doc && x.doc.getValue() === src);
       if (tab && tab.id !== activeId) { setActiveId(tab.id); requestAnimationFrame(() => jumpToLine(line)); return; }
+      if (!tab) {
+        // 主文档只在磁盘上（未作为标签打开）：行号属于它，对当前标签盲跳会落错行
+        flash(t('sync.mainNotOpen', { name: compileResult?.entryName || 'main.tex' }));
+        return;
+      }
     }
     jumpToLine(line);
   }, [compileResult, activeValue, activeId, flash, t]);

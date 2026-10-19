@@ -233,11 +233,18 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     const marks = [];
     try {
       for (const chunk of chunks) {
-        const r = await fetch(LT_ENDPOINT, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: buildRequestBody(chunk.text),
-        });
+        // 每块独立超时：断网/挂起时 fetch 可无限 pending，在途请求会一直占着
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 20000);
+        let r;
+        try {
+          r = await fetch(LT_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: buildRequestBody(chunk.text),
+            signal: ctrl.signal,
+          });
+        } finally { clearTimeout(timer); }
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const json = await r.json();
         if (gen !== grammarGenRef.current) return;   // 输入已变/开关已关：丢弃本轮
