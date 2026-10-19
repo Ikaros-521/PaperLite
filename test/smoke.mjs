@@ -563,5 +563,18 @@ ok(fakeBegin.html.includes('内文'), '后接的真实环境照常渲染');
   ok(verbTail.html.includes('正文'), '后续正文照常渲染');
 }
 
+// \draw 后连写的 ( 以前逐个候选把余文扫到串尾（×40000 实测 3.1s 二次方）；
+// 水位线之后要回到线性，同时正常坐标与 node 文本必须照常配上
+{
+  const tctx = () => ({ styles: {}, macros: {}, tikzsetRanges: [], defaultFontPx: 13 });
+  const tBad = Date.now();
+  TIKZ.render(String.raw`\draw` + '('.repeat(40000), '', 0, tctx());
+  ok(Date.now() - tBad < 800, '未闭合括号大批量 tikz 保持线性, got ' + (Date.now() - tBad) + 'ms');
+  const good = TIKZ.render(String.raw`\draw (0,0) -- (2,1) node[right]{标签} -- (3,0);`, '', 0, tctx());
+  ok(good.svg && good.svg.includes('标签'), '坐标与 node 文本照常解析');
+  const half = TIKZ.render(String.raw`\draw (0,0) -- ((2,1) -- (3,0);`, '', 0, tctx());
+  ok(!!half.svg, '局部配平的坏路径仍出图，不是整幅报废');
+}
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

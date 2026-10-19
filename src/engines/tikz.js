@@ -406,13 +406,20 @@ function mathToUnicode(t) {
 // ---------------- 路径 token ----------------
 function tokenizePath(spec) {
   var toks = [], s = spec, i = 0;
+  // 水位线：未闭合的 ( 以前会把余文逐个候选扫到串尾——\draw ((((… ×40000 实测 3.1s
+  // 的平方级就在这里。此后连一个 ) 都没有的候选直接判失败；反复不配平的坏串最多
+  // 试扫 64 次也放弃（不是一次就断死，因为后面的候选仍可能正常闭合）
+  var lastParen = s.lastIndexOf(')'), lastBrace = s.lastIndexOf('}'), lastBracket = s.lastIndexOf(']');
+  var parenFails = 0;
   function paren(j) {
+    if (lastParen <= j || parenFails >= 64) return -1;
     var d = 0;
     for (var k = j; k < s.length; k++) {
       if (s.charAt(k) === '\\') { k++; continue; }
       if (s.charAt(k) === '(') d++;
       else if (s.charAt(k) === ')') { d--; if (d === 0) return k; }
     }
+    parenFails++;
     return -1;
   }
   while (i < s.length) {
@@ -432,7 +439,7 @@ function tokenizePath(spec) {
       var word = w[1]; i += word.length;
       var tok = { t: word };
       i = skipWs(s, i);
-      if (s.charAt(i) === '[') {
+      if (s.charAt(i) === '[' && i < lastBracket) {
         var be = bracketEnd(s, i);
         if (be > 0) { tok.opts = s.slice(i + 1, be); i = be + 1; i = skipWs(s, i); }
       }
@@ -441,7 +448,7 @@ function tokenizePath(spec) {
           var pe = paren(i);
           if (pe > 0) { tok.name = s.slice(i + 1, pe); i = pe + 1; i = skipWs(s, i); }
         }
-        if (s.charAt(i) === '{') {
+        if (s.charAt(i) === '{' && i < lastBrace) {
           var br = braceEnd(s, i);
           if (br > 0) { tok.text = s.slice(i + 1, br); i = br + 1; }
         }
