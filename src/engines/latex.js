@@ -27,12 +27,29 @@ function esc(s) {
 // 链接 scheme 白名单：\url/\href 与 KaTeX trust 共用。无 scheme（相对路径/锚点）
 // 放行；http/https/mailto/tel 放行；javascript:/data:/vbscript: 等一律清空——
 // 文档内容不可信，防止预览里的链接被点击时执行脚本。
+// 判定前必须按 URL 规范归一：解析器会删掉所有 TAB/LF/CR、并剥掉首尾 C0 与空格，
+// 所以 `java<TAB>script:` 与 `<C0>javascript:` 在浏览器里就是 javascript:。
+// 冒号出现在第一个 /?# 之前即视为 scheme（`a:b` 浏览器也当 URL），归一后再比白名单。
 function safeUrl(u) {
-  var s = String(u == null ? '' : u).trim();
-  var m = s.match(/^([a-zA-Z][a-zA-Z0-9+.\-]*):/);
+  var s = normUrl(u);
+  var seg = s.split(/[/?#]/)[0];
+  var m = seg.match(/^([a-zA-Z][a-zA-Z0-9+.\-]*):/);
   if (!m) return s;
   var k = m[1].toLowerCase();
   return (k === 'http' || k === 'https' || k === 'mailto' || k === 'tel') ? s : '';
+}
+
+// \includegraphics 只该指向项目内文件：带 scheme 或 // 开头的值会在渲染时自动发起
+// 出站请求（不需要点击），打开第三方 .tex 就泄露 IP 与文档路径。拦下并显示原文。
+function localAssetPath(u) {
+  var s = normUrl(u);
+  if (s.indexOf('//') === 0) return '';
+  var seg = s.split(/[/?#]/)[0];
+  return seg.indexOf(':') < 0 ? s : '';
+}
+
+function normUrl(u) {
+  return String(u == null ? '' : u).replace(/[\t\n\r\u0000-\u001f\u007f]/g, '').trim();
 }
 
 // 给块级输出的根标签注入 data-off（源码绝对偏移），预览点击据此回跳源码行。
@@ -663,7 +680,11 @@ function katexMacrosOf(ctx) {
 // 文本排版细节（引号/破折号/波浪号/裸花括号）
 function typesetText(t) {
   var s = esc(t);
-  s = s.replace(/``([^']*|[^']*)''/g, '\u201c$1\u201d');
+  // \u5b57\u7b26\u7c7b\u91cc\u6392\u9664\u53cd\u5f15\u53f7\u662f\u5fc5\u987b\u7684\uff1a\u53ea\u5199 ([^']*) \u7684\u8bdd\uff0c\u4e00\u4e32\u8fde\u7eed\u53cd\u5f15\u53f7\uff08\u6bcf\u4e2a\u4f4d\u7f6e\u90fd\u80fd
+  // \u8d77\u624b ``\uff09\u4f1a\u8ba9\u6bcf\u4e2a\u8d77\u70b9\u90fd\u628a\u4f59\u6587\u626b\u4e24\u904d\uff0c\u5b9e\u6d4b 60KB \u53cd\u5f15\u53f7\u4e32\u8981 1.6s\uff1b\u6392\u6389\u53cd\u5f15\u53f7\u540e\u9010\u4f4d\u7f6e
+  // \u7acb\u523b\u5931\u8d25\uff0c\u540c\u89c4\u6a21 1ms \u5185\u3002\u4ee3\u4ef7\u662f ``a`b'' \u8fd9\u79cd\u5f15\u53f7\u5185\u5d4c\u88f8\u53cd\u5f15\u53f7\u4e0d\u518d\u8f6c\u6210\u5f2f\u5f15\u53f7\u2014\u2014
+  // LaTeX \u91cc\u672c\u6765\u4e5f\u5199\u4e0d\u51fa\u88f8\u53cd\u5f15\u53f7\uff0c\u53ef\u63a5\u53d7\u3002
+  s = s.replace(/``([^'`]*)''/g, '\u201c$1\u201d');
   s = s.replace(/`([^`']*)'/g, '\u2018$1\u2019');
   s = s.replace(/---/g, '\u2014').replace(/--/g, '\u2013');
   s = s.replace(/~/g, '\u00a0');
@@ -964,7 +985,9 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
           else { var px = { cm: 37.8, mm: 3.78, pt: 1.33, in: 96 }; var um = wm[1].match(/^([\d.]+)(cm|mm|pt|in)/); if (um) wstyle = ' style="width:' + (+um[1] * px[um[2]]) + 'px"'; }
         }
       }
-      return { next: g1.end + 1, html: '<img class="includegraphics" src="' + esc(g1.text.trim()) + '" alt="' + esc(g1.text) + '"' + wstyle + '/>' };
+      var gsrc = localAssetPath(g1.text);
+      if (!gsrc) return { next: g1.end + 1, html: '<span class="graphics-blocked" title="' + esc(normUrl(g1.text)) + '">' + esc(normUrl(g1.text)) + '</span>' };
+      return { next: g1.end + 1, html: '<img class="includegraphics" src="' + esc(gsrc) + '" alt="' + esc(g1.text) + '"' + wstyle + '/>' };
     }
     case 'rule': { g1 = G(afterName); g2 = G(g1 ? g1.end + 1 : 0); if (!g1 || !g2) return null; return { next: g2.end + 1, html: '<span class="rule-bar"></span>' }; }
     case 'quad': case 'qquad': return { next: afterName, html: '&emsp;' };
