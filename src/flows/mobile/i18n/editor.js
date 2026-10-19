@@ -73,6 +73,8 @@ export const ED_ZH = {
   'mb.ed.exportTitle': '导出这篇稿件？',
   'mb.ed.exportContent': '会下载当前源码为 .tex，避免浏览器数据被清时丢稿。',
   'mb.ed.export': '导出',
+  'mb.ed.issueBar': '{n} 个错误可能影响编译（点击跳转至第 {line} 行）',
+  'mb.ed.warnBar': '{n} 处语法提示（点击跳转至第 {line} 行）',
 };
 
 export const ED_EN = {
@@ -148,4 +150,6 @@ export const ED_EN = {
   'mb.ed.exportTitle': 'Export this document?',
   'mb.ed.exportContent': 'Downloads the current source as .tex, so cleared browser data cannot cost you the draft.',
   'mb.ed.export': 'Export',
+  'mb.ed.issueBar': '{n} errors may break compilation (tap to jump to line {line})',
+  'mb.ed.warnBar': '{n} syntax hints (tap to jump to line {line})',
 };

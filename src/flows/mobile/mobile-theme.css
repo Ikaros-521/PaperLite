@@ -93,7 +93,7 @@ body,
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* ---------- Sheet：内容自适应高度，键盘弹起时由内联 bottom 偏移 ---------- */
+/* ---------- Sheet：内容自适应高度，键盘避让见下方 .adm-popup-bottom 的 --pl-keyboard 上移 ---------- */
 .pl-sheet {
   display: flex;
   flex-direction: column;
@@ -126,6 +126,13 @@ body,
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line-soft);
   background: var(--chrome);
+}
+
+/* 底部弹层的键盘避让：弹层 portal 到 body，吃的是 App Shell 同步到 body 的
+   --pl-keyboard（不是 .pl-mobile 上的局部副本）；按它整体上移，输入框不再被键盘盖住。
+   ActionSheet 内部同样走 .adm-popup-bottom，一并生效。 */
+.adm-popup.adm-popup-bottom {
+  bottom: var(--pl-keyboard, 0px);
 }
 
 /* ---------- 编译进行中：遮罩上必须放不透明卡片 ----------

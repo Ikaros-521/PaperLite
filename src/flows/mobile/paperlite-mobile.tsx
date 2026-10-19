@@ -4,7 +4,7 @@
 // 导航模式：根层 TabBar，工作区/编译/历史走 Stack push（隐藏 TabBar）
 // =============================================
 
-import { type CSSProperties, useMemo, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { Button, Empty, List, NavBar, NoticeBar, SafeArea, Selector, TabBar, Tag, Toast } from 'antd-mobile'
 import { FileOutline, MessageOutline, SetOutline } from 'antd-mobile-icons'
@@ -47,9 +47,11 @@ function DocumentsTab() {
   const prompt = useMemo(() => {
     const drafts = ws.tabs.filter(tab => !tab.handle && tab.doc && tab.kind !== 'image' && tab.kind !== 'pdf')
     if (!drafts.length || dismissed) return null
+    // 最近编辑的在最前：横幅的「打开最近一篇」按 updatedAt 取，数组末位只是最后创建
+    const ordered = [...drafts].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     return {
       folderName: ws.rootDir?.name || null,
-      pendingTabs: drafts.map(tab => ({
+      pendingTabs: ordered.map(tab => ({
         id: String(tab.id),
         name: tab.name,
         words: wordCount(tab.doc ? tab.doc.getValue() : '').total,
@@ -64,7 +66,7 @@ function DocumentsTab() {
           <Screen4_RestoreBanner
             prompt={prompt}
             onRestore={() => {
-              const first = prompt.pendingTabs[prompt.pendingTabs.length - 1]
+              const first = prompt.pendingTabs[0]
               ws.openTab(Number(first.id))
               navigate(`/m/workspace/${first.id}`)
             }}
@@ -79,7 +81,9 @@ function DocumentsTab() {
 function ChatTab() {
   const ws = useMobileWorkspace()
   const navigate = useNavigate()
-  const recent = ws.tabs.filter(tab => tab.doc)[0]
+  // 「继续最近文稿」按最近编辑取（updatedAt），数组第一个只是最早打开的标签
+  const recent = ws.tabs.filter(tab => tab.doc)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
   // 对话必须贴着一份文稿：没有可编辑的 Doc 时，选区/段落/全文三种上下文都无从取
   if (!ws.activeTab?.doc) {
     return (
@@ -230,6 +234,12 @@ function MobileShell() {
   const location = useLocation()
   const navigate = useNavigate()
   const keyboard = useKeyboardInset()
+
+  // 软键盘高度同步到 body：antd-mobile 的底部弹层 portal 到 document.body，
+  // 落在 .pl-mobile 子树之外，局部的 --pl-keyboard 它们继承不到（同 token 映射的挂法）
+  useEffect(() => {
+    document.body.style.setProperty('--pl-keyboard', `${keyboard}px`)
+  }, [keyboard])
 
   const immersive = IMMERSIVE.some(path => location.pathname.startsWith(path))
   const activeKey = TABS.find(tab => tab.key === location.pathname)?.key ?? ''

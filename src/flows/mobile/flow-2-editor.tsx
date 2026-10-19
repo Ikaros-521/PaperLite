@@ -143,7 +143,7 @@ function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
     const seenL = new Set<string>(), seenB = new Set<string>()
     for (const x of ws.tabs) {
       if (!x.doc) continue
-      const text = x.id === tab.id ? (x.doc as { getValue: () => string }).getValue() : (x.doc as { getValue: () => string }).getValue()
+      const text = (x.doc as { getValue: () => string }).getValue()
       const src = x.id === tab.id ? '' : x.name
       for (const l of collectLabels(text)) if (!seenL.has(l.key)) { seenL.add(l.key); labels.push({ key: l.key, src }) }
       for (const k of collectBibKeys(text)) if (!seenB.has(k.key)) { seenB.add(k.key); bibKeys.push({ key: k.key, src }) }
@@ -1138,8 +1138,8 @@ export function Flow2_Workspace() {
           style={{ cursor: firstIssueWithLine ? 'pointer' : undefined }}
           content={
             errCount > 0
-              ? `${errCount} 个错误可能影响编译（点击跳转至第 ${firstIssueWithLine ? firstIssueWithLine.line + 1 : 1} 行）`
-              : `${warnCount} 处语法提示（点击跳转至第 ${firstIssueWithLine ? firstIssueWithLine.line + 1 : 1} 行）`
+              ? t('mb.ed.issueBar', { n: errCount, line: firstIssueWithLine ? firstIssueWithLine.line + 1 : 1 })
+              : t('mb.ed.warnBar', { n: warnCount, line: firstIssueWithLine ? firstIssueWithLine.line + 1 : 1 })
           }
           onClick={() => {
             if (firstIssueWithLine && typeof firstIssueWithLine.line === 'number') {
