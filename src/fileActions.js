@@ -10,7 +10,7 @@ export function wordCount(text) {
   return { cjk, words, total: cjk + words, characters: [...text.replace(/\s/g, '')].length };
 }
 
-export { readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage } from './historyStorage.js';
+export { readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage, unusedHistory, pruneHistory } from './historyStorage.js';
 
 // ZIP with stored entries: no compression dependency; preserves binary assets and UTF-8 paths.
 export function sourceZip(entries) {

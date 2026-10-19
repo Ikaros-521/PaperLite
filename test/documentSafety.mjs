@@ -51,10 +51,12 @@ for (const kind of ['tex', 'draft']) for (const inFolder of [true, false]) {
   const asBegin = workspaceSrc.indexOf('  const saveTabAs = useCallback(');
   const asDeps = '  }, [t, rootDir, confirm, alertBox, onTreeChanged]);';
   const asSource = workspaceSrc.slice(asBegin, workspaceSrc.indexOf(asDeps, asBegin) + asDeps.length);
+  const copies = [];
   const saveAs = vm.runInNewContext(asSource + '\nsaveTabAs', {
     ...common, rootDir: inFolder ? { name: 'project', getFileHandle: async () => { throw new Error('missing'); } } : null,
     window: { showSaveFilePicker: async () => ({ name: 'paper.tex' }) },
-    fs: { createFile: async () => ({}), writeFileText }, copyHistory: () => true,
+    fs: { createFile: async () => ({}), writeFileText },
+    copyHistory: (from, to, opts) => { copies.push([from, to, opts]); return true; },
     confirm: async () => true, alertBox: () => {}, flashRef: { current: () => {} },
     onTreeChanged() {}, downloadFile() {},
   });
@@ -65,7 +67,37 @@ for (const kind of ['tex', 'draft']) for (const inFolder of [true, false]) {
   assert.equal(disk, 'save-as A'); assert.equal(tabs[0].saved, 'save-as A'); assert.equal(tabs[0].dirty, true);
   assert.equal(tabs[0].kind, 'tex', 'Saving a browser draft to disk turns it into a file-backed tab');
   assert.equal(saveState(tabs[0]), 'diskUnsaved');
+  assert.deepEqual(copies.map(x => x[2].move), [kind === 'draft'],
+    'Only the draft key is migrated away; an unbacked tab may share its path key with another tab');
 }
+
+// 历史快照 effect 的真实实现：换键（另存为/改名）之后 cleanup 的补记要跟着标签的现键写，
+// 否则刚被 copyHistory({ move: true }) 回收的草稿键又被这一笔重新建出来
+const effStart = workspaceSrc.lastIndexOf('useEffect(() => {', workspaceSrc.indexOf('const doc = activeTab?.doc;'));
+const effEnd = '  }, [activeTab?.doc, historyKey, noteHistory]);';
+const effSource = workspaceSrc.slice(effStart, workspaceSrc.indexOf(effEnd, effStart) + effEnd.length);
+assert.ok(effStart > 0 && effSource.includes('flushDoc'), 'The history snapshot effect is extracted from useWorkspace');
+const flushedKeys = (mountedKey, liveKey) => {
+  const doc = { getValue: () => 'typed while saving', on: () => {}, off: () => {} };
+  const tabs = liveKey === null ? [] : [{ id: 1, doc, historyKey: liveKey }];
+  const written = [];
+  let cleanup;
+  vm.runInNewContext(effSource, {
+    useEffect: fn => { cleanup = fn(); }, activeTab: { doc }, historyKey: mountedKey,
+    noteHistory: () => {}, recordVersion: (key, text) => { written.push(key); return { ok: true, dropped: 0 }; },
+    historyClearedRef: { current: new WeakMap() }, tabsRef: { current: tabs },
+    setTimeout, clearTimeout, window: { addEventListener: () => {}, removeEventListener: () => {} },
+  });
+  cleanup();
+  return written;
+};
+assert.deepEqual(flushedKeys('["draft","d1"]', '["project","a.tex"]'), ['["draft","d1"]', '["project","a.tex"]'],
+  'The unmount flush follows the tab to its new key instead of reviving the migrated-away draft key');
+assert.deepEqual(flushedKeys('["draft","d2"]', null), ['["draft","d2"]', '["draft","d2"]'],
+  'A closed tab still flushes its last edit into its own key');
+assert.deepEqual(flushedKeys('["project","chapters/a.tex"]', '["project","chapters/a2.tex"]'),
+  ['["project","chapters/a.tex"]', '["project","chapters/a2.tex"]'],
+  'A rename flushes into the new path key, not the recycled old one');
 
 const template = vm.runInNewContext(extract('  const loadTemplate = async', '\n  // ---- 编译') + '\nloadTemplate', {
   ...common, showConfirm: async () => true, samples: { blank: 'template content' }, setActiveValue() {},
@@ -103,7 +135,7 @@ assert.equal(options({ url: 'blob:test' }).url, 'blob:test');
 assert.equal(options({}).cMapUrl, 'https://example.test/PaperLite/pdfjs/cmaps/');
 assert.equal(options({}).standardFontDataUrl, 'https://example.test/PaperLite/pdfjs/standard_fonts/');
 assert.equal(options({}).cMapPacked, true);
-console.log('Document safety: delayed save/retry/failure, both Save As paths, template dirty state, persistent draft identity and PDF subpath resources passed.');
+console.log('Document safety: delayed save/retry/failure, both Save As paths, draft key migration and unmount flush, template dirty state, persistent draft identity and PDF subpath resources passed.');
 
 // Every compiled-PDF entry point shares the stale-source guard, reading the live Doc.
 let confirmations = 0, downloads = 0;

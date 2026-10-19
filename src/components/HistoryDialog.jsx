@@ -3,7 +3,7 @@ import { compareVersions, inlineChanges } from '../historyDiff.js';
 import { useLang, useT } from '../useI18n.js';
 import { downloadFile } from '../exporter.js';
 
-export default function HistoryDialog({ name, current, versions, onClose, onSnapshot, onRename, onRestore, error, usage, onDelete, onClear, onExportLegacy }) {
+export default function HistoryDialog({ name, current, versions, onClose, onSnapshot, onRename, onRestore, error, usage, onDelete, onClear, unused, onPrune, onExportLegacy }) {
   const t = useT(), lang = useLang();
   const dialog = useRef(null), scroller = useRef(null);
   const [baseId, setBaseId] = useState((versions.find(v => v.text !== current) || versions[0])?.id || 'current');
@@ -90,6 +90,7 @@ export default function HistoryDialog({ name, current, versions, onClose, onSnap
           <span>{(usage.bytes / 1024).toFixed(0)} / {(usage.maxBytes / 1024).toFixed(0)} KiB · {t('hist.versionCount', { n: usage.versions })}</span>
           <progress aria-label={t('hist.storage')} value={usage.bytes} max={usage.maxBytes} />
           <button className="btn sm" disabled={!versions.length} onClick={() => setDeletion('file')}>{t('hist.clearFile')}</button>
+          {onPrune && unused?.keys > 0 && <button className="btn sm" onClick={() => setDeletion('unused')}>{t('hist.pruneUnused')}</button>}
           <button className="btn sm" disabled={!usage.versions} onClick={() => setDeletion('all')}>{t('hist.clearAll')}</button>
         </div>
         <p className="hint history-note">{t('file.historyNote')}</p>
@@ -133,8 +134,8 @@ export default function HistoryDialog({ name, current, versions, onClose, onSnap
         <div className="history-footer">
           {error && <span className="diff-removed" role="alert">{error}</span>}
           {deletion && <div className="history-delete-confirm" role="alert">
-            <span>{t('hist.deleteConfirm.' + deletion)}</span>
-            <button className="btn sm" onClick={() => { const ok = deletion === 'version' ? onDelete(base.id) : onClear(deletion === 'all'); if (ok) setDeletion(null); }}>{t('hist.confirmDelete')}</button>
+            <span>{deletion === 'unused' ? t('hist.deleteConfirm.unused', { keys: unused.keys, versions: unused.versions, kb: Math.max(1, Math.round(unused.bytes / 1024)) }) : t('hist.deleteConfirm.' + deletion)}</span>
+            <button className="btn sm" onClick={() => { const ok = deletion === 'version' ? onDelete(base.id) : deletion === 'unused' ? onPrune() : onClear(deletion === 'all'); if (ok) setDeletion(null); }}>{t('hist.confirmDelete')}</button>
             <button className="btn sm" onClick={() => setDeletion(null)}>{t('hist.cancel')}</button>
           </div>}
           <button className="btn sm" disabled={base.id === 'current'} onClick={() => setDeletion('version')}>{t('hist.deleteVersion')}</button>

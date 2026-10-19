@@ -29,7 +29,7 @@ function build(initial, opts = {}) {
     useCallback: fn => fn,
     tabsRef: { get current() { return tabs; } },
     setTabs: fn => { tabs = fn(tabs); },
-    copyHistory: (from, to) => { calls.copy.push([from, to]); return !opts.copyFails; },
+    copyHistory: (from, to, { move } = {}) => { calls.copy.push([from, to, move]); return !opts.copyFails; },
     setHistoryError: message => calls.errors.push(message),
     renameHistoryKey: model.renameHistoryKey,
     tr: (lang, key) => key, getLang: () => 'zh', t: key => key,
@@ -69,9 +69,9 @@ assert.equal(fixture.tabs()[0].doc, first.doc, 'Renaming never touches the docum
 assert.equal(fixture.tabs()[0].saved, 'body');
 assert.equal(JSON.parse(fixture.tabs()[0].historyKey)[1], 'chapters/a2.tex', 'Version history follows the new path');
 assert.deepEqual(fixture.calls.copy, [
-  [first.historyKey, fixture.tabs()[0].historyKey],
-  [twin.historyKey, fixture.tabs()[1].historyKey],
-], 'Old history keys are merged into the new path key');
+  [first.historyKey, fixture.tabs()[0].historyKey, true],
+  [twin.historyKey, fixture.tabs()[1].historyKey, true],
+], 'Old history keys are merged into the new path key and recycled (both tabs share one old key)');
 assert.equal(fixture.calls.tree, 0, 'renameTabPath itself does not refresh the tree');
 
 fixture = build([first]);
@@ -86,6 +86,7 @@ assert.deepEqual(fixture.tabs().map(tab => tab.path),
   ['sections/a.tex', 'sections/b.tex', 'sections/deep/c.tex']);
 assert.deepEqual(fixture.tabs().map(tab => tab.name), ['a.tex', 'b.tex', 'c.tex'], 'Only the prefix changes');
 assert.equal(JSON.parse(fixture.tabs()[2].historyKey)[1], 'sections/deep/c.tex');
+assert.deepEqual(fixture.calls.copy.map(x => x[2]), [true, true, true], 'Every old prefix key is recycled');
 
 // ---- 历史迁移失败：保留旧键并说明，不把版本静默丢掉 ----
 fixture = build([first], { copyFails: true });

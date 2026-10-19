@@ -125,9 +125,11 @@ export function useWorkspace(ui) {
       clearTimeout(timer); timer = setTimeout(capture, 3000);
     };
     doc.on('change', changed);
-    // 切标签时刷真实文档，绝不记录过期的 activeValue
+    // 切标签时刷真实文档，绝不记录过期的 activeValue。cleanup 跑在新 render 之后，
+    // 另存为/改名换过键的要按标签现键写，否则刚回收的草稿键会被这一下重新建出来
     const flushDoc = () => {
-      if (historyClearedRef.current.get(doc) !== doc.getValue()) recordVersion(historyKey, doc.getValue());
+      const key = tabsRef.current.filter(x => x.doc === doc)[0]?.historyKey || historyKey;
+      if (historyClearedRef.current.get(doc) !== doc.getValue()) recordVersion(key, doc.getValue());
     };
     window.addEventListener('pagehide', flushDoc);
     return () => { clearTimeout(timer); doc.off('change', changed); window.removeEventListener('pagehide', flushDoc); flushDoc(); };
@@ -276,7 +278,9 @@ export function useWorkspace(ui) {
         setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
         await fs.writeFileText(h, value);
         const nextKey = JSON.stringify([rootDir.name, tab.name]);
-        const copied = copyHistory(tab.historyKey, nextKey);
+        // 草稿键按 draftId 索引且只有这一个标签用，转存后标签已不是草稿 → 迁移即回收源键；
+        // 未落盘标签的键是 [范围, 路径]，可能与其他同名内存标签共用，照旧只复制
+        const copied = copyHistory(tab.historyKey, nextKey, { move: tab.kind === 'draft' });
         if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
         setTabs(ts => ts.map(x => x.id === tab.id ? {
           ...x, historyKey: copied ? nextKey : x.historyKey,
@@ -299,7 +303,7 @@ export function useWorkspace(ui) {
         setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
         await fs.writeFileText(h, value);
         const nextKey = JSON.stringify(['', h.name]);
-        const copied = copyHistory(tab.historyKey, nextKey);
+        const copied = copyHistory(tab.historyKey, nextKey, { move: tab.kind === 'draft' });
         if (!copied) setHistoryError(tr(getLang(), 'hist.storageError'));
         setTabs(ts => ts.map(x => x.id === tab.id ? {
           ...x, historyKey: copied ? nextKey : x.historyKey,
@@ -443,12 +447,14 @@ export function useWorkspace(ui) {
       });
     }
     if (!plan.length) return false;
-    // 版本历史按 [文件夹, 路径] 归档，不迁移就等于改名后历史「凭空消失」（与另存为共用 copyHistory）
+    // 版本历史按 [文件夹, 路径] 归档，不迁移就等于改名后历史「凭空消失」（与另存为共用 copyHistory）。
+    // 磁盘旧路径已经不存在，没有任何标签还会再命中旧键 → 迁移即回收，不留僵尸键占共享配额。
+    // 同一旧键被多个标签共用时（同名文件开两次）第二次读到的是空源键，目标键里的版本不受影响。
     const migrated = new Map();
     let historyFailed = false;
     for (const p of plan) {
       if (!p.historyKey) continue;   // 键形状不符（草稿键）：保持原样，历史不迁移
-      if (copyHistory(p.fromKey, p.historyKey)) migrated.set(p.id, p.historyKey);
+      if (copyHistory(p.fromKey, p.historyKey, { move: true })) migrated.set(p.id, p.historyKey);
       else historyFailed = true;
     }
     if (historyFailed) setHistoryError(tr(getLang(), 'hist.storageError'));

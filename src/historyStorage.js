@@ -97,12 +97,33 @@ export function renameVersion(key, id, label) {
   if (!all[key]?.some(v => v.id === id)) return false;
   return persistHistory({ ...all, [key]: all[key].map(v => v.id === id ? { ...v, label: label.trim().slice(0, 100) } : v) }, [id]);
 }
-export function copyHistory(from, to) {
+// move=true 用于「迁移」（草稿转存为文件、磁盘改名换路径）：源键不再被任何标签引用，留下就是纯占共享配额
+export function copyHistory(from, to, { move = false } = {}) {
   if (from === to) return true;
   const all = historyStore();
   const combined = [...(all[from] || []), ...(all[to] || [])];
   const versions = [...new Map(combined.map(v => [v.id, v])).values()].sort((a, b) => b.date - a.date);
-  return persistHistory({ ...all, [to]: versions }, versions[0] ? [versions[0].id] : []);
+  const next = { ...all, [to]: versions };
+  if (move) delete next[from];
+  return persistHistory(next, versions[0] ? [versions[0].id] : []);
+}
+// 没有任何打开标签引用的键（改名/转存留下的、旧版共用的、形状坏掉的）在面板里看不见，
+// 却照样吃共享配额。keep 传当前全部标签的 historyKey。
+function staleEntries(keep) {
+  return Object.entries(historyStore()).filter(([key]) => !keep.has(key));
+}
+export function unusedHistory(keepKeys) {
+  const stale = staleEntries(new Set(keepKeys));
+  return { keys: stale.length, versions: stale.reduce((n, [, list]) => n + list.length, 0),
+    bytes: JSON.stringify(Object.fromEntries(stale)).length * 2 };
+}
+export function pruneHistory(keepKeys) {
+  const keep = new Set(keepKeys);
+  const stale = staleEntries(keep);
+  const versions = stale.reduce((n, [, list]) => n + list.length, 0);
+  const next = Object.create(null);
+  for (const [key, list] of Object.entries(historyStore())) if (keep.has(key)) next[key] = list;
+  return { ok: persistHistory(next), keys: stale.length, versions };
 }
 export function deleteHistory(key, id) {
   const all = historyStore();

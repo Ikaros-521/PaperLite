@@ -3,7 +3,7 @@ import CodeMirror from 'codemirror';
 import FileDialog from './components/FileDialog.jsx';
 import DialogHost from './components/MessageDialog.jsx';
 import { showAlert as alert, showConfirm, showPrompt } from './dialogs.js';
-import { validName, wordCount, readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage, downloadSourceZip } from './fileActions.js';
+import { validName, wordCount, readHistory, recordVersion, renameVersion, deleteHistory, clearHistory, historyUsage, unusedHistory, pruneHistory, downloadSourceZip } from './fileActions.js';
 import HistoryDialog from './components/HistoryDialog.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import { quickInsert, replaceTemplate } from './editorTools.js';
@@ -1504,6 +1504,13 @@ export default function App() {
       {fileDialog === 'history' && activeTab.doc && <HistoryDialog key={activeId} name={activeTab.name} current={activeTab.doc.getValue()} versions={readHistory(historyKey)}
         onExportLegacy={activeTab.kind === 'draft' && readHistory('["","draft"]').length ? () => downloadFile('paperlite-legacy-draft-history.json', JSON.stringify(readHistory('["","draft"]'), null, 2), 'application/json') : null}
         usage={historyUsage(historyKey)}
+        unused={unusedHistory(tabs.filter(tab => tab.historyKey).map(tab => tab.historyKey))}
+        onPrune={() => {
+          const result = pruneHistory(tabsRef.current.filter(tab => tab.historyKey).map(tab => tab.historyKey));
+          setHistoryError(result.ok ? '' : t('hist.storageError'));
+          if (result.ok) flash(t('hist.pruned', { keys: result.keys, versions: result.versions }));
+          setHistoryTick(n => n + 1); return result.ok;
+        }}
         onDelete={id => {
           const version = readHistory(historyKey).find(v => v.id === id);
           const ok = deleteHistory(historyKey, id);
