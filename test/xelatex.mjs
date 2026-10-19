@@ -350,12 +350,15 @@ try {
       headers: { 'Cache-Control': 'no-store' },
     });
   };
-  const appSource = fs.readFileSync(new URL('../src/engines/xelatex.js', import.meta.url), 'utf8')
+  const engineUrl = new URL('../src/engines/xelatex.js', import.meta.url);
+  const appSource = fs.readFileSync(engineUrl, 'utf8')
     // SVG fixture bytes above are already rasterized. Browser decode/canvas is
     // covered in-browser; keep exercising the real driver/upload path in Node.
     .replace('import { prepareCompileGraphics }', 'import { prepareCompileGraphics as prepareGraphics }')
-    .replace("'./xelatexCompatibility.js'", JSON.stringify(new URL('../src/engines/xelatexCompatibility.js', import.meta.url).href))
-    .replace("'../compileGraphics.js'", JSON.stringify(new URL('../src/compileGraphics.js', import.meta.url).href))
+    // data: URL 没有可解析的基准，相对 import 必须先换成绝对 file:// URL。
+    // 逐条手写 replace 清单会在下一个相对 import 出现时静默失效
+    // （../texComments.js 就是这么漏的：npm run test:xelatex 当场 ERR_INVALID_URL）
+    .replace(/from\s*(['"])(\.[^'"]+)\1/g, (m, q, spec) => 'from ' + JSON.stringify(new URL(spec, engineUrl).href))
     + '\nconst prepareCompileGraphics = (source, files) => prepareGraphics(source, files, async bytes => bytes);\n';
   const app = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
   const warm = app.warmEngine(samples.demo);
