@@ -135,6 +135,14 @@ const good = lintLaTeX(samples.demo);
 ok(good.filter(d => d.kind === 'env' || d.kind === 'brace').length === 0, '示例论文环境/花括号零错误: ' + JSON.stringify(good.slice(0, 3)));
 ok(lintLaTeX('text % { $ \\begin{itemize}').length === 0, '注释中的括号、公式和环境不误报');
 ok(lintLaTeX('text \\% {').some(d => d.kind === 'brace'), '转义百分号后仍检查真实语法');
+// 逐字区内部不参与语法判断（预览照原样渲染，lint 不该和它打脸）
+ok(lintLaTeX('\\begin{document}\n\\begin{verbatim}\nif (x) { run($s) } // 50%\n\\end{verbatim}\n\\end{document}').length === 0,
+  'verbatim 里的花括号/$/注释不误报: ' + JSON.stringify(lintLaTeX('\\begin{document}\n\\begin{verbatim}\nif (x) { run($s) } // 50%\n\\end{verbatim}\n\\end{document}')));
+ok(lintLaTeX('\\begin{document}\n\\verb|a{b$c|\n\\end{document}').length === 0, '\\verb 定界符内不误报');
+ok(lintLaTeX('\\begin{document}\n\\begin{verbatim}\nunclosed {\n').some(d => d.kind === 'env'),
+  '未闭合的 verbatim 仍由环境配对报出来');
+ok(lintLaTeX('\\begin{document}\n\\begin{verbatim}\n\\end{verbatim}\n{oops\n').some(d => d.kind === 'brace'),
+  '逐字区之外的真错误照报');
 ok(lintLaTeX('{fixed}').length === 0 && lintLaTeX('{broken').some(d => d.kind === 'brace'), '修改后重新检测，已修复的错误消失');
 ok(lintLaTeX('On a five-level delay sweep ($\\Delta \\in \\{60, 300, 600, 900, 1800\\}$\\,s.').length === 0, '转义花括号紧随公式结尾不误报奇数 $');
 ok(lintLaTeX('Price is \\$100 and \\$200').length === 0, '转义美元 \\$ 不计入数学环境');
@@ -185,6 +193,18 @@ const silentRes = renderLatex('\\documentclass[journal]{IEEEtran}\\begin{documen
 ok(silentRes.warnings.length === 0, 'IEEE 声明命令不产生「不支持的命令」警告: ' + silentRes.warnings.map(w => w.msg).join(' | '));
 const unknownCls = renderLatex('\\documentclass[11pt]{acmsmart}\n\\begin{document}\\section{A}正文\\end{document}');
 ok(unknownCls.meta.layout.family === 'other' && unknownCls.meta.layout.basePt === 11, '未知文档类退化但不报错，字号选项仍生效');
+
+// 畸形列格式规格：曾经 *{ 缺右括号会让 i 绕回 0 无限重入（冻结主线程后 RangeError）
+console.log('== 畸形 tabular 列格式 ==');
+for (const bad of ['{*}', '{*{3}{c}', '{*{99999999}{c}}', '{@}', '{p{2cm}']) {
+  const t0 = Date.now();
+  let threw = null;
+  try { renderLatex(String.raw`\documentclass{article}\begin{tabular}` + bad + String.raw` a \end{tabular}\end{document}`); }
+  catch (e) { threw = e.message; }
+  ok(!threw && Date.now() - t0 < 500, `列格式 ${bad} 不抛错且不阻塞, took ${Date.now() - t0}ms ${threw || ''}`);
+}
+const starCols = renderLatex(String.raw`\documentclass{article}\begin{tabular}{*{3}{c}}a&b&c\end{tabular}\end{document}`);
+ok((starCols.html.match(/<td/g) || []).length === 3, '*{3}{c} 仍展开成 3 列: ' + (starCols.html.match(/<td/g) || []).length);
 
 // ---------- 补齐的命令：\toprule 家族 / \appendix / \mbox / \dots / \verb ----------
 console.log('== 补齐命令 ==');

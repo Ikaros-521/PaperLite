@@ -5,13 +5,44 @@
 import { t } from '../i18n.js';
 import { resolveLayout } from './classLayout.js';
 
+// 逐字区（verbatim/lstlisting/minted 环境内部与 \verb 定界符内）不参与任何语法判断：
+// 里面写 `if (x) { … } // 50%` 是教学示例的正常内容，按 TeX 语法去数花括号/$/\item
+// 只会误报，而预览照原样渲染 —— 两边互相打脸。等长空格替换，行号与偏移不受影响。
+function blankVerbatim(s) {
+  const arr = s.split('');
+  const blank = (from, to) => {
+    for (let i = Math.max(0, from); i < Math.min(to, arr.length); i++) if (arr[i] !== '\n') arr[i] = ' ';
+  };
+  let m;
+  const envRe = /\\begin\s*\{(verbatim\*?|lstlisting|minted)\}(?:\s*\{[^}]*\})?/g;
+  while ((m = envRe.exec(s))) {
+    const bodyStart = m.index + m[0].length;
+    const close = s.indexOf('\\end{' + m[1] + '}', bodyStart);
+    // 未闭合的逐字环境：正文一路遮到文末（环境配对检查自己会在 \begin 处报未闭合）
+    blank(bodyStart, close < 0 ? s.length : close);
+    if (close < 0) break;
+    envRe.lastIndex = close;
+  }
+  const verbRe = /\\(?:verb|lstinline)\*?\s*([^\s\\{}a-zA-Z])/g;
+  while ((m = verbRe.exec(s))) {
+    const bodyStart = m.index + m[0].length;
+    const eol = s.indexOf('\n', bodyStart);
+    const end = s.indexOf(m[1], bodyStart);
+    // 定界符没在本行闭合 = 写错了，交给别的检查报，别把后文整段吞掉
+    if (end < 0 || (eol >= 0 && end > eol)) continue;
+    blank(bodyStart, end);
+    verbRe.lastIndex = end + 1;
+  }
+  return arr.join('');
+}
+
 export function lintLaTeX(src) {
   const out = [];
   const text = String(src || '').replace(/\r\n?/g, '\n');
   const lines = text.split('\n');
 
-  // 预处理：等长抹除注释（\% 转义不算），保留换行
-  const clean = lines.map(l => {
+  // 预处理：等长抹除注释（\% 转义不算），保留换行；逐字区内部一并遮掉
+  const clean = blankVerbatim(lines.map(l => {
     let res = '', bs = 0;
     for (let i = 0; i < l.length; i++) {
       const c = l.charAt(i);
@@ -20,7 +51,7 @@ export function lintLaTeX(src) {
       bs = 0; res += c;
     }
     return res;
-  }).join('\n');
+  }).join('\n'));
   const cleanLines = clean.split('\n');
   // 行首偏移表 + 二分定位：命中处求行号从 O(n) 降到 O(log n)，长文不再二次方
   const lineStarts = [0];

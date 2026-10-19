@@ -15,6 +15,10 @@ import { readDocumentclass, resolveLayout, FALLBACK } from './classLayout.js';
  */
 
 
+// 列格式规格（tabular 的 {…}）里 *{n}{cols} 的展开上限：真实表格远小于此，
+// 上限只用于挡住畸形输入把 align 撑到内存耗尽。
+const MAX_COLSPEC_COLS = 512;
+
 
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -963,7 +967,6 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'LaTeX': return { next: afterName, html: 'LaTeX' };
     case 'TeX': return { next: afterName, html: 'TeX' };
     case 'text': { g1 = G(afterName); if (g1) return { next: g1.end + 1, html: esc(g1.text) }; return null; }
-    case 'hspace': return null;
   }
   return null;
 }
@@ -1442,6 +1445,7 @@ function parseColspec(spec) {
   var i = 0;
   var j = 0;
   for (i = 0; i < spec.length; i++) {
+    if (j > MAX_COLSPEC_COLS) break; // 畸形规格里 *{n} 反复展开，宁可截断也别把内存吃穿
     var c = spec.charAt(i);
     if (c === '|' || c === ':') { rules[j] = true; continue; }
     if (c === 'l' || c === 'c' || c === 'r') { align[j] = c; j++; continue; }
@@ -1459,10 +1463,15 @@ function parseColspec(spec) {
       continue;
     }
     if (c === '*') { // *{n}{cols} 简化：忽略
-      var s1 = spec.indexOf('{', i), e1 = spec.indexOf('}', s1);
+      var s1 = spec.indexOf('{', i), e1 = spec.indexOf('}', s1 + 1);
+      // 残缺规格（缺右括号）必须收尾：-1 若继续循环会把 i 绕回 0 无限重入本分支，
+      // 既冻结主线程又无限撑大 align
+      if (s1 < 0 || e1 < 0) break;
       var cnt = +spec.slice(s1 + 1, e1) || 1;
-      for (var q = 0; q < cnt; q++) { align[j] = 'c'; j++; }
-      i = spec.indexOf('}', e1 + 1);
+      for (var q = 0; q < Math.min(cnt, MAX_COLSPEC_COLS); q++) { align[j] = 'c'; j++; }
+      var e2 = spec.indexOf('}', e1 + 1);
+      if (e2 < 0) break;
+      i = e2;
       continue;
     }
   }
