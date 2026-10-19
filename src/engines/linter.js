@@ -5,6 +5,10 @@
 import { t } from '../i18n.js';
 import { resolveLayout } from './classLayout.js';
 
+// 未闭合环境栈的天花板：真论文几十层就已是异常文档，而栈深直接决定每次 \end
+// 错配的扫描代价，也决定末尾「未闭合」诊断条数。超出后不再入栈，只保留已报的错。
+const MAX_ENV_STACK = 200;
+
 // 逐字区（verbatim/lstlisting/minted 环境内部与 \verb 定界符内）不参与任何语法判断：
 // 里面写 `if (x) { … } // 50%` 是教学示例的正常内容，按 TeX 语法去数花括号/$/\item
 // 只会误报，而预览照原样渲染 —— 两边互相打脸。等长空格替换，行号与偏移不受影响。
@@ -68,15 +72,17 @@ export function lintLaTeX(src) {
   let m;
   while ((m = envRe.exec(clean))) {
     const line = lineAt(m.index);
-    if (m[1] === 'begin') stack.push({ name: m[2], line });
+    if (m[1] === 'begin') { if (stack.length < MAX_ENV_STACK) stack.push({ name: m[2], line }); }
     else {
       const top = stack[stack.length - 1];
       if (!top) out.push({ line, msg: t('lint.envNoBegin', { name: m[2] }), severity: 'error', kind: 'env' });
       else if (top.name !== m[2]) {
         out.push({ line, msg: t('lint.envMismatch', { name: top.name, line: top.line + 1, end: m[2] }), severity: 'error', kind: 'env' });
-        // 尝试从栈中找回匹配
-        const idx = [...stack].reverse().findIndex(s => s.name === m[2]);
-        if (idx >= 0) stack.splice(stack.length - 1 - idx, 1);
+        // 尝试从栈中找回匹配：原地倒序扫，别 [...stack].reverse().findIndex() ——
+        // 名字找不到时栈不会缩短，成批错配（截断/损坏的文件）会退化成二次方
+        let idx = -1;
+        for (let si = stack.length - 1; si >= 0; si--) if (stack[si].name === m[2]) { idx = si; break; }
+        if (idx >= 0) stack.splice(idx, 1);
       } else stack.pop();
     }
   }
