@@ -599,8 +599,8 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
       }
     }
 
-    // 环境
-    if (c === '\\' && str.substr(i, 7) === '\\begin{') {
+    // 环境（\begin 与 { 之间的空格是合法 TeX；闸门只看 \begin 前缀，细节交给 envAt/findEnv）
+    if (c === '\\' && str.substr(i, 6) === '\\begin') {
       var probe = envAt(str, i);
       if (probe) {
         flushP();
@@ -673,9 +673,13 @@ function typesetText(t) {
 
 // i 处是否是 \begin{env}（返回 findEnv 结果或 null）
 function envAt(str, i) {
-  if (str.slice(i, i + 7) !== '\\begin{') return null;
-  var env = findEnv(str, i);
-  return env;
+  // 便宜的前缀闸（挡住 \beginx 这类命令名），真正解析交给 findEnv：
+  // 它的 /\\(begin|end)\s*\{/ 本就允许 \begin {center} 这种空格写法（合法 TeX）
+  if (str.slice(i, i + 6) !== '\\begin') return null;
+  const env = findEnv(str, i);
+  // findEnv 从 fromIndex 起找「下一个」环境：\beginfoo 这种命令名不在 i 处命中时，
+  // 它可能把后文某个真正的环境捞回来——不锚定 outerStart 就会把中间的正文整段吞掉
+  return env && env.outerStart === i ? env : null;
 }
 
 // 引用占位符记下出处偏移：回填不到编号时，警告才知道该挂在哪一行

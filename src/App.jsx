@@ -26,7 +26,7 @@ import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
 import { collectLabels, collectBibKeys } from './projectIndex.js';
-import { resolveMainDoc, hasDocumentclass, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry } from './mainDoc.js';
+import { resolveMainDoc, hasDocumentclass, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry, deleteMainDocEntry } from './mainDoc.js';
 import { collectUserCommands } from './completion.js';
 import { locateLineInSource, paragraphHeadAtLine, stripTexCommands } from './pdfSync.js';
 import { insertImageFile } from './imageInsert.js';
@@ -102,13 +102,16 @@ export default function App() {
     noteHistory, snapshot, snapshotTab,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
-    addDraft, renameTabPath,
+    addDraft, renameTabPath, dropDeletedTabs,
     onDocChange: applyDocChange,
   } = useWorkspace({
     t, flash, alertBox: alert, confirm: showConfirm, prompt: showPrompt,
     onTreeChanged: () => setTreeKey(n => n + 1), onSideTab: setSideTab,
     // 主文档 pin 是唯一按路径存在 localStorage 里、又不在标签同步链路里的设置
     onPathsRenamed: (from, to) => { if (renameMainDocEntry(from, to)) setMainDocSetting(loadMainDocSetting()); },
+    // 文件树删除同理：pin 指向被删文件（或被删文件夹之下）时要清掉，否则旧路径
+    // 留在 localStorage 里，日后同路径新文件一出现 pin 就静默指过去
+    onPathsDeleted: (path, isDir) => { if (deleteMainDocEntry(path, isDir)) setMainDocSetting(loadMainDocSetting()); },
   });
 
   // ---- 视图 ----
@@ -197,6 +200,7 @@ export default function App() {
   const activeIdRef = useRef(activeId); activeIdRef.current = activeId;
   const snapshotRef = useRef(null);   // useWorkspace 的 snapshot 渲染期注入（下方赋值）
   const snapshotTabRef = useRef(null); // 同上，用于给指定标签（agent 改后台文件）打快照
+  const cmLiveRef = useRef(null);     // 判活取编辑器；agent executor 只构建一次，经 ref 取最新实现
 
   // 唤起编辑器内查找/替换面板：seq 递增让同一个模式也能重新聚焦并全选输入框
   const [findReq, setFindReq] = useState(null);
@@ -271,13 +275,19 @@ export default function App() {
     return () => { cancelled = true; };
   }, [rootDir, treeKey]);
 
+  // 每键全文扫描（标签页集合、label/bib 键、\newcommand、主文档候选）统一走 deferred 值：
+  // 这些 memo 若吃实时 activeValue，每次按键都要同步正则扫一遍所有打开标签的全文，
+  // 打开的文件越多打字越卡。预览渲染早就是 deferred 的，补齐这几个漏网的。
+  // 代价是候选最多滞后一个渲染帧——\label 不会在打到一半时需要立刻出现在补全里。
+  const deferred = useDeferredValue(activeValue);
+
   // 合并优先级：当前标签 → 其他打开的标签 → 磁盘扫描结果；键去重，先到先得
   const refCompletion = useMemo(() => {
     const labels = [], bibKeys = [];
     const seenL = new Set(), seenB = new Set();
     for (const tb of tabs) {
       if (!tb.doc) continue;
-      const text = tb.id === activeId ? activeValue : tb.doc.getValue();
+      const text = tb.id === activeId ? deferred : tb.doc.getValue();
       const src = tb.id === activeId ? '' : tb.name;
       for (const l of collectLabels(text)) if (!seenL.has(l.key)) { seenL.add(l.key); labels.push({ key: l.key, src }); }
       for (const k of collectBibKeys(text)) if (!seenB.has(k.key)) { seenB.add(k.key); bibKeys.push({ key: k.key, src }); }
@@ -285,7 +295,7 @@ export default function App() {
     for (const l of folderIndex.labels) if (!seenL.has(l.key)) { seenL.add(l.key); labels.push(l); }
     for (const k of folderIndex.bibKeys) if (!seenB.has(k.key)) { seenB.add(k.key); bibKeys.push(k); }
     return { labels, bibKeys };
-  }, [tabs, activeId, activeValue, folderIndex]);
+  }, [tabs, activeId, deferred, folderIndex]);
 
   // ---- 主文档（编译入口）：固定设置按文件夹名隔离；候选 = 打开的 tex 标签（实时内容）→ 磁盘扫描 ----
   const [mainDocSetting, setMainDocSetting] = useState(() => loadMainDocSetting());
@@ -306,7 +316,7 @@ export default function App() {
       const path = tabPath(tb);
       if (seen.has(path)) continue;
       seen.add(path);
-      list.push({ path, name: tb.name, source: tb.id === activeId ? activeValue : tb.doc.getValue(), open: true });
+      list.push({ path, name: tb.name, source: tb.id === activeId ? deferred : tb.doc.getValue(), open: true });
     }
     for (const f of folderIndex.texFiles) {
       if (seen.has(f.path)) continue; // 已打开的标签用编辑中的内容，磁盘版本不参与
@@ -314,7 +324,7 @@ export default function App() {
       list.push({ path: f.path, name: f.name, source: f.source, open: false, isMain: f.isMain });
     }
     return list;
-  }, [tabs, activeId, activeValue, folderIndex, tabPath]);
+  }, [tabs, activeId, deferred, folderIndex, tabPath]);
 
   const mainDoc = useMemo(() => resolveMainDoc({
     pinned: pinnedMainDoc || null,
@@ -370,8 +380,8 @@ export default function App() {
   }, [folderIndex, tabs, tabPath]);
   // 文档内 \newcommand 定义的命令并入命令补全候选
   const userCommands = useMemo(() => collectUserCommands(
-    tabs.filter(x => x.doc).map(x => (x.id === activeId ? activeValue : x.doc.getValue()))
-  ), [tabs, activeId, activeValue]);
+    tabs.filter(x => x.doc).map(x => (x.id === activeId ? deferred : x.doc.getValue()))
+  ), [tabs, activeId, deferred]);
 
   // ---- 文献检索插入：选中条目 → 生成 BibTeX 追加到 .bib 标签 + 光标处插 \cite ----
   // 目标 .bib 优先级：文档 \bibliography/\addbibresource 引用的 → 已打开的 .bib → refs.bib（新建）
@@ -785,7 +795,6 @@ export default function App() {
 
 
   // ---- 预览渲染 ----
-  const deferred = useDeferredValue(activeValue);
   const latexResult = useMemo(() => {
     if (!isTexLike) return null;
     const t0 = performance.now();
@@ -967,12 +976,15 @@ export default function App() {
     (scope, query, channel) => buildLLMContext({ cm: () => cmRef.current, doc: valueRef.current }, scope, query, channel),
     []);
   // 判活后再交出实例：切到图片/PDF 标签时编辑器卸载，cmRef 仍指向 swapDoc 出来的
-  // 空壳——把「替换全文」写进去等于静默丢失（移动端 chatCm 同款防护）
-  buildContext.cm = () => {
+  // 空壳——把「替换全文」写进去等于静默丢失（移动端 chatCm 同款防护）。
+  // buildContext 与 agentEnv 共用同一份判活，两处口径不能再各写各的
+  const cmLive = () => {
     const inst = cmRef.current;
     const el = inst && inst.getWrapperElement && inst.getWrapperElement();
     return el && el.isConnected ? inst : null;
   };
+  cmLiveRef.current = cmLive;
+  buildContext.cm = cmLive;
 
   // ---- AI 修复（串行队列：勾选/全部 → 逐条发送，单条含超时+退避重试，随时可停止）----
   const MAX_FIX_PER_RUN = 40;
@@ -1145,7 +1157,9 @@ export default function App() {
 
   const agentEnv = useMemo(() => ({
     execute: makeAgentExecutor({
-      cm: () => cmRef.current,
+      // cmLive：切到图片/PDF 标签后编辑器卸载，游离实例上的 insert_text 会「报告
+      // 成功、内容进了空壳」——判活后 toolInsert 拿到 errNoEditor，模型才会改走别的方式
+      cm: () => cmLiveRef.current(),
       tabs: () => tabsRef.current,
       activeId: () => activeIdRef.current,
       tabPath: tb => tabPathRef.current(tb),
@@ -1160,7 +1174,7 @@ export default function App() {
       openByPath: p => openByPathForAgent(p),
     }),
     buildBrief: () => agentProjectBrief({
-      cm: () => cmRef.current,
+      cm: () => cmLiveRef.current(),
       tabs: tabsRef.current,
       activeId: () => activeIdRef.current,
       tabPath: tb => tabPathRef.current(tb),
@@ -1185,7 +1199,7 @@ export default function App() {
     if (result.staleNow ? result.staleNow() : result.source !== activeTab.doc.getValue()) {
       if (!await showConfirm(t('prev.downloadStale'))) return;
     }
-    return downloadCompiled(result);
+    return downloadCompiled(result, e => flash(t('prev.downloadFailed', { msg: e?.message || String(e) })));
   };
 
   const SNIP = makeSnippets(t);
@@ -1292,7 +1306,12 @@ export default function App() {
           <div className="side-body">
             {sideTab === 'files' && (rootDir ? (
               <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey}
-                onRenamed={(oldPath, handle, name) => { renameTabPath(oldPath, handle, name); setTreeKey(n => n + 1); }} />
+                onRenamed={(oldPath, handle, name) => { renameTabPath(oldPath, handle, name); setTreeKey(n => n + 1); }}
+                onDeleted={(path, isDir) => {
+                  const r = dropDeletedTabs(path, isDir);
+                  if (r.closed) flash(t('app.deletedClosed', { path, n: r.closed }));
+                  if (r.kept) flash(t('app.deletedKeptDirty', { n: r.kept }));
+                }} />
             ) : (
               <div className="side-pad side-empty">
                 {restorePrompt && <button className="btn sm" onClick={restoreFolder}>{t('side.restore', { name: restorePrompt.name })}</button>}
@@ -1675,12 +1694,16 @@ function fmtSize(s) {
   const bytes = new Blob([String(s || '')]).size;
   return bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(1) + ' KB';
 }
-async function downloadCompiled(compileResult) {
+async function downloadCompiled(compileResult, onError) {
   try {
     const r = await fetch(compileResult.pdfUrl);
     const blob = await r.blob();
     downloadFile('paper-' + compileResult.engine + '.pdf', blob, 'application/pdf');
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // 下载失败最常见的原因是刚被新一轮编译 revoke 掉 blob URL——静默吞掉的话
+    // 用户只会看到「点了没反应」
+    if (onError) onError(e);
+  }
 }
 
 function previewText(html, fallback) {

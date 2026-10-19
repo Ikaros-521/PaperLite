@@ -1,3 +1,5 @@
+import { foreignLiveKeys } from './liveTabs.js';
+
 const HISTORY_KEY = 'paperlite.history.v1';
 export const HISTORY_LIMITS = Object.freeze({ perFile: 20, total: 200, characters: 1000000 });
 let cachedRaw, cachedStore;
@@ -115,7 +117,11 @@ export function copyHistory(from, to, { move = false } = {}) {
 }
 // 没有任何打开标签引用的键（改名/转存留下的、旧版共用的、形状坏掉的）在面板里看不见，
 // 却照样吃共享配额。keep 传当前全部标签的 historyKey。
-function staleEntries(keep) {
+// 「别的窗口仍打开」的键不算未打开：那是同一个 localStorage，另一窗口的心跳还亮着
+// （liveTabs 注册表），本窗口看不到它的标签，但它的版本历史必须原样保留。
+function staleEntries(keepKeys) {
+  const keep = new Set(keepKeys);
+  for (const k of foreignLiveKeys()) keep.add(k);
   return Object.entries(historyStore()).filter(([key]) => !keep.has(key));
 }
 export function unusedHistory(keepKeys) {
@@ -124,11 +130,13 @@ export function unusedHistory(keepKeys) {
     bytes: JSON.stringify(Object.fromEntries(stale)).length * 2 };
 }
 export function pruneHistory(keepKeys) {
-  const keep = new Set(keepKeys);
-  const stale = staleEntries(keep);
+  const stale = staleEntries(keepKeys);
+  const staleKeys = new Set(stale.map(([key]) => key));
   const versions = stale.reduce((n, [, list]) => n + list.length, 0);
+  // 按「不在待删清单里」重建，而不是按「在本窗口 keep 里」重建：后者会把
+  // 其他窗口仍打开（liveTabs 保护）的键也一并抹掉
   const next = Object.create(null);
-  for (const [key, list] of Object.entries(historyStore())) if (keep.has(key)) next[key] = list;
+  for (const [key, list] of Object.entries(historyStore())) if (!staleKeys.has(key)) next[key] = list;
   return { ok: persistHistory(next), keys: stale.length, versions };
 }
 export function deleteHistory(key, id) {

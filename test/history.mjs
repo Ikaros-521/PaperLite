@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { compareVersions, inlineChanges } from '../src/historyDiff.js';
 import { readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage, unusedHistory, pruneHistory } from '../src/fileActions.js';
+import { noteLiveTabs } from '../src/liveTabs.js';
 import { HISTORY_LIMITS } from '../src/historyStorage.js';
 
 // Reconstruct both original byte strings, including CRLF and missing final newlines.
@@ -214,4 +215,30 @@ assert.equal(renameVersion(key, largeBackup.version.id, 'fail'), false);
 assert.equal(readHistory(key)[0].id, largeBackup.version.id);
 assert.equal(clearHistory(), false);
 assert.equal(readHistory(key)[0].id, largeBackup.version.id);
-console.log('History: exact diff reconstruction, CRLF/EOF, large edits, labels, restore backups and storage failure passed.');
+// ---- 多窗口保护：另一个窗口仍打开的键不算「未打开」 ----
+// liveTabs 注册表键在 historyStorage 之外，直接往 localStorage 里伪造另一窗口的心跳
+const LIVE_KEY = 'paperlite.live-tabs.v1';
+data.clear();
+localStorage.setItem = (k, v) => data.set(k, v);
+const winKey = '["proj","win-file.tex"]';
+recordVersion(winKey, 'other window still open');
+recordVersion('["proj","orphan.tex"]', 'leftover');
+const otherAlive = JSON.stringify({ w2: { keys: [winKey], ts: Date.now() } });
+localStorage.setItem(LIVE_KEY, otherAlive);
+let prunedMW = pruneHistory([]);
+assert.equal(readHistory(winKey).length, 1, '其他窗口心跳内的键必须原样保留');
+assert.equal(readHistory('["proj","orphan.tex"]').length, 0, '真正的孤儿键照常清理');
+assert.equal(prunedMW.keys, 1);
+// 心跳过期（>10min）：另一窗口可能已崩溃/强关，保护解除
+localStorage.setItem(LIVE_KEY, JSON.stringify({ w2: { keys: [winKey], ts: Date.now() - 11 * 60 * 1000 } }));
+prunedMW = pruneHistory([]);
+assert.equal(readHistory(winKey).length, 0, '过期心跳不再保护');
+// 本窗口自己的心跳不参与保护：foreignLiveKeys 排除自身条目。
+// 测试拿不到随机 winId，就用 noteLiveTabs 真实登记本窗口，再验证它的键不被自己保护
+noteLiveTabs(['["x","y"]']);
+recordVersion('["x","y"]', 'my own window entry');
+prunedMW = pruneHistory([]);
+assert.equal(readHistory('["x","y"]').length, 0, '本窗口的心跳不算「其他窗口」');
+data.delete(LIVE_KEY);
+
+console.log('History: exact diff reconstruction, CRLF/EOF, large edits, labels, restore backups, storage failure and multi-window prune protection passed.');

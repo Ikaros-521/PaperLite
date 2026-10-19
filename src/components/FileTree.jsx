@@ -6,7 +6,7 @@ import { useLang, useT } from '../useI18n.js';
 import { showAlert as alert, showConfirm, showPrompt } from '../dialogs.js';
 
 /* 文件树：懒加载展开；文件点击打开；悬停操作（新建/重命名/删除） */
-export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey, onRenamed }) {
+export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey, onRenamed, onDeleted }) {
   const t = useT();
   const lang = useLang();
   const [children, setChildren] = useState({});   // path -> entries[]
@@ -135,6 +135,9 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey, 
       { danger: true, confirmLabel: t('ft.del') })) return;
     try {
       await removeEntry(dir, entry.name, entry.kind === 'directory');
+      // 先通知工作区收标签/清按路径存的设置，再刷新树：被删文件的标签若不同步，
+      // 会一直顶着死句柄，Ctrl+S 只能收获一句英文报错
+      onDeleted?.(entry.path, entry.kind === 'directory');
       refresh(parent);
     } catch (e) { alert(t('ft.delFailed', { msg: e.message || e })); }
   };

@@ -61,6 +61,7 @@ function harness({ echoReqId = true, autoReply = true } = {}) {
       clearTimeout: id => timers.delete(id),
       prepareXeLaTeXSource: text => text,
       prepareCompileGraphics: async (source, files) => ({ source, files }),
+      stripTexComments: text => text,   // 第三趟判定的去注释，沙箱给恒等实现
       fetch: async url => {
         if (String(url).endsWith('manifest.json')) return { ok: true, json: async () => ({ version: 1, files: [] }) };
         // 没有预热清单时引擎只预取格式文件，走不到断言路径

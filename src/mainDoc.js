@@ -49,6 +49,26 @@ export function renameMainDocEntry(from, to) {
   return true;
 }
 
+/**
+ * 删除同步：文件树里删掉的文件/文件夹可能是 pin 的目标（或整棵包含它）。
+ * 不清掉的话旧路径留在 localStorage 里，日后同路径出现新文件时 pin 会静默指过去。
+ * @returns {boolean} 是否真的改动了
+ */
+export function deleteMainDocEntry(path, isDir = false) {
+  const clean = (p) => String(p || '').replace(/^\.?\//, '').replace(/\/+/g, '/');
+  const a = clean(path);
+  if (!a) return false;
+  const hit = (p) => p === a || (isDir && p.startsWith(a + '/'));
+  const all = loadMainDocSetting();
+  let changed = false;
+  for (const [folderKey, pinned] of Object.entries(all)) {
+    if (hit(clean(pinned))) { delete all[folderKey]; changed = true; }
+  }
+  if (!changed) return false;
+  try { localStorage.setItem(LS_KEY, JSON.stringify(all)); } catch (e) { return false; }
+  return true;
+}
+
 // 探测前先抹注释，避免示例代码 / 被注释掉的导言区被误判成主文档
 import { stripTexComments } from './texComments.js';
 

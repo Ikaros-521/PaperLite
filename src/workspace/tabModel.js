@@ -32,14 +32,16 @@ let tabSeq = 0;
 /**
  * 造一个标签。doc 是 CodeMirror Doc 实例（不是字符串），
  * 两端都要按这个形状走，否则 EditorPane / 历史 / 保存逻辑全要对齐两套。
+ * historyPath：历史键用的路径（默认取 path）。未落盘标签的 path 是本地化的
+ * 「(未保存)/x.tex」，直接进键会导致换语言后历史键漂移，调用方传稳定的字面量。
  */
-export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', draftId, updatedAt }) {
+export function makeTab({ name, path, kind, handle, parentDir, text, modeSpec, saved, imageUrl, historyScope = '', historyPath, draftId, updatedAt }) {
   const id = ++tabSeq;
   if (kind === 'draft') draftId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
   const tab = {
     id, name, path: path || name, kind, handle: handle || null, parentDir: parentDir || null,
     draftId,
-    historyKey: JSON.stringify([kind === 'draft' ? 'draft' : historyScope, kind === 'draft' ? draftId : path || name]),
+    historyKey: JSON.stringify([kind === 'draft' ? 'draft' : historyScope, kind === 'draft' ? draftId : historyPath ?? (path || name)]),
     saved: saved !== undefined ? saved : (text || ''),
     imageUrl: imageUrl || null,
     // 移动端文稿列表要按「多久没动」排序与展示；桌面忽略这个字段
@@ -113,4 +115,60 @@ export function markDraftsStored(tabs, persisted) {
 /** beforeunload 判据：草稿看内容与已存快照是否一致，文件标签看 dirty */
 export function hasUnsavedWork(tabs) {
   return tabs.some(x => x.kind === 'draft' ? x.doc && x.doc.getValue() !== x.saved : x.dirty);
+}
+
+/** 跨窗口草稿合并：另一窗口整库写回 LS_DRAFTS 时（storage 事件），把它的草稿按 draftId 并进来。
+ *  - 本地有未保存内容的草稿一律保留本地（谁正在编辑谁说了算），落盘后下一轮合并自然收敛
+ *  - 本地干净的草稿跟随远端新文本（换一个 Doc 对象，不在 setState 更新器里做任何变更）
+ *  - 远端删除的草稿：本地干净就跟着删，本地有未保存内容则保留
+ *  - 远端新增的草稿：追加为标签（落在最后，不打断当前焦点）
+ * 无变化时返回原数组引用，让 setTabs 的 bail-out 生效。 */
+export function mergeRemoteDrafts(tabs, remoteRaw) {
+  let remote;
+  try {
+    const arr = JSON.parse(remoteRaw || '[]');
+    remote = Array.isArray(arr) ? arr.filter(d => d && typeof d.text === 'string' && typeof d.id === 'string' && d.id) : [];
+    // 有条目但全部非法 = 载荷损坏（半截写入等），按兵不动；空数组是「对面删光了」，
+    // 是真实语义，照常跟随
+    if (Array.isArray(arr) && arr.length && !remote.length) return tabs;
+  } catch (e) { return tabs; }
+  const remoteById = new Map(remote.map(d => [d.id, d]));
+  const localUnsaved = (tab) => tab.dirty || (tab.doc ? tab.doc.getValue() !== tab.saved : false);
+  let changed = false;
+  const next = [];
+  for (const tab of tabs) {
+    if (tab.kind !== 'draft' || !tab.doc) { next.push(tab); continue; }
+    const r = remoteById.get(tab.draftId);
+    if (!r) {
+      if (localUnsaved(tab)) { next.push(tab); continue; }   // 别的窗口删了，但这边还有没落盘的内容
+      changed = true; continue;                               // 干净：跟随删除
+    }
+    remoteById.delete(tab.draftId);
+    if (!localUnsaved(tab)) {
+      const remoteName = String(r.name || '').slice(0, 80);
+      const textChanged = r.text !== tab.doc.getValue();
+      const nameChanged = !!remoteName && remoteName !== tab.name;
+      if (textChanged || nameChanged) {
+        changed = true;
+        // 换新 Doc 而不是原地 setValue：不在 setState 更新器里改 Doc 内容，
+        // 也让依赖 doc 身份的 effect（历史快照、诊断标记）自然重置
+        next.push({
+          ...tab,
+          name: nameChanged ? remoteName : tab.name,
+          doc: textChanged ? new CodeMirror.Doc(r.text, 'stex') : tab.doc,
+          saved: r.text, saveError: '',
+          updatedAt: Number.isFinite(r.updated) ? r.updated : tab.updatedAt,
+        });
+        continue;
+      }
+    }
+    next.push(tab);
+  }
+  if (remoteById.size) {
+    changed = true;
+    for (const r of remoteById.values()) {
+      next.push(makeTab({ name: String(r.name || '').slice(0, 80) || tr(getLang(), 'app.draftName'), kind: 'draft', draftId: r.id, text: r.text, modeSpec: 'stex', saved: r.text, updatedAt: r.updated }));
+    }
+  }
+  return changed ? next : tabs;
 }

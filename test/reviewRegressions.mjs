@@ -142,6 +142,7 @@ function engineHarness({ manifestPending = false, prepareGraphics } = {}) {
     setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
     prepareXeLaTeXSource: text => text,
     prepareCompileGraphics: prepareGraphics || (async (source, files) => ({ source, files })),
+    stripTexComments: text => text,   // 第三趟判定只看去注释文本，沙箱里给恒等实现即可
     fetch: async (_url, { signal }) => {
       if (manifestPending) return new Promise((_, reject) => {
         signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });

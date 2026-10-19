@@ -104,11 +104,19 @@ export default function Toolbar({
 
   useEffect(() => {
     const onDoc = e => { if (rootRef.current && !rootRef.current.contains(e.target)) close(); };
-    const onKey = e => { if (e.key === 'Escape') { close(); document.getElementById('compactMenuToggle')?.focus(); } };
+    // 只在本组件真有菜单/浮层开着时响应 Esc：无条件监听会把每一次 Esc 都吃掉，
+    // 叠在下面的层（沉浸模式退出等）跟着遭殃，焦点还会被莫名抢走。
+    // stopPropagation 让一次 Esc 只退一层（本组件在 document 冒泡阶段，先于 App 的 window 监听）
+    const onKey = e => {
+      if (e.key !== 'Escape' || (open === null && !menuOpen)) return;
+      e.stopPropagation();
+      close();
+      document.getElementById('compactMenuToggle')?.focus();
+    };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
-  }, []);
+  });
 
   const engineOk = engines && engines.length;
   const statusKey = { loading: 'app.engineLoading', warming: 'app.engineWarming', error: 'app.engineError' }[builtinStatus];

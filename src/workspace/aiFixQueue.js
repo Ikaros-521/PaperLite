@@ -74,6 +74,13 @@ export async function runFixQueue({
             ? Math.min(suggested, MAX_BACKOFF_MS)
             : backoffDelay(attempt - 1, baseDelay);
           await sleep(wait, signal);
+          // 退避被打断时 sleep 提前返回：直接按取消收尾，不再回到循环顶
+          // 多调一次 invoke（那会闪回 fixing 态、对有副作用的实现等于多执行一轮）
+          if (aborted()) {
+            results[id] = { status: 'cancelled' };
+            onUpdate(id, results[id]);
+            break;
+          }
           continue;
         }
         results[id] = { status: 'failed', error: err.message, code: err.code };

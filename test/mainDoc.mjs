@@ -1,5 +1,5 @@
 /* 主文档（编译入口）解析测试：固定设置、自动探测、磁盘扫描回退 */
-import { hasDocumentclass, resolveMainDoc, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry } from '../src/mainDoc.js';
+import { hasDocumentclass, resolveMainDoc, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry, deleteMainDocEntry } from '../src/mainDoc.js';
 
 let pass = 0, fail = 0;
 function ok(cond, msg) {
@@ -103,6 +103,19 @@ ok(renameMainDocEntry('chapters', 'secs') === true, '文件夹改名换整段前
 ok(loadMainDocSetting().paper === 'secs/intro-v2.tex', '前缀迁移: ' + loadMainDocSetting().paper);
 ok(renameMainDocEntry('secs', 'secs') === false && renameMainDocEntry('', 'x') === false, '同名或空路径不动存储');
 ok(renameMainDocEntry('gone', 'x') === false, '没命中就别惊动 React 状态');
+
+console.log('== pin 删除同步 ==');
+lsStore.clear();
+saveMainDocSetting('paper', 'chapters/intro.tex');
+saveMainDocSetting('other', 'main.tex');
+ok(deleteMainDocEntry('chapters/intro.tex') === true, '删掉的文件若是 pin 目标要清掉');
+ok(!('paper' in loadMainDocSetting()), '该文件夹键已删: ' + JSON.stringify(loadMainDocSetting()));
+ok(loadMainDocSetting().other === 'main.tex', '别的文件夹不受影响');
+saveMainDocSetting('paper', 'secs/a.tex');
+saveMainDocSetting('paper2', 'secs/sub/b.tex');
+ok(deleteMainDocEntry('secs', true) === true, '删除文件夹清整棵子树下的 pin');
+ok(!('paper' in loadMainDocSetting()) && !('paper2' in loadMainDocSetting()), '子树 pin 全清: ' + JSON.stringify(loadMainDocSetting()));
+ok(deleteMainDocEntry('secs/other.tex') === false && deleteMainDocEntry('') === false, '没命中/空路径不动存储');
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

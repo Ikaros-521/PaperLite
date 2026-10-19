@@ -14,9 +14,14 @@ import { infoFor } from '../fileTypes.js';
 import { validName } from '../fileActions.js';
 import { downloadFile } from '../exporter.js';
 import { recordVersion, copyHistory } from '../historyStorage.js';
+import { noteLiveTabs } from '../liveTabs.js';
 import { samples } from '../engines/samples.js';
 import { tr, getLang, detectLang } from '../i18n.js';
-import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedWork, renameHistoryKey } from './tabModel.js';
+import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedWork, renameHistoryKey, mergeRemoteDrafts, LS_DRAFTS } from './tabModel.js';
+
+/** 未落盘标签进历史键的稳定路径前缀：本地化的「(未保存)」会随界面语言漂移，
+ * 直接当键用，切一次语言历史就全部查无此键 */
+const UNSAVED_DIR = 'unsaved';
 
 /**
  * @param ui {{
@@ -28,10 +33,11 @@ import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedW
  *   onTreeChanged: () => void,
  *   onSideTab: (tab: string) => void,
  *   onPathsRenamed?: (from: string, to: string) => void,  // 顶层改名：让别的按路径存的设置（主文档 pin）跟上
+ *   onPathsDeleted?: (path: string, isDir: boolean) => void,  // 文件树删除：同上
  * }}
  */
 export function useWorkspace(ui) {
-  const { t, flash, alertBox, confirm, prompt, onTreeChanged, onSideTab, onPathsRenamed } = ui;
+  const { t, flash, alertBox, confirm, prompt, onTreeChanged, onSideTab, onPathsRenamed, onPathsDeleted } = ui;
 
   const [tabs, setTabs] = useState(() => restoreDraftTabs(detectLang()));
   // 焦点落在最后恢复的那篇（最近编辑的）；不依赖模块级计数器，StrictMode 下会被调用两次
@@ -89,6 +95,27 @@ export function useWorkspace(ui) {
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
   }, [tabs]);
+
+  // 跨窗口草稿同步：整库写回只发生在「别的窗口」（storage 事件不回声给自己），
+  // 按 draftId 合并远端，别让两个窗口各自拿旧快照互相整库覆盖——那是把对方的
+  // 新草稿静默抹掉、把对方刚删的草稿原样复活
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (!e || e.key !== LS_DRAFTS) return;
+      setTabs(ts => mergeRemoteDrafts(ts, e.newValue));
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // 多窗口历史保护：本窗口引用的 historyKey 定期登记心跳（60s），
+  // 另一窗口「清理未打开的历史」时会跳过这些键（见 liveTabs.js / historyStorage.js）
+  const liveSig = tabs.map(x => x.historyKey || '').join('\n');
+  useEffect(() => {
+    noteLiveTabs(liveSig ? liveSig.split('\n') : []);
+    const iv = setInterval(() => noteLiveTabs(tabsRef.current.filter(x => x.historyKey).map(x => x.historyKey)), 60_000);
+    return () => clearInterval(iv);
+  }, [liveSig]);
 
   // ---- 版本历史快照 ----
   // 失败只在历史对话框页脚常驻；超限文档（>1M 字符）每次快照都失败，对话框外
@@ -167,7 +194,9 @@ export function useWorkspace(ui) {
     if (!restorePrompt) return;
     const perm = await fs.requestPermission(restorePrompt, 'readwrite');
     if (perm === 'granted') { setRootDir(restorePrompt); setRestorePrompt(null); onSideTab('files'); }
-  }, [restorePrompt, onSideTab]);
+    // 拒绝授权时也吱一声：点了「恢复」却毫无动静，用户只会以为按钮坏了
+    else flashRef.current(t('app.permDenied'));
+  }, [restorePrompt, onSideTab, t]);
 
   // ---- 打开文件 ----
   const openFileTab = useCallback(async (fileHandle, path, parentDir) => {
@@ -208,7 +237,7 @@ export function useWorkspace(ui) {
     const name = input.trim();
     if (!validName(name)) { alertBox(t('app.badFileName')); return; }
     const info = infoFor(name);
-    const tab = makeTab({ name, path: t('app.unsavedPath') + '/' + name, kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
+    const tab = makeTab({ name, path: t('app.unsavedPath') + '/' + name, historyPath: UNSAVED_DIR + '/' + name, kind: info.kind, text: '', modeSpec: info.mode, saved: '' });
     setTabs(ts => ts.concat([tab])); setActiveId(tab.id); setActiveValue('');
     flashRef.current(t('app.created', { name }));
   }, [t, prompt, alertBox]);
@@ -223,7 +252,7 @@ export function useWorkspace(ui) {
     let name = base + '-copy' + ext, n = 2;
     while (tabsRef.current.some(tab => tab.name === name)) name = base + '-copy-' + n++ + ext;
     const value = source.doc.getValue(), info = infoFor(name);
-    const copy = makeTab({ name, path: t('app.unsavedPath') + '/' + name, kind: info.kind, text: value, modeSpec: info.mode, saved: '' });
+    const copy = makeTab({ name, path: t('app.unsavedPath') + '/' + name, historyPath: UNSAVED_DIR + '/' + name, kind: info.kind, text: value, modeSpec: info.mode, saved: '' });
     copy.dirty = !!value;
     setTabs(ts => ts.concat(copy)); setActiveId(copy.id); setActiveValue(value);
     flashRef.current(t('app.created', { name }));
@@ -248,6 +277,9 @@ export function useWorkspace(ui) {
             if (opened) {
               if (opened.doc) {
                 const value = await file.text();
+                // 覆盖前给现有缓冲留一版历史：用户刚敲的内容只差一步就被整文件替换，
+                // 3s 防抖快照未必来得及拍到
+                snapshotTab(opened, tr(getLang(), 'hist.beforeUpload'));
                 opened.doc.setValue(value);
                 setTabs(ts => ts.map(x => x.id === opened.id ? { ...x, saved: value, dirty: false } : x));
               } else {
@@ -276,7 +308,7 @@ export function useWorkspace(ui) {
       if (rootDir) onSideTab('files');
     };
     input.click();
-  }, [t, rootDir, confirm, alertBox, openFileTab, onTreeChanged, onSideTab]);
+  }, [t, rootDir, confirm, alertBox, openFileTab, onTreeChanged, onSideTab, snapshotTab]);
 
   // ---- 另存为 ----
   const saveTabAs = useCallback(async (tab) => {
@@ -380,23 +412,61 @@ export function useWorkspace(ui) {
     const tab = tabsRef.current.filter(x => x.id === id)[0];
     if (tab && tab.dirty && !await confirm(tr(getLang(), 'app.dirtyClose', { name: tab.name }))) return false;
     if (tab && tab.imageUrl) URL.revokeObjectURL(tab.imageUrl);
+    // 焦点与落盘按 tabsRef 镜像决策；tabs 的增删走纯更新器（并发关两个标签时
+    // 两次 filter 各自生效，不互相覆盖）——更新器里再 setState 是 React 禁止的非纯操作
+    const mirror = tabsRef.current.filter(x => x.id !== id);
+    let replacement = null;
+    if (!mirror.length) {
+      const text = samples.blank;
+      replacement = makeTab({ name: tr(getLang(), 'app.draftName'), path: tr(getLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text });
+    }
     setTabs(ts => {
       const rest = ts.filter(x => x.id !== id);
-      if (!rest.length) {
-        const text = samples.blank;
-        const nt = makeTab({ name: tr(getLang(), 'app.draftName'), path: tr(getLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text });
-        setActiveId(nt.id); setActiveValue(text);
-        return [nt];
-      }
-      if (id === activeId) {
-        const nt = rest[rest.length - 1];
-        setActiveId(nt.id);
-        setActiveValue(nt.doc ? nt.doc.getValue() : '');
-      }
-      return rest;
+      return rest.length ? rest : [replacement];
     });
+    if (replacement) { setActiveId(replacement.id); setActiveValue(samples.blank); }
+    else if (id === activeId) {
+      const nt = mirror[mirror.length - 1];
+      if (nt) { setActiveId(nt.id); setActiveValue(nt.doc ? nt.doc.getValue() : ''); }
+    }
+    // 关闭即刻写一次草稿键：只等 800ms 防抖的话，「关掉草稿→马上刷新」会复活被删的草稿
+    try { persistDrafts(replacement ? [replacement] : mirror); } catch (e) { /* 防抖自动保存会再报 */ }
     return true;
   }, [activeId, confirm]);
+
+  /** 文件树删除后收拾工作区：被删路径下的干净标签直接关掉；有未保存内容的保留
+   * （句柄已指向不存在的文件，摘掉 handle 让 Ctrl+S 走另存为挽回）；主文档 pin 交给 onPathsDeleted。
+   * @returns {{ closed: number, kept: number }} 供调用方决定提示文案 */
+  const dropDeletedTabs = useCallback((path, isDir) => {
+    const target = String(path || '').trim();
+    if (!target) return { closed: 0, kept: 0 };
+    const under = (p) => p === target || (isDir && !!p && p.startsWith(target + '/'));
+    const victims = tabsRef.current.filter(x => x.handle && under(x.path || x.name));
+    if (!victims.length) return { closed: 0, kept: 0 };
+    if (onPathsDeleted) { try { onPathsDeleted(target, isDir); } catch (e) { /* 设置清不动不拖累关标签 */ } }
+    const unsaved = (x) => x.dirty || (x.doc ? x.doc.getValue() !== x.saved : false);
+    const keepIds = new Set(victims.filter(unsaved).map(x => x.id));
+    const closeIds = new Set(victims.filter(x => !keepIds.has(x.id)).map(x => x.id));
+    for (const x of victims) if (x.imageUrl && closeIds.has(x.id)) URL.revokeObjectURL(x.imageUrl);
+    const mirror = tabsRef.current
+      .filter(x => !closeIds.has(x.id))
+      .map(x => keepIds.has(x.id) ? { ...x, handle: null, parentDir: null } : x);
+    let replacement = null;
+    if (!mirror.length) {
+      const text = samples.blank;
+      replacement = makeTab({ name: tr(getLang(), 'app.draftName'), path: tr(getLang(), 'app.draftPath'), kind: 'draft', text, modeSpec: 'stex', saved: text });
+    }
+    setTabs(ts => {
+      const rest = ts.filter(x => !closeIds.has(x.id)).map(x => keepIds.has(x.id) ? { ...x, handle: null, parentDir: null } : x);
+      return rest.length ? rest : [replacement];
+    });
+    if (replacement) { setActiveId(replacement.id); setActiveValue(samples.blank); }
+    else if (closeIds.has(activeId)) {
+      const nt = mirror[mirror.length - 1];
+      if (nt) { setActiveId(nt.id); setActiveValue(nt.doc ? nt.doc.getValue() : ''); }
+    }
+    return { closed: closeIds.size, kept: keepIds.size };
+  }, [activeId, onPathsDeleted]);
 
   /** 编辑器内容变化：脏标记 + 让旧的编译诊断失效 */
   const onDocChange = useCallback((doc, value, retireDiagnostics) => {
@@ -542,7 +612,7 @@ export function useWorkspace(ui) {
     noteHistory, snapshot, snapshotTab,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
-    addDraft, renameTab, renameTabPath, persistNow,
+    addDraft, renameTab, renameTabPath, persistNow, dropDeletedTabs,
     onDocChange, activateTab,
   };
 }

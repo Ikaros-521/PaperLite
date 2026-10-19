@@ -118,9 +118,14 @@ export function makeBibKey(entry, existingKeys) {
   return key;
 }
 
-// 字段值里的 LaTeX 特殊字符转义；花括号保护大小写由调用侧不干预
+// 字段值里的 LaTeX 特殊字符转义；花括号保护大小写由调用侧不干预。
+// 已知危险原语先中和（前置反斜杠翻倍成字面量）：外部 API 的标题不该能往导言区
+// 塞 \input/\write18 这类控制序列——真编译路径会照单执行。不全面禁反斜杠：
+// 物理/数学类标题里 $\alpha$ 这类数学是正当内容
 function besc(s) {
-  return String(s || '').replace(/([&%$#_])/g, '\\$1');
+  return String(s || '')
+    .replace(/\\(input|include|openin|openout|read|write18?|special|immediate|catcode|csname|expandafter|noexpand|unexpanded|directlua|luaexec|shellescape|stopmode|batchmode|endinput)\b/gi, '\\\\$1')
+    .replace(/([&%$#_])/g, '\\$1');
 }
 
 /** 条目 → BibTeX 文本。期刊用 @article(journal=)，会议用 @inproceedings(booktitle=)，其余 @misc */

@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { loadPdfLibrary, pdfOptions } from '../pdf.js';
 import { buildPageIndex, findTextInDoc } from '../pdfSync.js';
+import { showPrompt } from '../dialogs.js';
 
 function PdfPage({ pdf, number, scale, width, height, root, flash, onBackSync }) {
   const host = useRef(null), canvas = useRef(null), text = useRef(null);
@@ -82,7 +83,18 @@ const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh
     indexesRef.current = []; setFlash(null);
     loadPdfLibrary().then(async lib => {
       if (cancelled) return;
-      task = lib.getDocument(pdfOptions({ url }));
+      // 加密 PDF：pdfjs 不给 onPassword 时直接抛 PasswordException 英文原文。
+      // 这里弹本地化的密码框；密码错误会带着「再试一次」重新弹，取消则销毁任务
+      // 走正常错误分支，而不是永远挂起
+      const askPassword = async (update, reason) => {
+        const wrong = lib.PasswordResponses ? reason === lib.PasswordResponses.INCORRECT_PASSWORD : reason === 2;
+        const pw = await showPrompt(zh
+          ? (wrong ? '密码不对，请再输一次（取消则停止加载）' : '这份 PDF 已加密，请输入打开密码')
+          : (wrong ? 'Incorrect password. Try again (cancel to stop loading)' : 'This PDF is encrypted. Enter the password to open it'));
+        if (pw == null) { try { task?.destroy(); } catch (e2) { /* 已断开 */ } return; }
+        update(pw);
+      };
+      task = lib.getDocument(pdfOptions({ url, onPassword: askPassword }));
       const doc = await task.promise;
       const sizes = [];
       for (let i = 1; i <= doc.numPages; i++) {

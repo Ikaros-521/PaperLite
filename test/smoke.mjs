@@ -466,5 +466,14 @@ for (const key of Object.keys(DICT.zh).filter(k => k.startsWith('style.') || k.s
   ok(!/[\u4e00-\u9fff]/.test(DICT.en[key]), '英文翻译完整: ' + key);
 }
 
+// \begin 与 { 之间的空格是合法 TeX：曾经只认 \begin{，导致降级成「不支持的命令」
+const spacedEnv = renderLatex('\\documentclass{article}\n\\begin{document}\n\\begin {center}\n居中文字\n\\end {center}\n\\end{document}');
+ok(spacedEnv.html.includes('居中文字'), '\\begin {center} 空格写法照常渲染');
+ok(!spacedEnv.warnings.some(w => (w.msg || '').includes('不支持') || /unsupported/i.test(w.msg || '')), '不产生 unsupported 警告');
+// \beginfoo 是普通命令名：不得把后文真正的环境当成它的一部分吞掉
+const fakeBegin = renderLatex('\\documentclass{article}\n\\begin{document}\n\\beginfoo x\\par 前文保留\\begin {center}内文\\end{center}\n\\end{document}');
+ok(fakeBegin.html.includes('前文保留'), '\\beginfoo 不吞后文正文');
+ok(fakeBegin.html.includes('内文'), '后接的真实环境照常渲染');
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

@@ -13,6 +13,7 @@
 
 import { prepareXeLaTeXSource } from './xelatexCompatibility.js';
 import { prepareCompileGraphics } from '../compileGraphics.js';
+import { stripTexComments } from '../texComments.js';
 
 const BASE = ((import.meta.env && import.meta.env.BASE_URL) || '/') + 'xelatex/';
 // Worker 里同步 XHR 的相对 URL 以 Worker 脚本位置为基准，必须在主线程解析成绝对地址
@@ -413,8 +414,10 @@ async function runCompile(source, files, expected) {
       return { ok: false, log, errors: parseLog(log), engine: 'builtin' };
     }
     // BibTeX writes the bibliography after a TeX pass. A third pass resolves
-    // citation labels read from the bibliography on pass two.
-    if (/\\bibliography\s*\{/.test(source)) {
+    // citation labels read from the bibliography on pass two. Test the
+    // comment-stripped source: a commented-out \bibliography must not buy a
+    // wasted third pass (seconds of worker time).
+    if (/\\bibliography\s*\{/.test(stripTexComments(source))) {
       try {
         r2 = await call(texWorker, 'XeTeX pass 3',
           reqId => texWorker.postMessage({ cmd: 'compilelatex', reqId }), d => d.cmd === 'compile');

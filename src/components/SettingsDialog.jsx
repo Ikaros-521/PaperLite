@@ -100,6 +100,19 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
   const [testing, setTesting] = useState(null); // {id, result}；多渠道并发测试时后点的赢
   const [reveal, setReveal] = useState({});     // 各渠道 API Key 是否明文显示
 
+  // Esc 关闭（其余弹窗都是原生 <dialog>，Esc 天生可用；这里也要放在早退 return 之前——
+  // hook 不能随开合增减）。stopPropagation 一次只退一层，不惊动底下的层
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const patch = (id, field, value) => {

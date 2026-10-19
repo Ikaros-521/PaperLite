@@ -163,7 +163,12 @@ export default function FindReplace({ cm, doc, open, request, onClose }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
+      if (e.key === 'Escape') {
+        // 上面还叠着别的层时让路：原生 <dialog> 的 Esc 取消要靠默认行为（preventDefault
+        // 会把它一并吃掉），补全菜单的 Esc 归 CodeMirror 管。各层一次只退一层
+        if (document.querySelector('dialog[open], .CodeMirror-hints')) return;
+        e.preventDefault(); e.stopPropagation(); onClose();
+      }
       else if (e.key === 'F3') { e.preventDefault(); jump(e.shiftKey ? -1 : 1); }
     };
     document.addEventListener('keydown', onKey, true);

@@ -14,8 +14,9 @@ assert.ok(begin > 0 && renameSrc.includes('const renameTab = useCallback(async (
 
 const tabModelBody = readFileSync(new URL('../src/workspace/tabModel.js', import.meta.url), 'utf8')
   .split('\n').filter(line => !line.startsWith('import ')).join('\n').replace(/^export /gm, '');
-const model = vm.runInNewContext(tabModelBody + '\n({ makeTab, renameHistoryKey })', {
+const model = vm.runInNewContext(tabModelBody + '\n({ makeTab, renameHistoryKey, mergeRemoteDrafts })', {
   crypto: { randomUUID }, CodeMirror: { Doc: function (text) { this.getValue = () => text; } },
+  tr: (_, k) => k, getLang: () => 'zh',
 });
 
 const root = { name: 'project' };
@@ -152,3 +153,44 @@ assert.deepEqual(fixture.calls.alerts, ['app.badFileName']);
 assert.equal(fixture.calls.renamed.length, 0);
 
 console.log('Rename sync: tree notification, handle/path/history migration, folder prefix moves, disk-first mobile rename and failure paths passed.');
+
+// ---- 跨窗口草稿合并（storage 事件整库写回的应答方）----
+// 谁正在编辑谁说了算：本地有未保存内容的草稿一律保留；干净的跟随远端增删改
+const mkDraft = (name, text, dirty = false) => {
+  const t = model.makeTab({ name, kind: 'draft', text, saved: dirty ? '' : text });
+  return { ...t, dirty };
+};
+const remoteOf = tabs => JSON.stringify(tabs.map(x => ({ id: x.draftId, name: x.name, text: x.doc.getValue(), updated: 500 })));
+
+let locals = [mkDraft('a.tex', 'local v1'), mkDraft('b.tex', 'local v1'), mkDraft('c.tex', 'dirty body', true)];
+let remote = JSON.stringify([
+  { id: locals[0].draftId, name: 'a.tex', text: 'remote v2', updated: 500 },   // 改：本地干净 → 跟随
+  { id: locals[1].draftId, name: 'b-renamed.tex', text: 'local v1', updated: 500 }, // 改名：跟随
+  // locals[2]（脏的）被远端删掉 → 保留本地
+  { id: 'new-1', name: 'd.tex', text: 'from other window', updated: 500 },     // 新增 → 追加
+]);
+let merged = model.mergeRemoteDrafts(locals, remote);
+assert.equal(merged.length, 4, `脏的被删要保留、新增要追加（得到 ${merged.length}）`);
+assert.equal(merged[0].doc.getValue(), 'remote v2', '干净的草稿跟随远端更新');
+assert.equal(merged[0].saved, 'remote v2', 'saved 一并推进，避免 beforeunload 误报');
+assert.notEqual(merged[0].doc, locals[0].doc, '换新 Doc，不在更新器里原地改');
+assert.equal(merged[1].name, 'b-renamed.tex', '远端改名跟随');
+assert.equal(merged[2].name, 'c.tex', '本地脏的即使被远端删除也保留');
+assert.equal(merged[3].draftId, 'new-1', '远端新增草稿按原 draftId 追加');
+assert.equal(merged[3].doc.getValue(), 'from other window');
+
+// 无变化必须返回原数组引用，让 setTabs 的 bail-out 生效
+let same = model.mergeRemoteDrafts(locals, remoteOf(locals));
+assert.equal(same, locals, '完全一致时返回原引用');
+same = model.mergeRemoteDrafts(locals, 'not json');
+assert.equal(same, locals, '远端载荷坏掉时按兵不动');
+same = model.mergeRemoteDrafts(locals, JSON.stringify([{ id: 'x', text: 42 }]));
+assert.equal(same, locals, '形状不对（text 非字符串）的条目忽略');
+
+// 本地脏 + 远端有更新：本地赢，远端文本在本地落盘后的下一轮合并再进来
+const dirtyLocal = mkDraft('e.tex', 'typing...', true);
+merged = model.mergeRemoteDrafts([dirtyLocal], JSON.stringify([{ id: dirtyLocal.draftId, name: 'e.tex', text: 'remote wins?', updated: 500 }]));
+assert.equal(merged[0].doc.getValue(), 'typing...', '本地未保存内容优先');
+assert.equal(merged.length, 1, '不重复、不丢失');
+
+console.log('Draft multi-window merge: clean-follows-remote, dirty-wins, delete/new/bad-payload semantics passed.');

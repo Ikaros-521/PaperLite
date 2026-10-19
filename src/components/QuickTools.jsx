@@ -46,11 +46,18 @@ export default function QuickTools({ actions, onOpenChat, markdown, documentKey,
   const close = () => setOpen(null);
   useEffect(() => {
     const outside = e => { if (!root.current?.contains(e.target)) close(); };
-    const escape = e => { if (e.key === 'Escape') { close(); trigger.current?.focus(); } };
+    // 只在自己有浮层开着时响应 Esc（与 Toolbar 同款）：无条件监听等于抢走全局每一次
+    // Esc，还会把焦点拽到上一个触发按钮上。stopPropagation 一次只退一层
+    const escape = e => {
+      if (e.key !== 'Escape' || open === null) return;
+      e.stopPropagation();
+      close();
+      trigger.current?.focus();
+    };
     document.addEventListener('mousedown', outside);
     document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', escape); };
-  }, []);
+  });
   useEffect(close, [documentKey, markdown]);
   const run = (id, data) => { close(); actions.tool(id, data); };
   const button = (id, icon, label, action, disabled = false) => <button key={id} type="button" id={id} className="btn sm quick-button" title={label} aria-label={label} disabled={disabled} onMouseDown={e => e.preventDefault()} onClick={action || (() => run(id))}><Icon id={id} fallback={icon} /></button>;
