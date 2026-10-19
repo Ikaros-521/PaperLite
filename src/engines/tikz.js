@@ -61,7 +61,7 @@ function splitTop(s, sep) {
     c = s.charAt(i);
     if (c === '\\') { cur += c + (s.charAt(i + 1) || ''); i++; continue; }
     if (c === '{' || c === '[') d++;
-    else if (c === '}' || c === ']') d--;
+    else if (c === '}' || c === ']') { d--; if (d < 0) d = 0; }   // 多余闭括号按顶层处理，别让深度进负数
     if (c === sep && d === 0) { out.push(cur); cur = ''; } else cur += c;
   }
   out.push(cur);
@@ -178,19 +178,33 @@ function measure(text, fontpx, bold) {
 function wrapText(text, maxW, fontpx, bold) {
   var lines = String(text || '').split(/\\\\/).map(function (l) { return l.replace(/^\s+|\s+$/g, ''); });
   if (!maxW) return lines;
+  // 单字符宽度缓存：逐字符 measure(前缀+字符) 是 O(n²) 的串拼接 + 全串测量，
+  // 改按单字符宽累加、每 32 字符用一次全量测量校正（kerning 误差有界，换行位置不敏感）
+  var cwKey = (bold ? 'b' : 'n') + fontpx, cw = (wrapText._cw || (wrapText._cw = {}))[cwKey] || ((wrapText._cw[cwKey] = {}));
+  var chW = function (ch) { return cw[ch] !== undefined ? cw[ch] : (cw[ch] = measure(ch, fontpx, bold)); };
   var out = [];
   lines.forEach(function (ln) {
     if (!ln || measure(ln, fontpx, bold) <= maxW) { out.push(ln); return; }
-    var cur = '';
+    var cur = '', curW = 0;
     for (var i = 0; i < ln.length; i++) {
-      if (measure(cur + ln.charAt(i), fontpx, bold) > maxW && cur) {
-        var cjk = /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ln.charAt(i));
+      var ch = ln.charAt(i);
+      var w = chW(ch);
+      if (curW + w > maxW && cur) {
+        var cjk = /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch);
         if (!cjk) {
           var sp = cur.lastIndexOf(' ');
-          if (sp > 0) { out.push(cur.slice(0, sp + 1).replace(/\s+$/, '')); cur = cur.slice(sp + 1) + ln.charAt(i); continue; }
+          if (sp > 0) {
+            out.push(cur.slice(0, sp + 1).replace(/\s+$/, ''));
+            cur = cur.slice(sp + 1) + ch;
+            curW = measure(cur, fontpx, bold);   // 空格断行走全量测量，位置必须准
+            continue;
+          }
         }
-        out.push(cur); cur = ln.charAt(i);
-      } else cur += ln.charAt(i);
+        out.push(cur); cur = ch; curW = w;
+      } else {
+        cur += ch; curW += w;
+        if (cur.length % 32 === 0) curW = measure(cur, fontpx, bold);   // 定期消掉累加漂移
+      }
     }
     if (cur) out.push(cur);
   });
@@ -328,7 +342,10 @@ function parseTikzsetBody(str, styles, out) {
     if (!m) return;
     var name = m[1].replace(/^\s+|\s+$/g, '');
     var def = m[2].replace(/^\s+|\s+$/g, '');
-    var defOff = part.indexOf(def);
+    // 值区起点按分隔符定位而不是 indexOf(def)：名称段含与值相同的文本时
+    // （如 red/.style=red）第一个命中会错位，样式面板就写回错位置
+    var sepM = /\/\.?\s*style\s*=\s*/.exec(part);
+    var defOff = sepM ? sepM.index + sepM[0].length : 0;
     var cStart = 0, cEnd = def.length;
     if (def.charAt(0) === '{') {
       var e = braceEnd(def, 0);
@@ -347,7 +364,8 @@ function expandTextMacros(t, macros) {
   t = t.replace(/\\strut|\\centering|\\raggedright|\\small|\\footnotesize|\\large|\\Large|\\bfseries|\\itshape|\\ttfamily|\\normalsize/g, '');
   if (macros) {
     Object.keys(macros).forEach(function (name) {
-      t = t.replace(new RegExp('\\\\' + name + '(?![A-Za-z])', 'g'), macros[name].body);
+      // 函数替换：宏体按字面插入——字符串替换参数会解释 $& / $` / $'，宏体含 $ 的数学串被污染
+      t = t.replace(new RegExp('\\\\' + name + '(?![A-Za-z])', 'g'), function () { return macros[name].body; });
     });
   }
   t = t.replace(/\\textbf\{([^}]*)\}/g, '$1').replace(/\\emph\{([^}]*)\}/g, '$1');

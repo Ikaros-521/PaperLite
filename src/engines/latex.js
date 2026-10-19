@@ -40,6 +40,24 @@ function withOff(html, off) {
   return m[1] + '<' + m[2] + ' data-off="' + off + '"' + String(html).slice(m[0].length);
 }
 
+// 真实的 \end{document}：逐字环境（verbatim/lstlisting/minted）内的字面出现不算——
+// 讲 LaTeX 语法的文档常把 \end{document} 写进示例里，直接 lastIndexOf 会提前截断正文
+function findEndDocument(body) {
+  var reVerbatim = /\\begin\s*\{(verbatim\*?|lstlisting|minted)\}/g;
+  var zones = [], m;
+  while ((m = reVerbatim.exec(body))) {
+    var end = body.indexOf('\\end{' + m[1] + '}', m.index);
+    zones.push([m.index, end < 0 ? body.length : end]);
+  }
+  var at = body.lastIndexOf('\\end{document}');
+  while (at >= 0) {
+    var inV = zones.some(function (z) { return at > z[0] && at < z[1]; });
+    if (!inV) return at;
+    at = body.lastIndexOf('\\end{document}', at - 1);
+  }
+  return -1;
+}
+
 // \verb、\verb*、\lstinline（可带 [选项]）：i 指向反斜杠，命中返回 { next, content, star }，否则 null。
 // 定界符不能是字母或 *；LaTeX 要求同一字符收尾，但 \verb{…} / \lstinline{…} 是常见写法，
 // 故括号类定界符允许配对的另一个收尾。收尾不在同一行时按普通命令处理，
@@ -310,7 +328,7 @@ function renderLatex(srcRaw, opts) {
     preamble = src.slice(0, mDoc.index);
     bodyBase = mDoc.index + mDoc[0].length;
     body = src.slice(bodyBase);
-    var endDoc = body.lastIndexOf('\\end{document}');
+    var endDoc = findEndDocument(body);
     if (endDoc >= 0) body = body.slice(0, endDoc);
   } else {
     preamble = ''; bodyBase = 0; body = src;
@@ -330,14 +348,17 @@ function renderLatex(srcRaw, opts) {
 
   // ---- 回填 ----
   var refSeen = {};
-  html = html.replace(/@@R:([^@]*)@@/g, function (_, key) {
+  html = html.replace(/@@R:([^@]*)@@/g, function (_, enc) {
+    // key 编码后入占位符：label/cite 键可含 @（如 eq:a@b），原样放会截断占位符泄漏正文
+    var key = decodeURIComponent(enc);
     if (ctx.labels[key] !== undefined) return esc(ctx.labels[key]);
     // 同一个 key 可能被引用多次，按出现次序取各自的出处
     var n = refSeen[key] = (refSeen[key] || 0) + 1;
     ctx.warn(t('render.undefinedRef', { key }), (ctx.refPos[key] || [])[n - 1], 'ref');
     return '<span class="bad-ref">?</span>';
   });
-  html = html.replace(/@@C:([^@]*)@@/g, function (_, key) {
+  html = html.replace(/@@C:([^@]*)@@/g, function (_, enc) {
+    var key = decodeURIComponent(enc);
     if (ctx.cites[key] !== undefined) return String(ctx.cites[key]);
     return '<span class="bad-ref" title="' + esc(t('render.missingCite')) + '">?</span>';
   });
@@ -656,7 +677,7 @@ function envAt(str, i) {
 // 引用占位符记下出处偏移：回填不到编号时，警告才知道该挂在哪一行
 function refPlaceholder(ctx, at, key) {
   (ctx.refPos[key] || (ctx.refPos[key] = [])).push(at);
-  return '@@R:' + key + '@@';
+  return '@@R:' + encodeURIComponent(key) + '@@';
 }
 
 // ---------------- 命令处理 ----------------
@@ -776,7 +797,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       var pos = o1 ? o1.closeIdx + 1 : afterName;
       g1 = G(pos); if (!g1) return null;
       var keys = g1.text.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-      var parts = keys.map(function (k) { return '@@C:' + k + '@@'; });
+      var parts = keys.map(function (k) { return '@@C:' + encodeURIComponent(k) + '@@'; });
       return { next: g1.end + 1, html: '<span class="cite">[' + parts.join(',') + ']</span>' };
     }
     case 'label': g1 = G(afterName); if (g1) { /* 编号由所属环境处理，单独出现忽略 */ return g1.end + 1; } return afterName;
