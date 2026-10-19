@@ -3,7 +3,7 @@
 const INPUT = /\.(tex|sty|cls|bib|bst|bbx|cbx|def|cfg|clo|fd|pdf|png|jpe?g|eps|svg|otf|ttf|dat|csv|txt)$/i;
 const SKIP = new Set(['.git', 'node_modules', 'dist', '.vite', '__pycache__']);
 
-export async function collectCompileFiles(entry, tabs) {
+export async function collectCompileFiles(entry, tabs, signal) {
   const files = new Map();
   let total = 0;
   const put = (name, bytes) => {
@@ -13,6 +13,8 @@ export async function collectCompileFiles(entry, tabs) {
   };
   const visit = async (dir, prefix = '') => {
     for await (const [name, handle] of dir.entries()) {
+      // 取消后别把整个目录继续读完：大目录下取消编译要等遍历完才生效
+      if (signal?.aborted) throw new Error('cancelled');
       if (SKIP.has(name)) continue;
       const path = prefix + name;
       if (handle.kind === 'directory') await visit(handle, path + '/');

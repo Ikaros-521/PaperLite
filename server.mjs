@@ -24,14 +24,20 @@ const MIME = {
 
 // ---------------- 引擎检测 ----------------
 const ENGINE_CMDS = { pdflatex: 'pdflatex', latex: 'latex', xelatex: 'xelatex', lualatex: 'lualatex' };
+// 结果缓存 30s：where/which 是子进程调用，/api/health 与每次 /api/compile 各探测
+// 5 个引擎，频繁编译时白白拖慢响应；装新发行版后最多半分钟生效
+let enginesCache = null, enginesAt = 0;
 function which(cmd) {
   try { execSync(`${process.platform === 'win32' ? 'where' : 'which'} ${cmd}`, { stdio: 'ignore' }); return true; }
   catch (e) { return false; }
 }
 function availableEngines() {
+  const now = Date.now();
+  if (enginesCache && now - enginesAt < 30000) return enginesCache;
   const out = {};
   for (const [name, cmd] of Object.entries(ENGINE_CMDS)) out[name] = which(cmd);
   out['dvipdfmx'] = which('dvipdfmx'); // latex(DVI) 转 PDF
+  enginesCache = out; enginesAt = now;
   return out;
 }
 

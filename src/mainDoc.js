@@ -28,8 +28,10 @@ export function saveMainDocSetting(folderKey, path) {
 }
 
 // 探测前先抹注释，避免示例代码 / 被注释掉的导言区被误判成主文档
+import { stripTexComments } from './texComments.js';
+
 export function hasDocumentclass(text) {
-  const src = String(text || '').replace(/(?<!\\)%[^\n]*/g, '');
+  const src = stripTexComments(text);
   return /\\documentclass/.test(src);
 }
 

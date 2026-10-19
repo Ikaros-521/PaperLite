@@ -1,5 +1,6 @@
 // XeTeX/dvipdfmx read PDF, PNG and JPEG natively. SVG is rasterized in the
 // browser, retaining its project path so graphicspath, macros and subfiles work.
+import { stripTexComments } from './texComments.js';
 export async function svgToPng(bytes) {
   const xml = new DOMParser().parseFromString(new TextDecoder().decode(bytes), 'image/svg+xml');
   if (xml.querySelector('parsererror') || xml.documentElement.localName !== 'svg') {
@@ -40,7 +41,7 @@ export async function prepareCompileGraphics(source, files, convert = svgToPng) 
   }
   if (extensions.size) {
     const rules = [...extensions].map(ext => '\\DeclareGraphicsRule{' + ext + '}{bmp}{.xbb}{}').join('');
-    const active = source.replace(/(?<!\\)%[^\r\n]*/g, comment => ' '.repeat(comment.length));
+    const active = stripTexComments(source, { keepLength: true });
     const begin = active.search(/\\begin\s*\{document\}/);
     if (begin >= 0) source = source.slice(0, begin) + '\\ifdefined\\DeclareGraphicsRule' + rules
       + '\\fi ' + source.slice(begin);

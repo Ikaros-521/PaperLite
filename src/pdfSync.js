@@ -10,6 +10,8 @@
  * 匹配是近似的：断行、连字符、数学环境都会降低命中率，找不到就安静失败。 */
 
 // 归一化对照：连字/弯引号/各类破折号 → 基本字符，避免渲染端与源码端字形差异
+import { stripTexComments } from './texComments.js';
+
 const UNIFY = [[/\uFB00/g, 'ff'], [/\uFB01/g, 'fi'], [/\uFB02/g, 'fl'], [/\uFB03/g, 'ffi'], [/\uFB04/g, 'ffl'],
   [/[\u2018\u2019\u201A\u201B]/g, "'"], [/[\u201C\u201D\u201E]/g, '"'],
   [/[\u2013\u2014\u2212]/g, '-'], [/\u00AD/g, '']];
@@ -25,8 +27,7 @@ export function matchKey(s) {
 
 /** 源码查询预处理：去注释、去 TeX 命令名/花括号/数学定界符，只留要排版的正文字词 */
 export function stripTexCommands(text) {
-  return String(text || '')
-    .replace(/(?<!\\)%[^\n]*/g, '')
+  return stripTexComments(text)
     .replace(/\\begin\s*\{[^}]*\}|\\end\s*\{[^}]*\}/g, ' ')
     .replace(/\\[a-zA-Z@]+\*?/g, ' ')
     .replace(/[$&#^_~]/g, ' ')
@@ -83,11 +84,14 @@ export function locateLineInSource(source, pdfText) {
   if (key.length < 4) return null;
   const lines = String(source || '').split(/\r?\n/);
   const lineKeys = lines.map(l => matchKey(stripTexCommands(l)));
+  // 相邻行拼接预计算一次：逐查询逐行拼接是 O(n²) 的临时串分配，多档回退查询共用
+  const adjacent = new Array(Math.max(0, lineKeys.length - 1));
+  for (let i = 0; i < adjacent.length; i++) adjacent[i] = lineKeys[i] + lineKeys[i + 1];
   const tryFind = q => {
     if (q.length < 4) return -1;
     for (let i = 0; i < lineKeys.length; i++) if (lineKeys[i].includes(q)) return i;
     // 行内找不到就拼相邻行（PDF 一行常跨源码两行，如段落折行/表格单元格）
-    for (let i = 0; i < lineKeys.length - 1; i++) if ((lineKeys[i] + lineKeys[i + 1]).includes(q)) return i;
+    for (let i = 0; i < adjacent.length; i++) if (adjacent[i].includes(q)) return i;
     return -1;
   };
   for (const len of [key.length, 40, 24, 16, 10]) {

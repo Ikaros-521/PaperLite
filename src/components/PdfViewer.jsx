@@ -139,12 +139,30 @@ const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh
     setCurrent(next);
     scroll.current?.querySelector(`[data-page="${next}"]`)?.scrollIntoView({ block: 'start' });
   };
+  // 滚动同步页码：rAF 节流 + 页元素缓存 + 二分定位。逐 scroll 事件全量
+  // querySelectorAll 且线性扫每页 getBoundingClientRect（强制 layout），长文档
+  // 上可感知；页按序垂直排列、bottom 单调，二分只要 O(log n) 次测量
+  const pageNodesRef = useRef([]);
+  const trackPending = useRef(0);
   const trackScroll = () => {
-    const container = scroll.current;
-    const top = container.getBoundingClientRect().top;
-    const nodes = [...container.querySelectorAll('[data-page]')];
-    const page = nodes.find(node => node.getBoundingClientRect().bottom > top + 30);
-    if (page) setCurrent(Number(page.dataset.page));
+    if (trackPending.current) return;
+    trackPending.current = requestAnimationFrame(() => {
+      trackPending.current = 0;
+      const container = scroll.current;
+      if (!container) return;
+      const top = container.getBoundingClientRect().top;
+      let nodes = pageNodesRef.current;
+      if (!nodes.length || nodes.length !== pages.length || !nodes[0]?.isConnected) {
+        nodes = pageNodesRef.current = [...container.querySelectorAll('[data-page]')];
+      }
+      let lo = 0, hi = nodes.length - 1, page = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (nodes[mid].getBoundingClientRect().bottom > top + 30) { page = nodes[mid]; hi = mid - 1; }
+        else lo = mid + 1;
+      }
+      if (page) setCurrent(Number(page.dataset.page));
+    });
   };
   // 正向跳转入口：文本匹配命中 → 翻页 + 定位闪烁；找不到返回 false 交给调用方提示
   useImperativeHandle(ref, () => ({

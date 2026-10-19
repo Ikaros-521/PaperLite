@@ -1,9 +1,11 @@
 // Saved editor documents survive template updates in localStorage. Repair the
 // preamble of earlier PaperLite samples at compile time, preserving user edits
 // and original line numbers. Other documents keep their explicit dependencies.
+import { stripTexComments } from '../texComments.js';
+
 export function prepareXeLaTeXSource(value) {
   const source = String(value);
-  const active = source.replace(/(?<!\\)%[^\r\n]*/g, '');
+  const active = stripTexComments(source);
   const demo = active.includes('\\newcommand{\\model}{BiLSTM-Att}')
     && active.includes('\\tikzset{');
   const flow = active.includes('\\section{TikZ 流程图速查}')

@@ -122,16 +122,17 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
     abortRef.current = abort;
     const tabId = tab.id;
     // PDF 过期判据做成闭包随结果走：入口来自打开标签就比较其最新内容，
-    // 入口来自磁盘时用「项目里有未保存修改」近似（保存过的改动无法低成本察觉）
+    // 入口来自磁盘时用「项目里有未保存修改」近似（保存过的改动无法低成本察觉）。
+    // 入口标签被关闭后内容不可知（未保存的改动可能已随关闭丢弃），保守判过期。
     const staleNow = entryTabId != null
-      ? () => { const et = tabsRef.current.filter(x => x.id === entryTabId)[0]; return et?.doc ? et.doc.getValue() !== source : false; }
+      ? () => { const et = tabsRef.current.filter(x => x.id === entryTabId)[0]; return !et?.doc || et.doc.getValue() !== source; }
       : () => (tabsRef.current || []).some(x => x.dirty && (!parentDir || x.parentDir === parentDir));
     retireErrors();
 
     try {
       let ok, pdfBytes, log, errors, errText, wasCancelled = false;
       if (engine === 'builtin') {
-        const files = await collectCompileFiles({ ...tab, parentDir }, tabsRef.current);
+        const files = await collectCompileFiles({ ...tab, parentDir }, tabsRef.current, abort.signal);
         if (abort.signal.aborted) { flashRef.current(t('app.compileCancelled')); return 'cancelled'; }
         const r = await compileXeLaTeX(source, files);
         ok = r.ok; pdfBytes = r.pdfBytes; log = r.log || ''; errors = r.errors || [];
