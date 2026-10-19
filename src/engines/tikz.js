@@ -143,7 +143,8 @@ function nearestNamed(hex) { // 若与预置色一致则返回名字（源码更
 // ---------------- 长度 ----------------
 function parseLen(v, defUnit) {
   if (v === null || v === undefined) return NaN;
-  var m = String(v).replace(/^\{|\}$/g, '').match(/^(-?[\d.]+)\s*(cm|mm|pt|bp|in|em|ex)?$/);
+  // 容忍前后空白：node `at (1, 2)` 逗号后带空格是常见写法，不 trim 会得到 NaN、节点静默消失
+  var m = String(v).replace(/^\{|\}$/g, '').trim().match(/^(-?[\d.]+)\s*(cm|mm|pt|bp|in|em|ex)?$/);
   if (!m) return NaN;
   var n = parseFloat(m[1]), u = m[2] || defUnit || 'cm';
   if (u === 'cm') return n * CM;

@@ -83,8 +83,9 @@ function blankComments(src) {
         i = eM < 0 ? i + 15 : eM + 13;
         continue;
       }
-      // 逐字环境内 % 不是注释（代码示例里的注释会被抹掉），整段跳过
-      var vEnv = src.slice(i).match(/^\\begin\s*\{(verbatim\*?|lstlisting|minted)\}/);
+      // 逐字环境内 % 不是注释（代码示例里的注释会被抹掉），整段跳过。
+      // 限长切片：slice(i) 会拷贝整个尾部，大文档上每个反斜杠都拷一次是平方级
+      var vEnv = src.slice(i, i + 40).match(/^\\begin\s*\{(verbatim\*?|lstlisting|minted)\}/);
       if (vEnv) {
         var eV = src.indexOf('\\end{' + vEnv[1] + '}', i);
         i = eV < 0 ? i + vEnv[0].length : eV + 7 + vEnv[1].length;
@@ -587,7 +588,7 @@ function renderFlow(str, ctx, base, isTop, inlineMode) {
     if (c === '\\') {
       var vb = verbAt(str, i);
       if (vb) { touch(); inlineBuf += renderVerb(vb); i = vb.next; continue; }
-      var cmdM = str.slice(i).match(/^\\([A-Za-z]+)\*?/);
+      var cmdM = str.slice(i, i + 32).match(/^\\([A-Za-z]+)\*?/);
       if (cmdM) {
         var r = handleCommand(cmdM[1], str, i, ctx, base, tokens, flushP);
         if (r === null) { ctx.warn(t('render.unsupportedCommand', { name: cmdM[1] }), base + i, 'command'); touch(); inlineBuf += esc(cmdM[0]); i += cmdM[0].length; continue; }
@@ -683,7 +684,12 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     }
     if (okArgs) {
       var body = mrec.body.replace(/#(\d)/g, function (_, d) { return argsUsed[+d - 1] !== undefined ? argsUsed[+d - 1] : ''; });
-      return { next: pos, html: renderFlow(body, ctx, base + afterName, false, true) };
+      // 自引用宏（\newcommand{\a}{\a}）会无限递归打穿整个预览；与 expandMacros
+      // 同口径设深度上限，超限按空展开
+      ctx.macroDepth = (ctx.macroDepth || 0) + 1;
+      try {
+        return { next: pos, html: ctx.macroDepth > 12 ? '' : renderFlow(body, ctx, base + afterName, false, true) };
+      } finally { ctx.macroDepth--; }
     }
   }
 

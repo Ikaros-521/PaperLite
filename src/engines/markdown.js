@@ -66,7 +66,8 @@ export function renderMarkdownFull(src) {
   // mermaid 代码块 → 占位 div（由 PreviewPane 懒渲染）
   html = html.replace(/<pre><code class="language-mermaid[\s\S]*?<\/code><\/pre>/g, (m) => {
     const code = m.replace(/^<pre><code[^>]*>/, '').replace(/<\/code><\/pre>$/, '')
-      .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+      // &amp; 必须最后解码：先解会把源码里字面的 &lt; 变成 <（实体被二次反转义）
+      .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     return '<div class="diagram mermaid-block" data-code="' + encodeURIComponent(code.trim()) + '"></div>';
   });
   html = mathPass(html);

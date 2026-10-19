@@ -190,7 +190,20 @@ export function preloadEngine() {
     try {
       texWorker = new Worker(BASE + 'tex-worker.js');
       pdfWorker = new Worker(BASE + 'pdf-worker.js');
-      const watch = w => { w.onerror = () => { if (generation === expected) setStatus('error'); }; };
+      // 运行期崩溃（wasm OOM / worker 未捕获异常）不能只改状态：死 worker 仍被
+      // loadPromise 视为可用，下次编译要挂满超时才报错。terminate 并清空句柄，
+      // 让下次编译重新加载引擎。
+      const watch = w => {
+        w.onerror = () => {
+          if (generation !== expected) return;
+          setStatus('error');
+          loadPromise = null;
+          resourcesWarmed = false;
+          try { w.terminate(); } catch (e2) { /* noop */ }
+          if (texWorker === w) texWorker = null;
+          if (pdfWorker === w) pdfWorker = null;
+        };
+      };
       watch(texWorker); watch(pdfWorker);
       const [, , manifest] = await Promise.all([
         waitReady(texWorker, 'XeTeX'),
