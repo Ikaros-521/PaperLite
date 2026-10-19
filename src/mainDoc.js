@@ -27,6 +27,28 @@ export function saveMainDocSetting(folderKey, path) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(all)); } catch (e) { /* ignore */ }
 }
 
+/**
+ * 改名同步：pin 存的是 path，是唯一没跟着改名走的存储。
+ * 不迁移的话，改名后 pin 静默失效（回退自动检测）；更糟的是旧路径日后被新文件占用时，
+ * 编译根会静默切到那个新文件上。文件夹改名要整棵子树换前缀。
+ * @returns {boolean} 是否真的改动了（没动就别惊动 React 状态）
+ */
+export function renameMainDocEntry(from, to) {
+  const clean = (p) => String(p || '').replace(/^\.?\//, '').replace(/\/+/g, '/');
+  const a = clean(from), b = clean(to);
+  if (!a || !b || a === b) return false;
+  const all = loadMainDocSetting();
+  let changed = false;
+  for (const [folderKey, path] of Object.entries(all)) {
+    const p = clean(path);
+    if (p === a) { all[folderKey] = b; changed = true; }
+    else if (p.startsWith(a + '/')) { all[folderKey] = b + p.slice(a.length); changed = true; }
+  }
+  if (!changed) return false;
+  try { localStorage.setItem(LS_KEY, JSON.stringify(all)); } catch (e) { return false; }
+  return true;
+}
+
 // 探测前先抹注释，避免示例代码 / 被注释掉的导言区被误判成主文档
 import { stripTexComments } from './texComments.js';
 

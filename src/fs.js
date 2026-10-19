@@ -45,8 +45,15 @@ export async function readFileText(fileHandle, maxBytes) {
 
 export async function writeFileText(fileHandle, text) {
   const w = await fileHandle.createWritable();
-  await w.write(text);
-  await w.close();
+  try {
+    await w.write(text);
+    await w.close();
+  } catch (e) {
+    // 写失败（配额满/磁盘错/权限掉）必须 abort：不 abort 会留下交换文件，
+    // Chrome 里表现为文件被占住、下次写入更慢
+    try { await w.abort(); } catch (e2) { /* abort 本身失败不掩盖原始错误 */ }
+    throw e;
+  }
 }
 
 export async function createFile(dirHandle, name) {

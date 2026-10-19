@@ -64,10 +64,16 @@ function persistHistory(input, protectedIds = []) {
   try { write(materialize()); return true; }
   catch {
     if (!protectedIds.length) return false;
-    // Browser quota is shared with other features: try once more with only the
-    // protected new version/backup. Failure leaves persisted history unchanged.
-    for (const { v } of candidates) dropped.add(v);
-    try { write(materialize()); return true; } catch { return false; }
+    // Browser quota is shared with other features. The old retry dropped *every*
+    // unprotected version in the store, so renaming one label (protects 1 id) could
+    // wipe every other file's history and still report ok:true. Drop oldest-first,
+    // one at a time, and keep whatever the quota can still hold.
+    for (const { v } of candidates) {
+      if (protect.has(v.id)) continue;
+      dropped.add(v);
+      try { write(materialize()); return true; } catch { /* 还塞不下就再丢一条最旧的 */ }
+    }
+    return false;
   }
 }
 

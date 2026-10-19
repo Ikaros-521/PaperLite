@@ -1,5 +1,5 @@
 /* 主文档（编译入口）解析测试：固定设置、自动探测、磁盘扫描回退 */
-import { hasDocumentclass, resolveMainDoc } from '../src/mainDoc.js';
+import { hasDocumentclass, resolveMainDoc, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry } from '../src/mainDoc.js';
 
 let pass = 0, fail = 0;
 function ok(cond, msg) {
@@ -90,6 +90,19 @@ r = resolveMainDoc({
   ],
 });
 ok(r && r.source.includes('%editing'), '固定命中打开标签时取实时内容');
+
+console.log('== pin 改名迁移 ==');
+const lsStore = new Map();
+globalThis.localStorage = { getItem: k => (lsStore.has(k) ? lsStore.get(k) : null), setItem: (k, v) => lsStore.set(k, v) };
+saveMainDocSetting('paper', 'chapters/intro.tex');
+saveMainDocSetting('other', 'main.tex');
+ok(renameMainDocEntry('chapters/intro.tex', 'chapters/intro-v2.tex') === true, '文件改名要迁移 pin');
+ok(loadMainDocSetting().paper === 'chapters/intro-v2.tex', 'pin 跟着改名走: ' + loadMainDocSetting().paper);
+ok(loadMainDocSetting().other === 'main.tex', '别的文件夹不受影响');
+ok(renameMainDocEntry('chapters', 'secs') === true, '文件夹改名换整段前缀');
+ok(loadMainDocSetting().paper === 'secs/intro-v2.tex', '前缀迁移: ' + loadMainDocSetting().paper);
+ok(renameMainDocEntry('secs', 'secs') === false && renameMainDocEntry('', 'x') === false, '同名或空路径不动存储');
+ok(renameMainDocEntry('gone', 'x') === false, '没命中就别惊动 React 状态');
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

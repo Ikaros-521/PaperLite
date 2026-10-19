@@ -25,6 +25,10 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
 
   const contextRef = useRef(null);
   const abortRef = useRef(null);
+  // 在跑的编译：用 ref 而不是 compiling 状态当闸门。状态要等下一次 render 才更新，
+  // 同一 tick 里连点两次编译都会读到 false，于是第二趟把 abortRef 顶掉、
+  // finally 又抢先把手上的 compiling 清零（spinner 熄灭、第一趟变成不可取消）
+  const busyRef = useRef(false);
   const pdfUrlRef = useRef(null);
   const flashRef = useRef(flash);
   flashRef.current = flash;
@@ -88,13 +92,20 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
    */
   const compile = useCallback(async (opts) => {
     const quiet = !!(opts && opts.quiet);
-    if (compiling) return 'blocked';
+    if (busyRef.current) return 'blocked';
     const tab = tabsRef.current.filter(x => x.id === (activeTab?.id ?? tabsRef.current[tabsRef.current.length - 1]?.id))[0];
     if (!tab?.doc) return 'blocked';
     if (engine !== 'builtin' && !engines.includes(engine)) {
       alertBox(t('app.noEngine'));
       return 'blocked';
     }
+    // 占坑必须在任何 await 之前：入口解析（getEntry）也要读盘，期间点第二次不能挤进来。
+    // 单飞之后，服务端引擎那条路径也不会有「旧结果后到覆盖新 PDF」——同一时刻只有一趟在跑
+    busyRef.current = true;
+    setCompiling(true);
+    const abort = new AbortController();
+    abortRef.current = abort;
+    const release = () => { if (abortRef.current === abort) abortRef.current = null; busyRef.current = false; setCompiling(false); };
 
     const owner = contextRef.current;
     // 编译入口：默认当前标签；桌面传入 getEntry 时按主文档解析（子文件标签上也从主文档走）
@@ -115,11 +126,8 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
         }
       } catch (e) { /* 主文档读取失败退回当前标签 */ }
     }
-    if (!entryIsTex) { flashRef.current(t('app.onlyTexCompile')); return 'blocked'; }
+    if (!entryIsTex) { release(); flashRef.current(t('app.onlyTexCompile')); return 'blocked'; }
 
-    setCompiling(true);
-    const abort = new AbortController();
-    abortRef.current = abort;
     const tabId = tab.id;
     // PDF 过期判据做成闭包随结果走：入口来自打开标签就比较其最新内容，
     // 入口来自磁盘时用「项目里有未保存修改」近似（保存过的改动无法低成本察觉）。
@@ -135,7 +143,7 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
         const files = await collectCompileFiles({ ...tab, parentDir }, tabsRef.current, abort.signal);
         if (abort.signal.aborted) { flashRef.current(t('app.compileCancelled')); return 'cancelled'; }
         const r = await compileXeLaTeX(source, files);
-        // 引擎级互斥挡下的重入：compiling 守卫没拦住说明是调用逻辑错误，不是文档编译失败
+        // 引擎级互斥挡下的重入：busyRef 闸门没拦住说明是调用逻辑错误，不是文档编译失败
         if (r.error === 'busy') {
           console.warn('[PaperLite] compileXeLaTeX 重入：上一趟编译尚未释放就被再次调用');
           return 'blocked';
@@ -150,6 +158,9 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ engine, source }),
         });
+        // 非 2xx 是请求层面的失败（本机服务拒绝/编译队列满/进程没起），不是文档编译失败：
+        // 走 catch 给「请求失败」提示，别把 403/429 的正文当编译错误贴进问题栏
+        if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
         ok = j.ok; log = j.log || ''; errors = j.errors || [];
         if (ok) {
@@ -179,10 +190,9 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
       else alertBox(t('app.compileReqFailed', { msg: e.message || e }));
       return 'fail';
     } finally {
-      abortRef.current = null;
-      setCompiling(false);
+      release();
     }
-  }, [compiling, isTexLike, engine, engines, activeTab?.id, tabsRef, t, alertBox, retireErrors, getEntry]);
+  }, [isTexLike, engine, engines, activeTab?.id, tabsRef, t, alertBox, retireErrors, getEntry]);
 
   /** 拆掉 Worker 立刻归还界面，长任务不该只能干等 */
   const cancelCompileNow = useCallback(() => {

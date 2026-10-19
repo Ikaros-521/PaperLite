@@ -27,10 +27,11 @@ import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedW
  *   prompt: (msg: string, fallback?: string) => Promise<string|null>,
  *   onTreeChanged: () => void,
  *   onSideTab: (tab: string) => void,
+ *   onPathsRenamed?: (from: string, to: string) => void,  // 顶层改名：让别的按路径存的设置（主文档 pin）跟上
  * }}
  */
 export function useWorkspace(ui) {
-  const { t, flash, alertBox, confirm, prompt, onTreeChanged, onSideTab } = ui;
+  const { t, flash, alertBox, confirm, prompt, onTreeChanged, onSideTab, onPathsRenamed } = ui;
 
   const [tabs, setTabs] = useState(() => restoreDraftTabs(detectLang()));
   // 焦点落在最后恢复的那篇（最近编辑的）；不依赖模块级计数器，StrictMode 下会被调用两次
@@ -52,8 +53,10 @@ export function useWorkspace(ui) {
   flashRef.current = flash;
 
   const activeTab = useMemo(() => tabs.filter(x => x.id === activeId)[0] || null, [tabs, activeId]);
-  const historyKey = activeTab?.historyKey
-    || JSON.stringify([rootDir?.name || '', activeTab?.kind === 'draft' ? 'draft' : activeTab?.path]);
+  // 历史键的唯一定口径：makeTab 把 [scope, path] 编进 key，快照必须按被改的那个标签算
+  const historyKeyOf = useCallback((tab) => (tab && tab.historyKey)
+    || JSON.stringify([rootDir?.name || '', tab?.kind === 'draft' ? 'draft' : tab?.path]), [rootDir?.name]);
+  const historyKey = historyKeyOf(activeTab);
 
   // ---- 草稿自动保存：整组草稿标签各存一份。写失败必须让人看见——静默 catch 等于静默丢稿 ----
   const draftsWarnedRef = useRef(false);
@@ -111,6 +114,14 @@ export function useWorkspace(ui) {
     return result.ok;
   }, [activeTab, historyKey, noteHistory]);
 
+  /** 给指定标签打快照（agent 编辑后台标签时用）。不这么走的话快照会写到活动文档的
+   *  历史键上：改的是 A，留版本的是 B，回滚时两边都对不上。 */
+  const snapshotTab = useCallback((tab, label = '') => {
+    if (!tab?.doc) return false;
+    noteHistory(recordVersion(historyKeyOf(tab), tab.doc.getValue(), { label, reason: 'manual', force: true }));
+    return true;
+  }, [historyKeyOf, noteHistory]);
+
   useEffect(() => {
     const doc = activeTab?.doc;
     if (!doc) return;
@@ -162,7 +173,9 @@ export function useWorkspace(ui) {
   const openFileTab = useCallback(async (fileHandle, path, parentDir) => {
     const name = fileHandle.name || (path ? path.split('/').pop() : tr(getLang(), 'app.untitled'));
     const info = infoFor(name);
-    const exist = tabsRef.current.filter(x => x.handle === fileHandle)[0];
+    const exist = tabsRef.current.filter(x => x.handle === fileHandle || (!!path && !!x.path && x.path === path))[0];
+    // 每次 listDir/扫描都返回新的句柄包装对象，只比身份等于「同一个文件能开无数个标签」：
+    // 两份 Doc 各有一套 dirty/saved，后保存的那个静默盖掉前一个的未保存改动
     if (exist) { setActiveId(exist.id); return exist; }
     try {
       if (info.kind === 'image' || info.kind === 'pdf') {
@@ -431,6 +444,9 @@ export function useWorkspace(ui) {
     const slash = from.lastIndexOf('/');
     const to = (slash >= 0 ? from.slice(0, slash + 1) : '') + name;
     if (to === from) return false;
+    // 磁盘已经改名成功，先让「按路径存的其他设置」跟上：主文档 pin 指向的可能是
+    // 一个没开成标签的文件（下面 plan 为空），那时更要迁，否则 pin 静默失效
+    if (onPathsRenamed) { try { onPathsRenamed(from, to); } catch (e) { /* 别的存储迁移失败不该拖累标签同步 */ } }
     const plan = [];
     for (const tab of tabsRef.current) {
       if (!tab.handle) continue;          // 无磁盘后端的标签（草稿、未落盘的上传件）不跟着改名
@@ -464,7 +480,7 @@ export function useWorkspace(ui) {
       return { ...tab, name: p.name, path: p.path, handle: p.handle, historyKey: migrated.get(p.id) || tab.historyKey };
     }));
     return true;
-  }, [setHistoryError]);
+  }, [setHistoryError, onPathsRenamed]);
 
   /**
    * 改名：磁盘标签先改盘、成功后才同步元数据；草稿与未落盘标签只改显示名。
@@ -523,7 +539,7 @@ export function useWorkspace(ui) {
     tabs, setTabs, tabsRef, activeId, setActiveId, activeValue, setActiveValue, activeTab,
     rootDir, setRootDir, restorePrompt, setRestorePrompt,
     historyKey, historyTick, setHistoryTick, historyError, setHistoryError, historyClearedRef,
-    noteHistory, snapshot,
+    noteHistory, snapshot, snapshotTab,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
     addDraft, renameTab, renameTabPath, persistNow,

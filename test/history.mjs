@@ -75,6 +75,24 @@ assert.deepEqual(readHistory('quota').map(v => v.text), ['restored', 'working'])
 localStorage.setItem = (k, v) => data.set(k, v);
 clearHistory();
 
+// 配额失败的重试只该丢「最旧的那几条」，不许把别的文件的历史一起塌缩掉：
+// 给 A 文件改个版本标签（只保护 1 个 id）时 B 文件的版本必须原样留着
+recordVersion('qa', 'a1');
+recordVersion('qa', 'a2', { force: true });
+recordVersion('qb', 'b1', { force: true });
+const qaIds = readHistory('qa').map(v => v.id);
+let retryAttempts = 0;
+localStorage.setItem = (k, v) => {
+  retryAttempts++;
+  if (retryAttempts === 1) throw new Error('Quota exceeded');
+  data.set(k, v);
+};
+assert.equal(renameVersion('qa', qaIds[0], '改名'), true, '重试后写入成功');
+assert.deepEqual(readHistory('qb').map(v => v.text), ['b1'], '另一个文件的历史没被连带删掉');
+assert.equal(readHistory('qa').some(v => v.label === '改名'), true);
+localStorage.setItem = (k, v) => data.set(k, v);
+clearHistory();
+
 // Many tiny files are bounded by count even when their byte size stays small.
 for (let i = 0; i < 230; i++) assert.equal(recordVersion('tiny-' + i, 'v' + i).ok, true);
 assert.equal(historyUsage('tiny-229').versions, HISTORY_LIMITS.total);

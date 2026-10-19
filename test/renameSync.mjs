@@ -24,7 +24,7 @@ const diskTab = (name, path, handle, text = 'body') =>
 
 function build(initial, opts = {}) {
   let tabs = initial;
-  const calls = { copy: [], alerts: [], errors: [], renamed: [], tree: 0, persisted: 0 };
+  const calls = { copy: [], alerts: [], errors: [], renamed: [], tree: 0, persisted: 0, paths: [] };
   const api = vm.runInNewContext(renameSrc + '\n({ renameTab, renameTabPath })', {
     useCallback: fn => fn,
     tabsRef: { get current() { return tabs; } },
@@ -36,6 +36,8 @@ function build(initial, opts = {}) {
     alertBox: message => calls.alerts.push(message),
     validName,
     onTreeChanged: () => { calls.tree++; },
+    // 主文档 pin 这类「按路径存的别的设置」要收到顶层改名（哪怕没有任何标签命中）
+    onPathsRenamed: (from, to) => { calls.paths.push([from, to]); },
     persistDrafts: () => { calls.persisted++; },
     fs: { renameEntry: async (handle, name, parentDir) => {
       if (opts.renameFails) throw new Error('disk busy');
@@ -73,10 +75,14 @@ assert.deepEqual(fixture.calls.copy, [
   [twin.historyKey, fixture.tabs()[1].historyKey, true],
 ], 'Old history keys are merged into the new path key and recycled (both tabs share one old key)');
 assert.equal(fixture.calls.tree, 0, 'renameTabPath itself does not refresh the tree');
+assert.deepEqual(fixture.calls.paths, [['chapters/a.tex', 'chapters/a2.tex']],
+  'The top-level path move is published once for other path-keyed settings (main-doc pin)');
 
 fixture = build([first]);
 assert.equal(fixture.api.renameTabPath('chapters/zzz.tex', { name: 'x' }, 'other.tex'), false);
 assert.deepEqual(fixture.calls.copy, [], 'A rename with no open tab notifies nothing');
+assert.deepEqual(fixture.calls.paths, [['chapters/zzz.tex', 'chapters/other.tex']],
+  'No open tab still has to migrate the pinned main doc, or the pin silently stops working');
 
 // ---- 文件夹改名：整棵子树换前缀，标签名不动 ----
 const nested = diskTab('c.tex', 'chapters/deep/c.tex', { name: 'c.tex' });
