@@ -354,11 +354,13 @@ for (const v of referenced) ok(declared.has(v), '变量无人定义：' + v);
 
 console.log('== 诊断生命周期 ==');
 const compileError = { line: 0, msg: 'Undefined control sequence' };
-const compiled = { tabId: 1, source: '\\unknown', errors: [compileError] };
-ok(currentCompileErrors(compiled, 1, '\\unknown').length === 1, '当前文件与源码匹配时显示编译错误');
-ok(currentCompileErrors(compiled, 1, 'fixed').length === 0, '修改源码后不再显示旧编译错误');
-ok(currentCompileErrors(compiled, 2, '\\unknown').length === 0, '相同源码的另一文件不继承错误');
-ok(currentCompileErrors(null, 1, '').length === 0, '无编译结果时不显示编译错误');
+// 过期判断由 useCompile 的 staleNow 闭包负责（入口文档内容是否又变了），
+// 不再比较 result.source 与当前标签全文——主文档入口编译时两者永不相等
+const compiled = { tabId: 1, source: '\\unknown', errors: [compileError], staleNow: () => false };
+ok(currentCompileErrors(compiled, 1).length === 1, '发起标签未改动时显示编译错误');
+ok(currentCompileErrors({ ...compiled, staleNow: () => true }, 1).length === 0, '入口文档改动后不再显示旧编译错误');
+ok(currentCompileErrors(compiled, 2).length === 0, '另一文件不继承错误');
+ok(currentCompileErrors(null, 1).length === 0, '无编译结果时不显示编译错误');
 const issues = collectIssues(
   [{ line: 1, msg: '引用了未定义的标签', severity: 'warn', kind: 'ref' }],
   [{ msg: '环境 xyz 按普通内容处理', line: 4, kind: 'env' }, { msg: '与静态检查同类的引用提示', line: 1, kind: 'ref' }, { msg: '渲染中断', line: null }],

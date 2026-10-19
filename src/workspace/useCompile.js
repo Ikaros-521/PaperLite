@@ -33,10 +33,16 @@ export function useCompile({ t, flash, alertBox }, { tabsRef, activeTab, isTexLi
   // 移动端路由切换会卸载本 hook，数 MB 的 blob 就此泄漏
   useEffect(() => () => { if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current); }, []);
 
-  // 换文档即换上下文：迟到的响应不许把已经改过的稿子的错误再贴回去
+  // 换文档即换上下文：迟到的响应不许把已经改过的稿子的错误再贴回去。
+  // 同一 Doc 复用同一 context 对象：A→B→A 切回后若换成新对象，编译期间的
+  // owner 比对会把刚编译好的结果误判 stale、整个 PDF 白白丢掉
+  const contextMap = useRef(new WeakMap());
   const bindDoc = useCallback(doc => {
-    if (contextRef.current?.doc !== doc) contextRef.current = { doc: doc || null };
-    return contextRef.current;
+    if (!doc) { contextRef.current = { doc: null }; return contextRef.current; }
+    let c = contextMap.current.get(doc);
+    if (!c) { c = { doc }; contextMap.current.set(doc, c); }
+    contextRef.current = c;
+    return c;
   }, []);
   const context = bindDoc(activeTab?.doc || null);
 

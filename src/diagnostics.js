@@ -12,8 +12,14 @@ export function collectIssues(diagnostics = [], renderWarnings = [], compileErro
   ].map((issue, index) => ({ ...issue, id: `${issue.src}:${index}` }));
 }
 
-export function currentCompileErrors(result, tabId, source) {
-  return result?.tabId === tabId && result.source === source ? (result.errors || []) : [];
+export function currentCompileErrors(result, tabId) {
+  if (!result || result.tabId !== tabId) return [];
+  // 过期以「编译入口文档的内容是否又变了」为准（useCompile 的 staleNow 闭包）。
+  // 旧实现比较 result.source === 当前标签全文：主文档入口编译时 source 是主文档
+  // 全文，与发起编译的子文件标签永不相等，错误会被整段吞掉。编辑时的即时
+  // 失效另由 retireErrors 在 onDocChange 清空，这里是纯函数侧的第二道防线。
+  if (result.staleNow && result.staleNow()) return [];
+  return result.errors || [];
 }
 
 // Dismissals must survive unrelated typing: identify an issue by what it says about

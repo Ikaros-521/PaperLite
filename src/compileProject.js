@@ -26,12 +26,13 @@ export async function collectCompileFiles(entry, tabs) {
   if (entry.parentDir) await visit(entry.parentDir);
   for (const tab of tabs) {
     let name = tab.name;
-    if (entry.parentDir) {
-      if (!tab.handle) continue;
+    if (entry.parentDir && tab.handle) {
       const parts = await entry.parentDir.resolve(tab.handle);
       if (!parts) continue;
       name = parts.join('/');
     }
+    // 无 handle（新建未保存的标签）按文件名参与编译：内容在编辑器里是齐全的，
+    // 跳过会让 \input 读到磁盘旧版、或直接报找不到这个文件（磁盘内容已在上面被覆盖）
     if (!INPUT.test(name)) continue;
     if (tab.doc) put(name, new TextEncoder().encode(tab.doc.getValue()));
     else if (tab.uploadedFile) put(name, new Uint8Array(await tab.uploadedFile.arrayBuffer()));
