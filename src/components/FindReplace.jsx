@@ -146,7 +146,14 @@ export default function FindReplace({ cm, doc, open, request, onClose }) {
     const { matches: ms, repl: r, flags: f, doc: d } = liveRef.current;
     if (!ms.length) return;
     const text = d.getValue();
-    const out = ms.map(m => ({ m, rep: replacementText(r, m, { preserveCase: f.preserveCase, before: text.slice(0, m.start), after: text.slice(m.end) }) }));
+    // before/after 只有替换串用了 $` / $' 占位符才需要：5000 个匹配 × 1MB 文档
+    // 的全量切片是 GB 级瞬时分配，替换按钮点下去直接冻结；不用占位符就不切
+    const anchor = /\$[`']/.test(r);
+    const out = ms.map(m => ({ m, rep: replacementText(r, m, {
+      preserveCase: f.preserveCase,
+      before: anchor ? text.slice(0, m.start) : '',
+      after: anchor ? text.slice(m.end) : ''
+    }) }));
     // 从后往前改写：靠后的位置先动，前面每个匹配的行列仍然有效
     applyEdits(() => { for (let k = out.length - 1; k >= 0; k--) d.replaceRange(out[k].rep, out[k].m.from, out[k].m.to); }, 0);
     setNotice(t('find.replaced', { n: out.length }));

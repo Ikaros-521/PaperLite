@@ -83,9 +83,12 @@ export default function App() {
 
   // 工作区 hook 需要这几个 UI 回调，先于它声明
   const [flashMsg, setFlashMsg] = useState('');
+  const flashTimer = useRef(0);
   const flash = useCallback((msg) => {
     setFlashMsg(msg);
-    setTimeout(() => setFlashMsg(''), 1600);
+    // 清掉上一条的定时器：1.6s 内连续两条提示时，旧定时器会把新消息提前清空
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashMsg(''), 1600);
   }, []);
   const [treeKey, setTreeKey] = useState(0);
   const [sideTab, setSideTab] = useState('outline');
@@ -776,6 +779,9 @@ export default function App() {
     try { r = renderLatex(deferred, {}); }
     catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + String(e && e.message || e) + '</div>', meta: {}, warnings: [{ msg: String(e && e.message || e), line: null }], diagrams: [], stats: countOf(deferred), headings: [] }; }
     lastRenderMs = performance.now() - t0;
+    // 附带渲染所基于的源码：表格/样式面板写回前校验「区间仍对得上当前源码」，
+    // 编辑后未重渲完成的窗口期内写回会落在错位偏移上
+    r.src = deferred;
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deferred, isTexLike, lang]);
@@ -787,6 +793,7 @@ export default function App() {
     try { r = renderMarkdownFull(deferred); }
     catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.mdRenderErr') + String(e && e.message || e) + '</div>', headings: [] }; }
     lastRenderMs = performance.now() - t0;
+    r.src = deferred;   // 供表格/样式面板写回前校验区间与当前源码一致
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deferred, isMd]);
@@ -801,7 +808,7 @@ export default function App() {
   const allIssues = collectIssues(
     diagnostics,
     deferred === activeValue ? (latexResult?.warnings || []) : [],
-    currentCompileErrors(compileResult, activeTab?.id, activeValue)
+    currentCompileErrors(compileResult, activeTab?.id)
   );
   // 忽略按「问题说了什么 + 那一行的内容」记忆：改别处不该让刚清空的噪音整批复活
   const fpOf = useCallback(d => issueFingerprint(d, line => {
@@ -851,7 +858,11 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       const mod = e.ctrlKey || e.metaKey;
+      // 焦点在普通输入控件（聊天框/设置表单/查找面板等）时，除 Ctrl+S 外的
+      // 全局快捷键让路：Ctrl+Enter 会把聊天发送变成编译、Ctrl+数字会切走视图
+      const inPlainInput = !!e.target.closest?.('input, textarea, select, [contenteditable]');
       if (mod && e.key === 's') { e.preventDefault(); if (!e.target.closest?.('.CodeMirror')) saveActiveAuto(); }
+      if (inPlainInput) return;
       if (mod && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
       // 编译与导出走键盘：写作时不该为了出稿去菜单里找
       if (mod && e.key === 'Enter') { e.preventDefault(); doCompile(); }
@@ -936,7 +947,13 @@ export default function App() {
   const buildContext = useCallback(
     (scope, query, channel) => buildLLMContext({ cm: () => cmRef.current, doc: valueRef.current }, scope, query, channel),
     []);
-  buildContext.cm = () => cmRef.current;
+  // 判活后再交出实例：切到图片/PDF 标签时编辑器卸载，cmRef 仍指向 swapDoc 出来的
+  // 空壳——把「替换全文」写进去等于静默丢失（移动端 chatCm 同款防护）
+  buildContext.cm = () => {
+    const inst = cmRef.current;
+    const el = inst && inst.getWrapperElement && inst.getWrapperElement();
+    return el && el.isConnected ? inst : null;
+  };
 
   // ---- AI 修复（串行队列：勾选/全部 → 逐条发送，单条含超时+退避重试，随时可停止）----
   const MAX_FIX_PER_RUN = 40;

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
-import { testConnection, fetchModels, newChannel, normTemperature, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
+import { testConnection, fetchModels, newChannel, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
 import { resolveWindow, inputBudget, formatTokens } from '../context.js';
 import { showConfirm } from '../dialogs.js';
 import { AGENT_STEPS_MAX, AGENT_KEEP_MAX } from '../workspace/agentRuntime.js';
@@ -10,11 +10,24 @@ import { AGENT_STEPS_MAX, AGENT_KEEP_MAX } from '../workspace/agentRuntime.js';
  * 模型列表拉取 + 搜索下拉 / 测试连接 / 上下文窗口（默认按模型自动推断））。
  * Agent 子页：步数上限等行为参数，对所有渠道生效。 */
 
-// 设置数值输入的钳制：非法输入回退当前值（与上下文窗口输入同一交互口径）
-const clampCfg = (v, min, max, dflt) => {
-  const n = Math.round(Number(v));
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
-};
+// 数值输入：编辑期持原始串、失焦/回车才钳制提交。受控输入若逐键 norm/clamp，
+// 键 "0." 会被 Number("0.")===0 拉回 "0"（小数点丢失），键 "0.7" 的 7 会被
+// min(2,7) 显示成 2——只能整段粘贴才能设对值
+function NumInput({ value, onCommit, min, max, step, placeholder, emptyAs = null }) {
+  const [raw, setRaw] = useState(null);   // null = 不在编辑，显示外部值
+  const shown = raw !== null ? raw : (value == null ? '' : String(value));
+  const commit = () => {
+    if (raw === null) return;
+    const s = raw.trim();
+    if (s === '') { onCommit(emptyAs); setRaw(null); return; }
+    const n = Number(s);
+    onCommit(Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : emptyAs);
+    setRaw(null);
+  };
+  return <input type="number" min={min} max={max} step={step} placeholder={placeholder}
+    value={shown} onChange={e => setRaw(e.target.value)} onBlur={commit}
+    onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur(); } }} />;
+}
 
 // 模型输入框：可手输；点「获取模型」拉取渠道列表，输入即时过滤，点选填入
 function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
@@ -226,10 +239,10 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                       </label>
                       <label className="inline ch-temp">
                         <span>{t('set.temp')}</span>
-                        <input type="number" min="0" max="2" step="0.1"
-                          value={ch.temperature == null ? '' : ch.temperature}
+                        <NumInput min={0} max={2} step={0.1}
+                          value={ch.temperature}
                           placeholder={t('set.tempPh')}
-                          onChange={e => patch(ch.id, 'temperature', normTemperature(e.target.value))} />
+                          onCommit={v => patch(ch.id, 'temperature', v)} />
                         <span className="hint">{t('set.tempHint')}</span>
                       </label>
                       <div className="ch-ctxwin">
@@ -242,8 +255,8 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                         </label>
                         {!!ch.ctxWindow && (
                           <label>{t('set.ctxTokens')}
-                            <input type="number" min="1000" step="1000" value={ch.ctxWindow}
-                              onChange={e => patch(ch.id, 'ctxWindow', Math.max(1000, +e.target.value || 1000))} />
+                            <NumInput min={1000} max={10000000} step={1000} value={ch.ctxWindow} emptyAs={1000}
+                              onCommit={v => patch(ch.id, 'ctxWindow', v || 1000)} />
                           </label>
                         )}
                         <span className="hint ch-ctx-hint">
@@ -268,14 +281,14 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
               <p className="hint">{t('set.agentIntro')}</p>
               <label>
                 {t('set.agentSteps')}
-                <input type="number" min="1" max={AGENT_STEPS_MAX} value={agentCfg.maxSteps}
-                  onChange={e => setAgentCfg(s => ({ ...s, maxSteps: clampCfg(e.target.value, 1, AGENT_STEPS_MAX, s.maxSteps) }))} />
+                <NumInput min={1} max={AGENT_STEPS_MAX} value={agentCfg.maxSteps} emptyAs={1}
+                  onCommit={v => setAgentCfg(s => ({ ...s, maxSteps: v || 1 }))} />
                 <span className="hint">{t('set.agentStepsHint')}</span>
               </label>
               <label>
                 {t('set.agentKeep')}
-                <input type="number" min="1" max={AGENT_KEEP_MAX} value={agentCfg.keepResults}
-                  onChange={e => setAgentCfg(s => ({ ...s, keepResults: clampCfg(e.target.value, 1, AGENT_KEEP_MAX, s.keepResults) }))} />
+                <NumInput min={1} max={AGENT_KEEP_MAX} value={agentCfg.keepResults} emptyAs={1}
+                  onCommit={v => setAgentCfg(s => ({ ...s, keepResults: v || 1 }))} />
                 <span className="hint">{t('set.agentKeepHint')}</span>
               </label>
             </div>

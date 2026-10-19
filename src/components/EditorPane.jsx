@@ -367,7 +367,7 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       cm.showHint({
         hint: latexHint,
         completeSingle: false,
-        closeCharacters: /[\s()\[\]{};:]>/   // 逗号除外：\cite{a,b} 补下一个键时菜单不收
+        closeCharacters: /[\s()\[\]{};:>]/   // 逗号除外：\cite{a,b} 补下一个键时菜单不收
       });
     };
     cm.on('change', (cm2, change) => {
@@ -505,7 +505,7 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
   // 语法检查同理；关掉时还要让在途请求的回执作废
   useEffect(() => {
     if (grammarCheck) scheduleGrammar();
-    else { clearTimeout(grammarTimerRef.current); grammarGenRef.current++; clearGrammarMarks(); }
+    else { clearTimeout(grammarTimerRef.current); grammarGenRef.current++; clearGrammarMarks(); grammarLastRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grammarCheck]);
 

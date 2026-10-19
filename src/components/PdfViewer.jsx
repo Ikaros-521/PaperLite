@@ -15,7 +15,13 @@ function PdfPage({ pdf, number, scale, width, height, root, flash, onBackSync })
     return () => observer.disconnect();
   }, [number, root]);
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      // 离视口即释放位图：A4 页在 2x ratio 下约 6-8MB/页，长文档滚 50 页
+      // 就是数百 MB，移动端直接 OOM。宽度归零即可释放，滚回来再重渲
+      const target = canvas.current;
+      if (target) { target.width = 0; target.height = 0; }
+      return;
+    }
     let cancelled = false, render, textRender;
     setError('');
     pdf.getPage(number).then(async page => {
@@ -169,7 +175,11 @@ const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh
     <div className="pdf-controls">
       <button className="btn sm" aria-label={zh ? '上一页' : 'Previous page'} disabled={!pdf || current <= 1} onClick={() => jump(current - 1)}>‹</button>
       <input aria-label={zh ? '页码' : 'Page'} type="number" min="1" max={pages.length || 1} value={current}
-        disabled={!pdf} onChange={e => jump(e.target.value)} />
+        disabled={!pdf}
+        // 失焦/回车才提交：逐键 onChange 输 "12" 会先跳第 1 页（空串被 ||1 吃掉）
+        onChange={e => { if (e.target.value !== '') jump(e.target.value); }}
+        onBlur={e => jump(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); jump(e.target.value); e.target.blur(); } }} />
       <span>/ {pages.length || '—'}</span>
       <button className="btn sm" aria-label={zh ? '下一页' : 'Next page'} disabled={!pdf || current >= pages.length} onClick={() => jump(current + 1)}>›</button>
       <span className="pb-spacer" />

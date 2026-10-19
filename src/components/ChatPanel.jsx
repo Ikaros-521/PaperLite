@@ -236,7 +236,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const send = async (preset, opts) => {
     // preset 只接受字符串：onClick={send} 会把事件对象传进来，绝不能当成提问文本
     const q = (typeof preset === 'string' ? preset : input).trim();
-    if (!q || busy || externalBusy) return;
+    // compacting 也要挡：压缩完成时的 setMessages(旧快照) 会整段覆盖，
+    // 压缩期间发出的消息与流式回复会被吞掉
+    if (!q || busy || compacting || externalBusy) return;
     if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
     setInput('');
     setNote('');
@@ -244,6 +246,10 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     const useMode = (opts && opts.mode) || mode;
     if (useMode === 'agent' && agentEnv) return runAgent(q);
     const useScope = (opts && opts.scope) || scope;
+    // 进异步段前先置忙：buildContext（检索范围走网络）与自动压缩都有长 await 窗口，
+    // 期间 inject 自动发送按 busyRef 判忙会二次进入，两个 send 互相覆盖消息
+    setBusy(true); busyRef.current = true;
+    try {
     const pack = await buildContext(useScope, q, channel);
     const build = (list) => ctx.buildPayload({
       system: t('ai.system'),
@@ -266,7 +272,6 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     }
     setReqUsage(built.usage);
     setRealUsage(null);
-    setBusy(true); busyRef.current = true;
     const ac = new AbortController();
     abortRef.current = ac;
     setMessages(history.concat([{ role: 'assistant', content: '', reasoning: '' }]));
@@ -285,6 +290,10 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           ? { ...m, content: t('chat.reqFailed', { msg: e.message || e }) }
           : m));
       }
+    }
+    } catch (e) {
+      // 上下文构建 / 自动压缩段的异常：此前以 unhandled rejection 沉默失败
+      flashNote(t('chat.reqFailed', { msg: e.message || e }));
     } finally {
       setBusy(false); busyRef.current = false;
       abortRef.current = null;
@@ -379,7 +388,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           <button title={t('chat.settings')} onClick={onOpenSettings}>⚙</button>
               <button
                 title={t('chat.clear')}
-                disabled={busy || externalBusy}
+                disabled={busy || compacting || externalBusy}
                 onClick={() => { setMessages([]); setReqUsage(null); setRealUsage(null); setNote(''); }}
               >{lang === 'zh' ? '清' : 'Clr'}</button>
           {!narrow && <button title={t('chat.close')} onClick={onClose}>✕</button>}
@@ -496,7 +505,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           disabled={externalBusy}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+            // isComposing：输入法组合态的 Enter 是「确认候选词」不是「发送」，
+            // 中文输入时回车选词会把半成品文本发出去
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
           }}
         />
         <div className="chat-input-acts">

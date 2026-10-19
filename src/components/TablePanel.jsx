@@ -26,6 +26,13 @@ export default function TablePanel({ open, onClose, result, cm, selection }) {
     if (!cm || nextSource == null) return;
     const prev = cm.getValue();
     if (nextSource === prev) return;
+    // 区间来自上次渲染：渲染基于的源码与当前不一致（编辑后尚未重渲完成）时
+    // 偏移已错位，写回可能吃掉相邻单元格——拒绝并提示，等下一拍重渲后重试
+    if (result.src != null && result.src !== prev) {
+      setDrafts({}); setSpecDraft(null);
+      window.alert(t('app.sourceChanged'));
+      return;
+    }
     let start = 0;
     while (start < prev.length && prev[start] === nextSource[start]) start++;
     let endP = prev.length, endN = nextSource.length;

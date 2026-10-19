@@ -125,11 +125,17 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      window.removeEventListener('blur', up);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    // 触摸拖拽被系统打断（pointercancel）或拖拽中窗口失焦（blur）时 pointerup
+    // 不会来：不补清理的话 userSelect=none 残留，整站文本从此选不中
+    window.addEventListener('pointercancel', up);
+    window.addEventListener('blur', up);
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'grabbing';
     e.preventDefault();
@@ -259,6 +265,7 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
               key={record.kind === 'style' ? 's-' + record.name : 'n-' + record.node.sidx + '-' + result.diagrams.length + '-' + (record.node.optStart)}
               record={record}
               cm={cm}
+              srcText={result.src}
             />
           )}
           {!record && mmRecord && (
@@ -266,6 +273,7 @@ export default function StylePanel({ open, onClose, result, cm, selection, setSe
               key={'m-' + mmRecord.kind + '-' + mmRecord.block + '-' + (mmRecord.id || '') + '-' + mmRecord.range.start}
               record={mmRecord}
               cm={cm}
+              srcText={result.src}
             />
           )}
         </>
@@ -297,7 +305,7 @@ function SliderRow({ label, numName, min, max, step, init, unit }) {
 }
 
 /* 属性表单（key 变化时重挂载重置；应用时直接读控件当前值，健壮不依赖事件记账） */
-function RecordForm({ record, cm }) {
+function RecordForm({ record, cm, srcText }) {
   const t = useT();
   const p = record.props;
   const formElRef = useRef(null);
@@ -309,6 +317,12 @@ function RecordForm({ record, cm }) {
     const el = formElRef.current;
     if (!el) return;
     const g = name => el.querySelector('[name="' + name + '"]');
+    // 区间来自上次渲染：渲染基于的源码与当前不一致（编辑后尚未重渲完成）时
+    // 偏移已错位，写回可能落在错误位置——拒绝并提示，等下一拍重渲后重试
+    if (srcText != null && cm && srcText !== cm.getValue()) {
+      window.alert(t('app.sourceChanged'));
+      return;
+    }
     applyChanges(cm, record, {
       fillOn: g('fillOn').checked, fill: g('fill').value,
       borderOn: g('borderOn').checked, borderColor: g('borderColor').value,
@@ -404,7 +418,7 @@ function RecordForm({ record, cm }) {
 
 /* Mermaid 表单：节点颜色（写回 style 行）与全局主题/方向/间距（写回 %%{init:…}%% 头）。
  * Mermaid 为 dagre 自动布局，节点坐标不可自由指定，布局维度为方向与间距。 */
-function MermaidForm({ record, cm }) {
+function MermaidForm({ record, cm, srcText }) {
   const t = useT();
   const p = record.props;
   const formElRef = useRef(null);
@@ -413,6 +427,11 @@ function MermaidForm({ record, cm }) {
     const el = formElRef.current;
     if (!el) return;
     const g = name => el.querySelector('[name="' + name + '"]');
+    // 区间来自上次渲染：渲染基于的源码与当前不一致时偏移已错位，写回拒绝并提示
+    if (srcText != null && cm && srcText !== cm.getValue()) {
+      window.alert(t('app.sourceChanged'));
+      return;
+    }
     const colorVal = (onName, hexName) => (g(onName) && g(onName).checked ? g(hexName).value : null);
     let code = record.code;
     if (record.kind === 'mermaidNode') {
