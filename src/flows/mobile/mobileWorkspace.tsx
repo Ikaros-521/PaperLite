@@ -79,7 +79,8 @@ interface MobileWorkspaceValue {
   openTab: (id: number) => void
   onDocChange: (doc: unknown, value: string) => void
   addDraft: (name: string, text?: string) => MobileTab
-  renameTab: (id: number, name: string) => boolean
+  /** 改名：磁盘标签会先重命名文件再同步标签元数据，失败原因由共享层弹窗说明 */
+  renameTab: (id: number, name: string) => Promise<boolean>
   closeTab: (id: number) => Promise<void>
   saveActive: () => Promise<void>
   uploadFiles: () => void

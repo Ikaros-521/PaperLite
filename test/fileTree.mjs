@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { listDir } from '../src/fs.js';
+import { listDir, renameEntry } from '../src/fs.js';
 import { extOf, infoFor, isTextEditable } from '../src/fileTypes.js';
 import { showAlert, showConfirm, showPrompt, currentDialog, finishDialog, subscribeDialogs } from '../src/dialogs.js';
 import { validName } from '../src/fileActions.js';
@@ -9,11 +9,12 @@ import { validName } from '../src/fileActions.js';
 // Execute the component's hooks and handlers against an in-memory filesystem.
 const source = readFileSync(new URL('../src/components/FileTree.jsx', import.meta.url), 'utf8');
 const hooks = [], effects = [], reads = [];
-let cursor = 0, promptValue = '', current;
+let cursor = 0, promptValue = '', current, renameFails = false;
+const renames = [];
 const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
 const translate = key => key;
 const component = source.slice(source.indexOf('export default function'), source.indexOf('  const renderNodes'))
-  .replace('export default ', '') + '\nreturn { children, expanded, loading, selDir, toggle, refreshTree, doNewFile, doNewDir };\n}\nFileTree';
+  .replace('export default ', '') + '\nreturn { children, expanded, loading, selDir, toggle, refreshTree, doNewFile, doNewDir, doRename };\n}\nFileTree';
 const FileTree = vm.runInNewContext(component, {
   useState(initial) {
     const i = cursor++;
@@ -37,6 +38,14 @@ const FileTree = vm.runInNewContext(component, {
   listDir: async handle => { reads.push(handle.name); return listDir(handle); },
   createFile: (dir, name) => dir.getFileHandle(name, { create: true }),
   createDirectory: (dir, name) => dir.getDirectoryHandle(name, { create: true }),
+  // 真实实现会 move 后按新名字重取句柄；这里照做，让标签与刷新后的树拿到同一个对象
+  renameEntry: async (handle, name, parentDir) => {
+    if (renameFails) throw new Error('disk busy');
+    parentDir.items.delete(handle.name);
+    const moved = { name, kind: 'file' };
+    parentDir.items.set(name, moved);
+    return moved;
+  },
   showPrompt: async () => promptValue, alert: message => { throw new Error(message); },
 });
 function directory(name) {
@@ -59,7 +68,7 @@ const folder = await root.getDirectoryHandle('figures');
 const nested = await folder.getDirectoryHandle('nested');
 function render() {
   cursor = 0;
-  current = FileTree({ root, refreshKey, onOpenFile() {} });
+  current = FileTree({ root, refreshKey, onOpenFile() {}, onRenamed: (oldPath, handle, name) => renames.push([oldPath, name, handle]) });
   effects.splice(0).forEach(effect => effect());
 }
 async function settle() { await new Promise(resolve => setImmediate(resolve)); render(); }
@@ -107,6 +116,43 @@ assert.equal(Object.keys(current.expanded).length, 0);
 assert.equal(current.children[''][0].name, 'main.tex');
 assert.equal(current.children['figures/nested'], undefined);
 
+// Renaming a tree entry retargets the open tab before the repaint.
+promptValue = 'paper.tex';
+await current.doRename(current.children[''][0]); await settle();
+assert.equal(renames.length, 1, 'A rename notifies open tabs exactly once');
+assert.deepEqual(renames[0].slice(0, 2), ['main.tex', 'paper.tex'], 'Old path and new name reach the workspace');
+assert.equal(renames[0][2].name, 'paper.tex', 'Tabs receive the post-rename handle');
+assert.equal(current.children[''][0].name, 'paper.tex', 'The tree repaints the new name');
+assert.equal(current.children[''][0].handle, renames[0][2], 'Tree row and tab share one handle, so reopening dedupes');
+const notified = renames.length;
+renameFails = true; promptValue = 'broken.tex';
+let renameAlert = '';
+try { await current.doRename(current.children[''][0]); } catch (error) { renameAlert = error.message; }
+renameFails = false;
+assert.equal(renames.length, notified, 'A failed disk rename must not retarget open tabs');
+assert.match(renameAlert, /ft\.renameFailed/);
+promptValue = null;
+await current.doRename(current.children[''][0]); await settle();
+assert.equal(renames.length, notified, 'Canceling the rename dialog leaves the entry untouched');
+assert.equal(current.children[''][0].name, 'paper.tex');
+assert.ok(root.items.has('paper.tex'), 'Renamed entry stays under its new name');
+
+// renameEntry hands back the handle looked up by the new name, and falls back to the live one.
+const fsDir = directory('rename-source');
+const oldHandle = await fsDir.getFileHandle('old.tex', { create: true });
+let moves = 0;
+oldHandle.move = async name => { moves++; fsDir.items.delete('old.tex'); fsDir.items.set(name, { name, kind: 'file' }); };
+const resolved = await renameEntry(oldHandle, 'new.tex', fsDir);
+assert.equal(moves, 1);
+assert.equal(resolved.name, 'new.tex');
+assert.notEqual(resolved, oldHandle, 'The refreshed tree hands out a different wrapper object');
+const vanished = { name: 'gone.tex', kind: 'file', move: async () => {} };
+assert.equal(await renameEntry(vanished, 'elsewhere.tex', directory('rename-lookup-fails')), vanished,
+  'An unreadable new name keeps the live handle instead of reporting failure');
+const immovable = { name: 'static.tex', kind: 'file' };
+await assert.rejects(() => renameEntry(immovable, 'moved.tex', null));
+assert.equal(immovable.name, 'static.tex', 'Without move() nothing is renamed');
+
 // SVG remains editable XML, and its preview URL uses the current source.
 assert.equal(isTextEditable('drawing.SVG'), true);
 assert.equal(infoFor('drawing.SVG').mode, 'xml');
@@ -141,4 +187,4 @@ await notice;
 assert.equal(currentDialog(), null);
 assert.equal(notifications, 6);
 unsubscribe();
-console.log('File tree: nested creation/cancel, refresh state, root switch races; SVG live preview; dialog queue/cancel passed.');
+console.log('File tree: nested creation/cancel, refresh state, root switch races, rename notification/handle resolution; SVG live preview; dialog queue/cancel passed.');

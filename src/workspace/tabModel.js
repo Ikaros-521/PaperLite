@@ -9,6 +9,19 @@ import CodeMirror from 'codemirror';
 import { samples } from '../engines/samples.js';
 import { tr, getLang } from '../i18n.js';
 
+/**
+ * 磁盘改名后迁移 historyKey。makeTab 把 [scope, path] 编进 key，路径一变历史就「查无此键」。
+ * 只在第二段确实等于旧路径时替换；形状不符（草稿键的第二段是 draftId）返回 null，
+ * 让调用方保持原样——宁可少迁一个键，也不能把 A 文件的历史挂到 B 文件上。
+ */
+export function renameHistoryKey(key, from, to) {
+  if (typeof key !== 'string' || !from || !to || from === to) return null;
+  let parts;
+  try { parts = JSON.parse(key); } catch (e) { return null; }
+  if (!Array.isArray(parts) || parts.length !== 2 || parts[1] !== from) return null;
+  return JSON.stringify([parts[0], to]);
+}
+
 /** 旧版单篇草稿键，仅用于回退读取 */
 export const LS_DOC = 'paperlite.doc.v2';
 /** 当前多草稿键：[{ id: draftId, name, text }] */

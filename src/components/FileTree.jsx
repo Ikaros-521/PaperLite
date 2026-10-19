@@ -6,7 +6,7 @@ import { useLang, useT } from '../useI18n.js';
 import { showAlert as alert, showConfirm, showPrompt } from '../dialogs.js';
 
 /* 文件树：懒加载展开；文件点击打开；悬停操作（新建/重命名/删除） */
-export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }) {
+export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey, onRenamed }) {
   const t = useT();
   const lang = useLang();
   const [children, setChildren] = useState({});   // path -> entries[]
@@ -118,8 +118,11 @@ export default function FileTree({ root, onOpenFile, onCloseFolder, refreshKey }
     if (!name || name === entry.name) return;
     if (!validName(name)) { alert(t('app.badFileName')); return; }
     try {
-      await renameEntry(entry.handle, name);
       const parent = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : '';
+      const handle = await renameEntry(entry.handle, name, parentHandle(parent));
+      // 先让已打开的标签跟着改名，再刷新树：顺序反了会短暂出现「树新名 + 标签旧名」，
+      // 而标签此时保存写的还是旧路径
+      onRenamed?.(entry.path, handle, name);
       refresh(parent);
     } catch (e) { alert(t('ft.renameFailed', { msg: e.message || e })); }
   };

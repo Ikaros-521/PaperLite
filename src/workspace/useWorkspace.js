@@ -16,7 +16,7 @@ import { downloadFile } from '../exporter.js';
 import { recordVersion, copyHistory } from '../historyStorage.js';
 import { samples } from '../engines/samples.js';
 import { tr, getLang, detectLang } from '../i18n.js';
-import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedWork } from './tabModel.js';
+import { makeTab, restoreDraftTabs, persistDrafts, markDraftsStored, hasUnsavedWork, renameHistoryKey } from './tabModel.js';
 
 /**
  * @param ui {{
@@ -414,11 +414,75 @@ export function useWorkspace(ui) {
     return tab;
   }, []);
 
-  /** 改名：草稿只改显示名，文件标签同时改 path；改完立刻整组落盘 */
-  const renameTab = useCallback((id, name) => {
+  /**
+   * 磁盘上改完名后，把所有指向旧路径的已打开标签对齐到新名字（文件树重命名走这里）。
+   * 不能只按 handle 匹配：同一个文件可能分别从文件树和项目搜索打开过，两份句柄是不相等的包装对象，
+   * 漏掉的那些会一直顶着旧名/旧路径——而 path 同时是 zip 导出条目名、主文档解析与搜索去重的键。
+   * doc 一律不碰：改名不该丢内容，dirty/saved/saving 照旧。
+   */
+  const renameTabPath = useCallback((oldPath, handle, newName) => {
+    const from = String(oldPath || '');
+    const name = String(newName || '').trim();
+    if (!from || !name) return false;
+    const slash = from.lastIndexOf('/');
+    const to = (slash >= 0 ? from.slice(0, slash + 1) : '') + name;
+    if (to === from) return false;
+    const plan = [];
+    for (const tab of tabsRef.current) {
+      if (!tab.handle) continue;          // 无磁盘后端的标签（草稿、未落盘的上传件）不跟着改名
+      const path = tab.path || tab.name;
+      const sameFile = tab.handle === handle || path === from;
+      // oldPath 是文件夹：整棵子树换前缀，标签名不变
+      const underDir = !sameFile && path.startsWith(from + '/');
+      if (!sameFile && !underDir) continue;
+      const nextPath = sameFile ? to : to + '/' + path.slice(from.length + 1);
+      plan.push({
+        id: tab.id, name: sameFile ? name : tab.name, path: nextPath,
+        handle: sameFile && handle ? handle : tab.handle,
+        fromKey: tab.historyKey, historyKey: renameHistoryKey(tab.historyKey, path, nextPath),
+      });
+    }
+    if (!plan.length) return false;
+    // 版本历史按 [文件夹, 路径] 归档，不迁移就等于改名后历史「凭空消失」（与另存为共用 copyHistory）
+    const migrated = new Map();
+    let historyFailed = false;
+    for (const p of plan) {
+      if (!p.historyKey) continue;   // 键形状不符（草稿键）：保持原样，历史不迁移
+      if (copyHistory(p.fromKey, p.historyKey)) migrated.set(p.id, p.historyKey);
+      else historyFailed = true;
+    }
+    if (historyFailed) setHistoryError(tr(getLang(), 'hist.storageError'));
+    setTabs(ts => ts.map(tab => {
+      const p = plan.filter(x => x.id === tab.id)[0];
+      if (!p) return tab;
+      return { ...tab, name: p.name, path: p.path, handle: p.handle, historyKey: migrated.get(p.id) || tab.historyKey };
+    }));
+    return true;
+  }, [setHistoryError]);
+
+  /**
+   * 改名：磁盘标签先改盘、成功后才同步元数据；草稿与未落盘标签只改显示名。
+   * 顺序反了会留下「标签新名 + 磁盘旧名」——保存静默写回旧文件，下轮文件夹扫描又把旧名扫回来。
+   * 移动端没有文件树，这里是磁盘文件唯一的重命名通道，所以它是 async 的（调用方要 await）。
+   */
+  const renameTab = useCallback(async (id, name) => {
     const trimmed = String(name || '').trim();
     if (!trimmed) return false;
     if (!validName(trimmed)) { alertBox(t('app.badFileName')); return false; }
+    const tab = tabsRef.current.filter(x => x.id === id)[0];
+    if (!tab) return false;
+    if (tab.name === trimmed) return true;
+    if (tab.handle && tab.kind !== 'draft') {
+      const oldPath = tab.path || tab.name;
+      try {
+        const handle = await fs.renameEntry(tab.handle, trimmed, tab.parentDir);
+        onTreeChanged();
+        return renameTabPath(oldPath, handle, trimmed);
+      } catch (e) {
+        alertBox(t('ft.renameFailed', { msg: e.message || e }));
+        return false;
+      }
+    }
     setTabs(ts => {
       const next = ts.map(x => {
         if (x.id !== id) return x;
@@ -433,7 +497,7 @@ export function useWorkspace(ui) {
       return next;
     });
     return true;
-  }, [alertBox, t]);
+  }, [alertBox, t, onTreeChanged, renameTabPath]);
 
   /** 落盘成功后推进 saved（Ctrl+S 的浏览器路径） */
   const persistNow = useCallback(() => {
@@ -456,7 +520,7 @@ export function useWorkspace(ui) {
     noteHistory, snapshot,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
-    addDraft, renameTab, persistNow,
+    addDraft, renameTab, renameTabPath, persistNow,
     onDocChange, activateTab,
   };
 }

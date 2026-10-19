@@ -62,9 +62,21 @@ export async function removeEntry(dirHandle, name, recursive) {
 export function canRename(handle) {
   return typeof handle.move === 'function';
 }
-export async function renameEntry(handle, newName) {
+/**
+ * 重命名，并返回「改名后」的句柄。
+ * move 之后旧句柄在 Chrome 里仍指向同一文件，但文件树刷新后按新名字拿到的是另一份包装对象，
+ * 而已打开标签的去重与保存都认句柄身份；这里按新名字重新取一次，标签才能和树里的条目对上。
+ * 取不到（父目录句柄刚失效、实现不同）就退回旧句柄——盘已经改成功了，不该据此判定改名失败。
+ */
+export async function renameEntry(handle, newName, parentDir) {
   if (!canRename(handle)) throw new Error(t('fs.noRename'));
   await handle.move(newName);
+  if (!parentDir) return handle;
+  try {
+    return handle.kind === 'directory'
+      ? await parentDir.getDirectoryHandle(newName)
+      : await parentDir.getFileHandle(newName);
+  } catch (e) { return handle; }
 }
 
 export function fileBlobUrl(fileHandle) {

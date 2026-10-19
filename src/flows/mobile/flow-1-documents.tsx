@@ -232,11 +232,13 @@ export function Screen1_DocumentsHome({ banner }: { banner?: ReactNode }) {
             key: 'ok',
             text: t('dialog.ok'),
             bold: true,
-            onClick: () => {
-              if (!ws.renameTab(tab.id, next)) {
+            onClick: async () => {
+              if (!next.trim()) {
                 Toast.show({ content: t('mb.doc.nameEmpty') })
                 return
               }
+              // 磁盘标签这条会真的重命名文件；失败已有共享层的告警，不再叠一个「名称不能为空」的误导提示
+              if (!await ws.renameTab(tab.id, next)) return
               Toast.show({ content: t('mb.doc.renamed'), icon: 'success' })
             },
           },

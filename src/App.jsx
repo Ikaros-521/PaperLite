@@ -101,7 +101,7 @@ export default function App() {
     noteHistory, snapshot,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
-    addDraft,
+    addDraft, renameTabPath,
     onDocChange: applyDocChange,
   } = useWorkspace({
     t, flash, alertBox: alert, confirm: showConfirm, prompt: showPrompt,
@@ -1268,7 +1268,8 @@ export default function App() {
           </div>
           <div className="side-body">
             {sideTab === 'files' && (rootDir ? (
-              <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey} />
+              <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey}
+                onRenamed={(oldPath, handle, name) => { renameTabPath(oldPath, handle, name); setTreeKey(n => n + 1); }} />
             ) : (
               <div className="side-pad side-empty">
                 {restorePrompt && <button className="btn sm" onClick={restoreFolder}>{t('side.restore', { name: restorePrompt.name })}</button>}
