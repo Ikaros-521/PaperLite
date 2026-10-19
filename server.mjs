@@ -73,9 +73,13 @@ function parseLog(log) {
 
 async function compile(body) {
   const { engine, source } = body;
-  if (!ENGINE_CMDS[engine]) return { ok: false, error: '未知引擎：' + engine };
+  // 必须查 own property：ENGINE_CMDS[engine] 对 'constructor'/'__proto__'/'toString'
+  // 都能从原型链上取到真值，等于绕过白名单（后面 spawn 收到一个 Function，
+  // 报出来的内部错误文本还会原样回显给页面）
+  const cmd = Object.hasOwn(ENGINE_CMDS, engine) ? ENGINE_CMDS[engine] : null;
+  if (!cmd) return { ok: false, error: '未知引擎：' + String(engine).slice(0, 40) };
   const avail = availableEngines();
-  if (!avail[engine]) return { ok: false, error: `本机未安装 ${engine}（请安装 MiKTeX 或 TeX Live 并加入 PATH）` };
+  if (!Object.hasOwn(avail, engine) || !avail[engine]) return { ok: false, error: `本机未安装 ${engine}（请安装 MiKTeX 或 TeX Live 并加入 PATH）` };
 
   const dir = path.join(os.tmpdir(), 'paperlite-' + crypto.randomBytes(6).toString('hex'));
   fs.mkdirSync(dir, { recursive: true });
@@ -83,8 +87,8 @@ async function compile(body) {
     fs.writeFileSync(path.join(dir, 'main.tex'), String(source || ''), 'utf8');
     const args = ['-interaction=nonstopmode', '-halt-on-error', 'main.tex'];
     // 跑两遍以解析目录/交叉引用
-    let r1 = await runCmd(ENGINE_CMDS[engine], args, dir);
-    if (r1.code === 0) r1 = await runCmd(ENGINE_CMDS[engine], args, dir);
+    let r1 = await runCmd(cmd, args, dir);
+    if (r1.code === 0) r1 = await runCmd(cmd, args, dir);
     let log = '';
     try { log = fs.readFileSync(path.join(dir, 'main.log'), 'utf8'); } catch (e) { log = r1.out; }
 
@@ -102,8 +106,29 @@ async function compile(body) {
     const pdf = fs.readFileSync(pdfPath).toString('base64');
     return { ok: true, pdf, log, errors: [], engine };
   } finally {
-    fs.rm(dir, { recursive: true, force: true }, () => {});
+    // Windows 上 TeX 与杀软常常还攥着 main.log，空回调等于把错误咽掉、目录就地僵尸。
+    // 给重试并把失败说出来，配合启动时的清扫，%TEMP% 才不会只增不减
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }, (err) => {
+      if (err) console.warn('[paperlite] 临时目录没清掉：', path.basename(dir), err.code || err.message);
+    });
   }
+}
+
+/** 崩溃或 Ctrl+C 时 finally 跑不到，%TEMP% 里会攒下 paperlite-* 目录（TeX 中间产物）。
+ *  启动时扫一遍，只动一小时前的——更早的不可能是另一个实例正在用的。 */
+function sweepStaleTempDirs() {
+  const base = os.tmpdir(), cutoff = Date.now() - 3600e3;
+  let names;
+  try { names = fs.readdirSync(base); } catch (e) { return; }
+  let swept = 0;
+  for (const n of names) {
+    if (!n.startsWith('paperlite-')) continue;
+    const p = path.join(base, n);
+    try {
+      if (fs.statSync(p).mtimeMs < cutoff) { fs.rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); swept++; }
+    } catch (e) { /* 没权限或正好被占用，下一轮再说 */ }
+  }
+  if (swept) console.log(`已回收 ${swept} 个残留的临时编译目录`);
 }
 
 // ---------------- HTTP ----------------
@@ -138,17 +163,22 @@ function json(res, code, obj, extra) {
 // 把坏 JSON 当空对象交给 compile 只会得到一句莫名其妙的编译错误
 function readBody(req) {
   return new Promise((resolve) => {
-    let data = '';
+    const chunks = [];
+    let bytes = 0;
     let settled = false;
     const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
     // 超限时 destroy 后不会再有 'end' 事件：立即 resolve
     req.on('data', c => {
-      data += c;
-      if (data.length > 20e6) { try { req.destroy(); } catch (e) {} finish({ ok: false, code: 413, error: 'payload too large' }); }
+      bytes += c.length;   // 按字节限：UTF-8 一个汉字三字节，按字符数限等于把预算放大三倍
+      if (bytes > 20e6) { try { req.destroy(); } catch (e) {} finish({ ok: false, code: 413, error: 'payload too large' }); return; }
+      // 必须攒够 Buffer 再整体解码：`data += chunk` 会让每个分块单独 toString，
+      // 跨 TCP 包的 UTF-8 序列断成 U+FFFD —— 中文文稿带着坏字符交给 TeX，
+      // 用户只会看到一句莫名其妙的编译错误
+      chunks.push(c);
     });
     req.on('error', () => finish({ ok: false, code: 400, error: 'request stream error' }));
     req.on('end', () => {
-      try { finish({ ok: true, value: JSON.parse(data) }); }
+      try { finish({ ok: true, value: JSON.parse(Buffer.concat(chunks).toString('utf8')) }); }
       catch (e) { finish({ ok: false, code: 400, error: 'invalid JSON body' }); }
     });
   });
@@ -157,6 +187,28 @@ function readBody(req) {
 // 一次 TeX 编译能吃掉几十秒 CPU：并发上限挡住「同一页面连点编译」把本机打成排队机房
 const MAX_COMPILE = 2;
 let compiling = 0;
+
+/** SSE 的推送跑在 timer 回调里：那里抛出的错误 route().catch 看不见，客户端断开后
+ *  继续 res.write 就是 ERR_STREAM_WRITE_AFTER_END，而本进程没有异常兜底 —— 一个请求
+ *  就能把伴随服务打死。这个壳把「断开」变成停表 + 静默写，并给个错误出口。 */
+function sseGuard(res) {
+  const timers = new Set();
+  let alive = true;
+  const stop = () => { alive = false; for (const t of timers) clearInterval(t); timers.clear(); };
+  res.on('close', stop);
+  res.on('error', stop);
+  return {
+    get alive() { return alive; },
+    write(s) { if (!alive) return; try { res.write(s); } catch (e) { stop(); } },
+    end() { if (!alive) return; alive = false; try { res.end(); } catch (e) { /* 已断开 */ } },
+    every(fn, ms) {
+      const t = setInterval(() => { if (!alive) { clearInterval(t); timers.delete(t); return; } fn(t); }, ms);
+      timers.add(t);
+      return t;
+    },
+    clear(t) { clearInterval(t); timers.delete(t); },
+  };
+}
 
 // 包一层：处理器里任何抛出（含 decodeURIComponent 的 URIError）都必须回响应，
 // 否则 async 回调的 rejection 会变成 unhandledRejection，Node 15+ 默认直接结束进程
@@ -222,15 +274,16 @@ async function route(req, res) {
     const pt = reqTokens(body), ct = estTok(reply);
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
+      const g = sseGuard(res);
       const deltas = reply.match(/[\s\S]{1,12}/g) || [];
       let i = 0;
-      const t = setInterval(() => {
+      g.every((t) => {
         if (i >= deltas.length) {
           // OpenAI 约定：开启 include_usage 后，末尾以空 choices 的块回传计量
-          res.write('data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct } }) + '\n\n');
-          res.write('data: [DONE]\n\n'); res.end(); clearInterval(t); return;
+          g.write('data: ' + JSON.stringify({ choices: [], usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct } }) + '\n\n');
+          g.write('data: [DONE]\n\n'); g.end(); g.clear(t); return;
         }
-        res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: deltas[i++] } }] }) + '\n\n');
+        g.write('data: ' + JSON.stringify({ choices: [{ delta: { content: deltas[i++] } }] }) + '\n\n');
       }, 30);
       return;
     }
@@ -260,28 +313,30 @@ async function route(req, res) {
 
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...cors });
-      res.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock', content: [], usage: { input_tokens: pt, output_tokens: 1 } } })}\n\n`);
+      const g = sseGuard(res);
+      g.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model || 'claude-mock', content: [], usage: { input_tokens: pt, output_tokens: 1 } } })}\n\n`);
       let bi = 0;
       const nextBlock = () => {
+        if (!g.alive) return;
         if (bi >= blocks.length) {
-          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: ct } })}\n\n`);
-          res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
-          res.end();
+          g.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: ct } })}\n\n`);
+          g.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+          g.end();
           return;
         }
         const b = blocks[bi], idx = bi;
-        res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: b.type === 'thinking' ? { type: 'thinking', thinking: '' } : { type: 'text', text: '' } })}\n\n`);
+        g.write(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: b.type === 'thinking' ? { type: 'thinking', thinking: '' } : { type: 'text', text: '' } })}\n\n`);
         const pieces = (b.text || '').match(/[\s\S]{1,12}/g) || [];
         let pi = 0;
-        const t = setInterval(() => {
+        g.every((t) => {
           if (pi >= pieces.length) {
-            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: idx })}\n\n`);
-            clearInterval(t); bi++; nextBlock();
+            g.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: idx })}\n\n`);
+            g.clear(t); bi++; nextBlock();
             return;
           }
           const piece = pieces[pi++];
           const delta = b.type === 'thinking' ? { type: 'thinking_delta', thinking: piece } : { type: 'text_delta', text: piece };
-          res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: idx, delta })}\n\n`);
+          g.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: idx, delta })}\n\n`);
         }, 20);
       };
       nextBlock();
@@ -366,6 +421,20 @@ function mockReply(q) {
   }
   return '收到：' + q.slice(0, 80) + '\n\n我是 **Mock 渠道**（离线演示）。请在「AI 设置」中添加真实渠道（Base URL + Key + 模型）。回复中如包含代码块，可直接应用：\n\n```latex\n% 演示代码块\n\\textbf{应用我试试}\n```';
 }
+
+// timer 回调与 fs 异步回调里的抛出，route().catch 是看不到的；没有这层兜底时
+// 一次写坏流就足以把整个伴随服务带走（编译与 AI 全断），所以记录后继续活着
+process.on('uncaughtException', (e) => console.error('[paperlite] 未捕获异常，服务继续运行：', (e && e.stack) || e));
+process.on('unhandledRejection', (e) => console.error('[paperlite] 未处理的 rejection：', (e && e.stack) || e));
+
+sweepStaleTempDirs();
+
+// 端口被占时默认抛一整段栈然后退出；给一句能照着做的提示
+server.on('error', (e) => {
+  if (e && e.code === 'EADDRINUSE') console.error(`端口 ${PORT} 已被占用（可能已有一个 server.mjs 在跑）。换个端口：node server.mjs 8790`);
+  else console.error('[paperlite] 服务启动失败：', (e && e.message) || e);
+  process.exit(1);
+});
 
 server.listen(PORT, '127.0.0.1', () => {
   const eng = availableEngines();
