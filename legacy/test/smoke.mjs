@@ -108,5 +108,17 @@ ok(PL.tikz.parseColor('blue!20') === '#ccccff', 'blue!20 = #ccccff, got ' + PL.t
 ok(PL.tikz.parseColor('red!50!blue') === '#800080', 'red!50!blue, got ' + PL.tikz.parseColor('red!50!blue'));
 ok(PL.tikz.parseColor('{rgb,255:255,0,0}') === '#ff0000', 'rgb 形式');
 
+// ---------- 链接与图片的 scheme 白名单（下载的 .tex 不该能在预览里挂可执行链接/外发请求） ----------
+console.log('== 链接白名单 ==');
+const linkRes = PL.latex.render(String.raw`\documentclass{article}\begin{document}
+\href{javascript:alert(1)}{危险链接}
+\url{https://paperlite.test/docs}
+\includegraphics{http://evil.test/track.png}
+\end{document}`);
+ok(!/href="javascript/i.test(linkRes.html), 'javascript: 的 \\href 不再变成可点链接');
+ok(linkRes.html.includes('危险链接'), '被拦下的链接仍显示文字');
+ok(/rel="noopener noreferrer"/.test(linkRes.html), '放行的 http(s) 链接带 noopener');
+ok(!/src="http:\/\/evil\.test/i.test(linkRes.html), '远程图片不生成出站 src');
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

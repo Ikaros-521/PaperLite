@@ -100,7 +100,14 @@ function ensureMermaid(cb) {
     'https://registry.npmmirror.com/mermaid/10.9.3/files/dist/mermaid.min.js'
   ], function (ok) {
     if (ok && global.mermaid) {
-      global.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', htmlLabels: false, fontFamily: 'Georgia, "Noto Serif SC", serif' });
+      // loose 会放行 click 里的 javascript: 与 HTML 标签；strict + DOMPurify 才挡得住
+      // 从网上下载的 .tex/.md 里的图源码。secure 补上 dompurifyConfig/htmlLabels：
+      // 文档自带的 %%{init}%% 指令不该能改自己的消毒器配置
+      global.mermaid.initialize({
+        startOnLoad: false, securityLevel: 'strict', htmlLabels: false,
+        fontFamily: 'Georgia, "Noto Serif SC", serif',
+        secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'dompurifyConfig', 'htmlLabels'],
+      });
       mermaidReady = true;
     }
     mermaidLoading = false;

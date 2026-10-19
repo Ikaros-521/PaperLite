@@ -2,7 +2,7 @@
 
 仿 Overleaf 的**本地论文工具**：LaTeX 实时预览 + 图样式可视化编辑，支持**打开本地文件夹**（文件树/多标签）、**Markdown 渲染与代码编辑**、**TeX 引擎真实编译（pdfLaTeX/LaTeX/XeLaTeX/LuaLaTeX，含多文件主文档与自动重编译）**、**多级大纲跳转**、**语法检测定位**、**命令/环境/文件名自动补全**、**项目内跨文件搜索**、**文献检索插入（Crossref / OpenAlex / DBLP）与 LanguageTool 语法检查**、**多渠道 LLM（AI 修复 / 对话改写）**。
 
-当前为 **React + Vite 实现**；最早的零依赖 vanilla 版本保留在 [`legacy/`](legacy/)。
+当前为 **React + Vite 实现**；最早的零依赖 vanilla 版本保留在 [`legacy/`](legacy/)。旧版只做**最小安全对齐**（mermaid `strict`、链接 scheme 白名单、KaTeX `trust` 收紧），不再跟进新功能与其余加固；`file://` 下所有页面共用一个 localStorage 源，别拿它打开来路不明的文档。
 
 ## 快速开始
 
@@ -206,7 +206,7 @@ paperlite/
 │       ├── CiteDialog.jsx    # 文献检索对话框（fetch 直连公共 API，纯 UI）
 │       ├── GlobalSearchPanel.jsx # 项目搜索侧栏面板（受控组件，状态由 App 持有）
 │       └── Toolbar.jsx       # 顶栏 / 文件夹 / 模板 / 导出 / 插入工具
-├── legacy/               # v1 vanilla 版（双击 legacy/index.html 可用）
+├── legacy/               # v1 vanilla 版（双击 legacy/index.html 可用；仅最小安全对齐）
 └── test/smoke.mjs        # 冒烟测试（npm test）
 ```
 

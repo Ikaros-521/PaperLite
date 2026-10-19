@@ -16,6 +16,30 @@ function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// 链接 scheme 白名单（与 src/engines/latex.js 同口径）：无 scheme 的相对路径/锚点放行，
+// http/https/mailto/tel 放行，javascript:/data:/vbscript: 一律清空——文档内容不可信，
+// 预览里的链接不能一点就执行脚本。判定前按 URL 规范归一：解析器会删掉控制空白与 C0，
+// `java<TAB>script:` 和 <C0>javascript: 在浏览器里就是 javascript:。
+function normUrl(u) {
+  return String(u == null ? '' : u).replace(/[\x00-\x1f\x7f]/g, '').trim();
+}
+function safeUrl(u) {
+  var s = normUrl(u);
+  var seg = s.split(/[/?#]/)[0];
+  var m = seg.match(/^([a-zA-Z][a-zA-Z0-9+.\-]*):/);
+  if (!m) return s;
+  var k = m[1].toLowerCase();
+  return (k === 'http' || k === 'https' || k === 'mailto' || k === 'tel') ? s : '';
+}
+// \includegraphics 只该指向项目内文件：带 scheme 或 // 开头的值在渲染时会自动发起
+// 出站请求（不需要点击），打开第三方 .tex 就泄露 IP 与文档路径
+function localAssetPath(u) {
+  var s = normUrl(u);
+  if (s.indexOf('//') === 0) return '';
+  var seg = s.split(/[/?#]/)[0];
+  return seg.indexOf(':') < 0 ? s : '';
+}
+
 // ---------------- 偏移工具（等长原则） ----------------
 // 把行内注释(%..行尾)替换为等长空格，保留换行
 function blankComments(src) {
@@ -159,7 +183,10 @@ function renderMath(tex, display, ctx, macrosForKatex) {
   var html;
   try {
     html = global.katex.renderToString(tex, {
-      displayMode: !!display, throwOnError: false, strict: false, trust: true,
+      displayMode: !!display, throwOnError: false, strict: false,
+      // trust 不再全开：\href/\url 走 safeUrl 白名单，其余信任场景（\htmlClass/
+      // \htmlStyle/\includegraphics）一律拒绝
+      trust: function (c) { return !!safeUrl(c && c.url); },
       macros: macrosForKatex || {}
     });
   } catch (e) {
@@ -538,11 +565,13 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       if (g1) return g1.end + 1;
       return afterName;
     }
-    case 'url': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<a href="' + esc(g1.text) + '" target="_blank">' + esc(g1.text) + '</a>' };
+    case 'url': g1 = G(afterName); if (!g1) return null; var uu = safeUrl(g1.text); return { next: g1.end + 1, html: uu ? '<a href="' + esc(uu) + '" target="_blank" rel="noopener noreferrer">' + esc(g1.text) + '</a>' : esc(g1.text) };
     case 'href': {
       g1 = G(afterName); g2 = G(g1 ? g1.end + 1 : afterName);
       if (!g1 || !g2) return null;
-      return { next: g2.end + 1, html: '<a href="' + esc(g1.text) + '" target="_blank">' + renderFlow(g2.text, ctx, base + g2.start, false, true) + '</a>' };
+      var hu = safeUrl(g1.text);
+      var inner = renderFlow(g2.text, ctx, base + g2.start, false, true);
+      return { next: g2.end + 1, html: hu ? '<a href="' + esc(hu) + '" target="_blank" rel="noopener noreferrer">' + inner + '</a>' : inner };
     }
 
     // ---- 版面（忽略类） ----
@@ -572,7 +601,9 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
           else { var px = { cm: 37.8, mm: 3.78, pt: 1.33, in: 96 }; var um = wm[1].match(/^([\d.]+)(cm|mm|pt|in)/); if (um) wstyle = ' style="width:' + (+um[1] * px[um[2]]) + 'px"'; }
         }
       }
-      return { next: g1.end + 1, html: '<img class="includegraphics" src="' + esc(g1.text.trim()) + '" alt="' + esc(g1.text) + '"' + wstyle + '/>' };
+      var src = localAssetPath(g1.text.trim());
+      if (!src) return { next: g1.end + 1, html: '<span class="math-error">' + esc(g1.text) + '</span>' };
+      return { next: g1.end + 1, html: '<img class="includegraphics" src="' + esc(src) + '" alt="' + esc(g1.text) + '"' + wstyle + '/>' };
     }
     case 'rule': { g1 = G(afterName); g2 = G(g1 ? g1.end + 1 : 0); if (!g1 || !g2) return null; return { next: g2.end + 1, html: '<span class="rule-bar"></span>' }; }
     case 'quad': case 'qquad': return { next: afterName, html: '&emsp;' };
