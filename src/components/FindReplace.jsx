@@ -196,14 +196,16 @@ export default function FindReplace({ cm, doc, open, request, onClose }) {
       : count ? t('find.count', { i: index + 1, n: count }) + (truncated ? ' ' + t('find.many', { n: MAX_MARKS }) : '')
         : (query ? t('find.none') : '');
 
+  // 输入法组合态的 Enter 是「确认候选词」，不是查找/替换指令；
+  // 替换框里放过这条会在用户还没打完字时就改掉文档
   const onFindKey = (e) => {
-    if (e.key !== 'Enter') return;
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
     e.preventDefault();
     if (e.altKey) { if (showReplace) replaceAll(); }
     else jump(e.shiftKey ? -1 : 1);
   };
   const onReplKey = (e) => {
-    if (e.key !== 'Enter') return;
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
     e.preventDefault();
     if (e.altKey) replaceAll(); else replaceCurrent();
   };

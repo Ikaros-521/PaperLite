@@ -377,8 +377,14 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
         closeCharacters: /[\s()\[\]{};:>]/   // 逗号除外：\cite{a,b} 补下一个键时菜单不收
       });
     };
+    // 输入法组合期间不弹补全：会和 IME 自己的候选窗叠在一起，且逐字上屏把菜单反复弹关。
+    // 组合事件从隐藏 textarea 冒泡到 wrapper，监听挂 wrapper；cleanup 里整块摘掉元素，不必逐个解绑
+    let composing = false;
+    const wrapEl = cm.getWrapperElement();
+    wrapEl.addEventListener('compositionstart', () => { composing = true; });
+    wrapEl.addEventListener('compositionend', () => { composing = false; });
     cm.on('change', (cm2, change) => {
-      if (change.origin !== '+input') return;
+      if (change.origin !== '+input' || composing) return;
       const cur = cm2.getCursor();
       const before = (cm2.getLine(cur.line) || '').slice(0, cur.ch);
       const typed = (change.text || []).join('');

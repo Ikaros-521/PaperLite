@@ -70,12 +70,15 @@ const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh
   const [error, setError] = useState(''), [current, setCurrent] = useState(1);
   const [zoom, setZoom] = useState('fit'), [available, setAvailable] = useState(700);
   const [spread, setSpread] = useState(false);
+  // 页码输入框的编辑草稿：不草稿化就没法打「12」——value 绑的是 current，
+  // 每按一个键都立刻被跳页结果盖回去（注释里写的「失焦才提交」当时并没有实现）
+  const [pageDraft, setPageDraft] = useState(null);
   // 每页文本索引（pdf.js getTextContent，PDF 坐标）+ 正向跳转的闪烁标记
   const indexesRef = useRef([]);
   const [flash, setFlash] = useState(null);
   useEffect(() => {
     let task, cancelled = false;
-    setPdf(null); setPages([]); setError(''); setCurrent(1);
+    setPdf(null); setPages([]); setError(''); setCurrent(1); setPageDraft(null);
     indexesRef.current = []; setFlash(null);
     loadPdfLibrary().then(async lib => {
       if (cancelled) return;
@@ -192,12 +195,13 @@ const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh
     </div>
     <div className="pdf-controls">
       <button className="btn sm" aria-label={zh ? '上一页' : 'Previous page'} disabled={!pdf || current <= 1} onClick={() => jump(current - 1)}>‹</button>
-      <input aria-label={zh ? '页码' : 'Page'} type="number" min="1" max={pages.length || 1} value={current}
+      <input aria-label={zh ? '页码' : 'Page'} type="number" min="1" max={pages.length || 1}
+        value={pageDraft != null ? pageDraft : String(current)}
         disabled={!pdf}
-        // 失焦/回车才提交：逐键 onChange 输 "12" 会先跳第 1 页（空串被 ||1 吃掉）
-        onChange={e => { if (e.target.value !== '') jump(e.target.value); }}
-        onBlur={e => jump(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); jump(e.target.value); e.target.blur(); } }} />
+        // 失焦/回车才提交：逐键跳页会让「输入 12」先跳第 1 页，跳页动画也被打断
+        onChange={e => setPageDraft(e.target.value)}
+        onBlur={e => { jump(e.target.value); setPageDraft(null); }}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); jump(e.target.value); setPageDraft(null); e.target.blur(); } }} />
       <span>/ {pages.length || '—'}</span>
       <button className="btn sm" aria-label={zh ? '下一页' : 'Next page'} disabled={!pdf || current >= pages.length} onClick={() => jump(current + 1)}>›</button>
       <span className="pb-spacer" />

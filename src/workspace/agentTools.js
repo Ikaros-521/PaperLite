@@ -36,7 +36,7 @@ export function toolsSchema() {
     '- search_files {query, regex?, match_case?, whole_word?}：' + tr(L, 'agent.tSearch'),
     '- read_selection：' + tr(L, 'agent.tReadSel'),
     '- get_diagnostics：' + tr(L, 'agent.tDiag'),
-    '- edit_file {old_text, new_text}：' + tr(L, 'agent.tEditFile'),
+    '- edit_file {old_text, new_text, path?}：' + tr(L, 'agent.tEditFile'),
     '- insert_text {text}：' + tr(L, 'agent.tInsert'),
     '- create_file {path, content}：' + tr(L, 'agent.tCreateFile'),
   ];
@@ -104,7 +104,8 @@ export function outlineOf(text) {
  *   folderIndex: () => {texFiles: any[], bibFiles: any[], textFiles: any[], imageFiles: any[]},
  *   rootDir: () => any,               // FileSystemDirectoryHandle | null
  *   getDiagnostics: () => any[],
- *   beforeEdit: () => void,           // 修改文档前快照（版本历史，Ctrl+Z 兜底）
+ *   beforeEdit: (tab: any | null) => void, // 修改前快照（版本历史）；tab 为非活动标签，null 表示活动编辑器
+ *   markDirty?: (tab: any) => void,        // 后台标签被改后补脏标记（不经过编辑器 change 事件）
  *   createFile: (path: string, content: string) => Promise<{ok: boolean, msg?: string}>,
  *   openByPath: (path: string) => Promise<{ok: boolean, msg?: string}>,
  * }}
@@ -223,22 +224,46 @@ export function makeAgentExecutor(deps) {
     return ok(sel);
   }
 
+  /* 编辑目标解析：path 让模型指名要改哪个文件。省略 path 时沿用「活动编辑器」旧行为，
+     但结果必须回显文件名——agent 自己的 open_file 或用户点一下标签都会切换活动文档，
+     不回显就是把「改错文件」藏成一次静默的 replaceRange。 */
+  function resolveTarget(args) {
+    const L = getLang();
+    const path = String(args.path || '').trim();
+    const tabs = deps.tabs() || [];
+    if (!path) {
+      const c = deps.cm();
+      if (!c) return { err: tr(L, 'agent.errNoEditor') };
+      const active = tabs.find(x => x && x.id === deps.activeId());
+      return { doc: c, tab: null, label: active ? deps.tabPath(active) : '' };
+    }
+    const tab = tabs.find(x => x && x.doc && deps.tabPath(x) === path);
+    if (tab) return { doc: tab.doc, tab, label: path };
+    return { err: tr(L, 'agent.errNotOpen', { path }) };
+  }
+
+  const labelOf = (t) => t || tr(getLang(), 'agent.filesActive');
+
   function toolEditFile(args) {
     const L = getLang();
-    const c = deps.cm();
-    if (!c) return fail(tr(L, 'agent.errNoEditor'));
     const oldText = String(args.old_text == null ? '' : args.old_text);
     const newText = String(args.new_text == null ? '' : args.new_text);
     if (!oldText) return fail(tr(L, 'agent.errNoOldText'));
-    const value = c.getValue();
+    const target = resolveTarget(args);
+    if (target.err) return fail(target.err);
+    const doc = target.doc;
+    const value = doc.getValue();
     const first = value.indexOf(oldText);
     if (first < 0) return fail(tr(L, 'agent.errOldNotFound'));
     if (value.indexOf(oldText, first + 1) >= 0) return fail(tr(L, 'agent.errOldAmbiguous'));
-    if (deps.beforeEdit) deps.beforeEdit();
-    const from = c.posFromIndex(first);
-    const to = c.posFromIndex(first + oldText.length);
-    c.replaceRange(newText, from, to);
-    return ok(tr(L, 'agent.editDone', { n: newText.length }));
+    if (deps.beforeEdit) deps.beforeEdit(target.tab);
+    const from = doc.posFromIndex(first);
+    const to = doc.posFromIndex(first + oldText.length);
+    doc.replaceRange(newText, from, to);
+    // 后台标签的 Doc 没有挂载编辑器，改动不会经过 change 事件：不补脏标记，
+    // 关标签时会跳过「未保存确认」，把 agent 刚写进去的内容一起丢掉
+    if (target.tab && deps.markDirty) deps.markDirty(target.tab);
+    return ok(tr(L, 'agent.editDone', { path: labelOf(target.label), n: newText.length }));
   }
 
   function toolInsert(args) {
@@ -247,9 +272,14 @@ export function makeAgentExecutor(deps) {
     if (!c) return fail(tr(L, 'agent.errNoEditor'));
     const text = String(args.text == null ? '' : args.text);
     if (!text) return fail(tr(L, 'agent.errNoOldText'));
-    if (deps.beforeEdit) deps.beforeEdit();
+    const path = String(args.path || '').trim();
+    const active = (deps.tabs() || []).find(x => x && x.id === deps.activeId());
+    const activePath = active ? deps.tabPath(active) : '';
+    // 插入点定义就是「用户眼前的光标」：跨文档插入没有语义，宁可拒绝也不写进别的文件
+    if (path && path !== activePath) return fail(tr(L, 'agent.errInsertActiveOnly', { path, active: labelOf(activePath) }));
+    if (deps.beforeEdit) deps.beforeEdit(null);
     c.replaceSelection(text);
-    return ok(tr(L, 'agent.insertDone'));
+    return ok(tr(L, 'agent.insertDone', { path: labelOf(activePath) }));
   }
 
   return async function execute(name, args) {

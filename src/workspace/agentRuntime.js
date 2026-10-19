@@ -154,8 +154,13 @@ export async function runAgentLoop(opts) {
     // 执行工具：调用卡片信息直接挂在结果消息上（assistant 正文里的 ```tool 块由 UI 渲染成卡片）
     for (let i = 0; i < calls.length; i++) {
       const c = calls[i];
-      // 用户已点停止：剩余工具（可能含改文档操作）不再执行，按取消收尾
+      // 用户已点停止：剩余工具（可能含改文档操作）不再执行。
+      // 但要给每一条补一条「未执行」回执——assistant 正文里的 ```tool 块照样会被 UI
+      // 画成卡片，没有回执时用户看到三个已调用的卡片，实际只应用了第一个
       if (signal && signal.aborted) {
+        for (let j = i; j < calls.length; j++) {
+          push({ role: 'user', kind: 'tool-result', tool: calls[j].tool, args: calls[j].args, running: false, ok: false, content: tr(L, 'agent.toolSkipped') });
+        }
         const e = new Error('aborted'); e.name = 'AbortError'; throw e;
       }
       push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: true, content: '' });

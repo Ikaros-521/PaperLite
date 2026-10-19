@@ -26,7 +26,7 @@ import { renderMarkdownFull } from './engines/markdown.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
 import { collectLabels, collectBibKeys } from './projectIndex.js';
-import { resolveMainDoc, hasDocumentclass, loadMainDocSetting, saveMainDocSetting } from './mainDoc.js';
+import { resolveMainDoc, hasDocumentclass, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry } from './mainDoc.js';
 import { collectUserCommands } from './completion.js';
 import { locateLineInSource, paragraphHeadAtLine, stripTexCommands } from './pdfSync.js';
 import { insertImageFile } from './imageInsert.js';
@@ -51,6 +51,7 @@ import { buildLLMContext, aiFixIssuePrompt, agentProjectBrief } from './workspac
 import { runFixQueue } from './workspace/aiFixQueue.js';
 import { makeAgentExecutor } from './workspace/agentTools.js';
 import { loadAgentSettings, saveAgentSettings } from './workspace/agentRuntime.js';
+import { escHtml } from './htmlEsc.js';
 import { LangContext } from './useI18n.js';
 
 const LS_MODE = 'paperlite.viewmode.v2';
@@ -98,7 +99,7 @@ export default function App() {
     tabs, setTabs, tabsRef, activeId, setActiveId, activeValue, setActiveValue,
     rootDir, setRootDir, restorePrompt, setRestorePrompt,
     historyKey, setHistoryTick, historyError, setHistoryError, historyClearedRef,
-    noteHistory, snapshot,
+    noteHistory, snapshot, snapshotTab,
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
     addDraft, renameTabPath,
@@ -106,6 +107,8 @@ export default function App() {
   } = useWorkspace({
     t, flash, alertBox: alert, confirm: showConfirm, prompt: showPrompt,
     onTreeChanged: () => setTreeKey(n => n + 1), onSideTab: setSideTab,
+    // 主文档 pin 是唯一按路径存在 localStorage 里、又不在标签同步链路里的设置
+    onPathsRenamed: (from, to) => { if (renameMainDocEntry(from, to)) setMainDocSetting(loadMainDocSetting()); },
   });
 
   // ---- 视图 ----
@@ -181,6 +184,10 @@ export default function App() {
   const [fixRun, setFixRun] = useState(null);
   const [selIds, setSelIds] = useState(() => new Set()); // 勾选待修复的 issue id
   const fixCtrlRef = useRef(null);
+  // AI 面板自己是否在跑（对话 / agent / 压缩）：修复队列与它共用一个 LLM 通道，
+  // 两边同时起跑就是双份 token 加互相覆盖的消息数组
+  const chatBusyRef = useRef(false);
+  const onChatBusy = useCallback((v) => { chatBusyRef.current = !!v; }, []);
 
   const cmRef = useRef(null);
   const ratioRef = useRef({ edit: 0, preview: 0 });
@@ -189,6 +196,7 @@ export default function App() {
   // Agent 工具执行时要取「执行那一刻」的状态，全部经 ref 中转（构建一次的 executor 不持旧闭包）
   const activeIdRef = useRef(activeId); activeIdRef.current = activeId;
   const snapshotRef = useRef(null);   // useWorkspace 的 snapshot 渲染期注入（下方赋值）
+  const snapshotTabRef = useRef(null); // 同上，用于给指定标签（agent 改后台文件）打快照
 
   // 唤起编辑器内查找/替换面板：seq 递增让同一个模式也能重新聚焦并全选输入框
   const [findReq, setFindReq] = useState(null);
@@ -783,7 +791,7 @@ export default function App() {
     const t0 = performance.now();
     let r;
     try { r = renderLatex(deferred, {}); }
-    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + String(e && e.message || e) + '</div>', meta: {}, warnings: [{ msg: String(e && e.message || e), line: null }], diagrams: [], stats: countOf(deferred), headings: [] }; }
+    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + escHtml(String(e && e.message || e)) + '</div>', meta: {}, warnings: [{ msg: String(e && e.message || e), line: null }], diagrams: [], stats: countOf(deferred), headings: [] }; }
     lastRenderMs = performance.now() - t0;
     // 附带渲染所基于的源码：表格/样式面板写回前校验「区间仍对得上当前源码」，
     // 编辑后未重渲完成的窗口期内写回会落在错位偏移上
@@ -797,7 +805,7 @@ export default function App() {
     const t0 = performance.now();
     let r;
     try { r = renderMarkdownFull(deferred); }
-    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.mdRenderErr') + String(e && e.message || e) + '</div>', headings: [] }; }
+    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.mdRenderErr') + escHtml(String(e && e.message || e)) + '</div>', headings: [] }; }
     lastRenderMs = performance.now() - t0;
     r.src = deferred;   // 供表格/样式面板写回前校验区间与当前源码一致
     return r;
@@ -868,7 +876,9 @@ export default function App() {
       // 全局快捷键让路：Ctrl+Enter 会把聊天发送变成编译、Ctrl+数字会切走视图
       const inPlainInput = !!e.target.closest?.('input, textarea, select, [contenteditable]');
       if (mod && e.key === 's') { e.preventDefault(); if (!e.target.closest?.('.CodeMirror')) saveActiveAuto(); }
-      if (inPlainInput) return;
+      // CM5 的焦点元素本身就是 textarea：它不是「普通输入控件」，否则编辑器内
+      // 所有快捷键（查找替换/编译/视图切换/Ctrl+B-I）都会被这条 return 拦掉
+      if (inPlainInput && !e.target.closest?.('.CodeMirror')) return;
       if (mod && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
       // 编译与导出走键盘：写作时不该为了出稿去菜单里找
       if (mod && e.key === 'Enter') { e.preventDefault(); doCompile(); }
@@ -985,6 +995,7 @@ export default function App() {
 
   const startFix = async (requested) => {
     if (fixRun && fixRun.active) return;              // 并发守卫：一轮没跑完不再起第二轮
+    if (chatBusyRef.current) { flash(tr(getLang(), 'app.chatBusyWait')); return; }
     const L = getLang();
     const channel = channels.filter(c => c.id === activeChannelId)[0];
     if (!channel) { setSettingsOpen(true); alert(tr(L, 'app.needChannel')); return; }
@@ -1088,6 +1099,7 @@ export default function App() {
 
   // ---- AI Agent 执行环境：工具操作真实工作区（列文件 / 读文件 / 搜索 / 改文档 / 建文件 / 打开文件）----
   snapshotRef.current = snapshot;
+  snapshotTabRef.current = snapshotTab;
   const createFileForAgent = useCallback(async (path, content) => {
     const L = getLang();
     const clean = String(path || '').replace(/^[./\\]+/, '').replace(/\/+/g, '/').trim();
@@ -1098,13 +1110,21 @@ export default function App() {
         const parts = clean.split('/');
         let dir = root;
         for (let i = 0; i < parts.length - 1; i++) dir = await fs.createDirectory(dir, parts[i]);
-        const handle = await fs.createFile(dir, parts[parts.length - 1]);
+        const name = parts[parts.length - 1];
+        // create:true 遇到同名文件是「复用」而不是报错，紧接着的 writeFileText 就整体盖掉了。
+        // 没开成标签的磁盘文件没有历史快照，盖完不可恢复 → 先探测，已存在就拒绝。
+        let exists = true;
+        try { await dir.getFileHandle(name); } catch (e) { if (e && e.name === 'NotFoundError') exists = false; else throw e; }
+        if (exists) return { ok: false, msg: tr(L, 'agent.errFileExists', { path: clean }) };
+        const handle = await fs.createFile(dir, name);
         await fs.writeFileText(handle, content);
         await openFileTab(handle, clean, root);
         setTreeKey(n => n + 1);
         return { ok: true, msg: tr(L, 'agent.createdInFolder', { path: clean }) };
       } catch (e) { return { ok: false, msg: String((e && e.message) || e) }; }
     }
+    const dup = tabsRef.current.find(x => x.name === clean || x.path === clean);
+    if (dup) return { ok: false, msg: tr(L, 'agent.errFileExists', { path: clean }) };
     addDraft(clean, content);   // 未连文件夹：内存草稿标签（浏览器自动落盘）
     return { ok: true, msg: tr(L, 'agent.createdDraft', { path: clean }) };
   }, [openFileTab, addDraft]);
@@ -1132,7 +1152,10 @@ export default function App() {
       folderIndex: () => folderIndexRef.current,
       rootDir: () => rootDirRef.current,
       getDiagnostics: () => issuesRef.current,
-      beforeEdit: () => snapshotRef.current && snapshotRef.current(tr(getLang(), 'hist.beforeAi'), 'manual', true),
+      // 传 tab 时是后台标签（edit_file 带 path）：快照要落到被改标签自己的历史键
+      beforeEdit: (tb) => tb ? snapshotTabRef.current(tb, tr(getLang(), 'hist.beforeAi'))
+        : (snapshotRef.current && snapshotRef.current(tr(getLang(), 'hist.beforeAi'), 'manual', true)),
+      markDirty: (tb) => setTabs(ts => ts.map(x => x.doc === tb.doc ? { ...x, dirty: x.doc.getValue() !== x.saved } : x)),
       createFile: (p, c) => createFileForAgent(p, c),
       openByPath: p => openByPathForAgent(p),
     }),
@@ -1484,6 +1507,7 @@ export default function App() {
         messages={chatMessages}
         setMessages={setChatMessages}
         externalBusy={aiBusy}
+        onBusyChange={onChatBusy}
         agentEnv={agentEnv}
         agentCfg={agentCfg}
       />

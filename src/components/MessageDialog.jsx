@@ -25,6 +25,9 @@ function MessageDialog({ request }) {
       <div className="modal-body">
         <p id="message-dialog-body">{request.message}</p>
         {isPrompt && <input ref={focusRef} value={value} onChange={event => setValue(event.target.value)}
+          // 输入法组合中的 Enter 会被部分浏览器当成表单提交：文件名还没打完就「确定」，
+          // 建出来的就是半截名字
+          onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault(); }}
           aria-labelledby="message-dialog-body" required autoComplete="off" />}
       </div>
       <div className="modal-f">

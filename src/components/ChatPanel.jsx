@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLang, useT } from '../useI18n.js';
 import * as ctx from '../context.js';
 import { showAlert as alert, showConfirm } from '../dialogs.js';
@@ -13,7 +13,7 @@ import { runAgentLoop, agentSystemPrompt } from '../workspace/agentRuntime.js';
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onBusyChange = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -36,6 +36,10 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const panelRef = useRef(null);
   const busyRef = useRef(false);          // inject 自动发送时读最新 busy，不依赖 state 时机
   const sendRef = useRef(null);           // send 声明在下面，effect 里经 ref 取最新实现
+
+  // 面板忙（对话 / agent 循环 / 上下文压缩）要报给宿主：AI 修复队列是另一条独立的
+  // LLM 通道，两边同时跑等于双份 token，而且都会往同一个消息数组写
+  useEffect(() => { if (onBusyChange) onBusyChange(busy || compacting); }, [busy, compacting, onBusyChange]);
 
   const channel = useMemo(
     () => channels.filter(c => c.id === activeChannelId)[0] || channels[0] || null,
@@ -92,6 +96,16 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     const iv = setInterval(() => setCompactSecs(s => s + 1), 1000);
     return () => clearInterval(iv);
   }, [compacting]);
+
+  // 整体发布消息数组时，要保住这条路径「没见过」的气泡（AI 修复队列的 fixId 气泡）：
+  // 裸 setMessages(list) 会把等待期间由 App 追加的修复气泡整段冲掉，之后 patchMsg 按
+  // fixId 找不到目标全部空转 —— 修复照跑、token 照花，界面上一个字都不显示。
+  // 必须声明在下面的 `if (!open) return null` 之前：hook 数量随开合变化会直接崩掉 React
+  const publish = useCallback((list) => setMessages(prev => {
+    const have = new Set(list.filter(m => m && m.fixId).map(m => m.fixId));
+    const missing = prev.filter(m => m && m.fixId && !have.has(m.fixId));
+    return missing.length ? list.concat(missing) : list;
+  }), [setMessages]);
 
   if (!open) return null;
 
@@ -186,7 +200,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     };
     const next = [msg].concat(split.tail);
     const after = ctx.rawUsage({ summaryHeader: t('ai.summaryHeader'), history: next }).total;
-    setMessages(next);
+    publish(next);
     setRealUsage(null);
     setReqUsage(null);
     flashNote(t(auto ? 'chat.compactAuto' : 'chat.compactDone', {
@@ -204,7 +218,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     setBusy(true); busyRef.current = true;
     const ac = new AbortController();
     abortRef.current = ac;
-    setMessages(messages.concat([{ role: 'user', content: q }]));
+    publish(messages.concat([{ role: 'user', content: q }]));
     try {
       const { usage } = await runAgentLoop({
         channel,
@@ -217,7 +231,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         maxSteps: agentCfg && agentCfg.maxSteps,
         keepResults: agentCfg && agentCfg.keepResults,
         execute: agentEnv.execute,
-        onUpdate: list => setMessages(list),
+        onUpdate: publish,
         signal: ac.signal,
       });
       setRealUsage(usage || null);
@@ -274,7 +288,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     setRealUsage(null);
     const ac = new AbortController();
     abortRef.current = ac;
-    setMessages(history.concat([{ role: 'assistant', content: '', reasoning: '' }]));
+    publish(history.concat([{ role: 'assistant', content: '', reasoning: '' }]));
     try {
       const llm = await import('../llm.js');
       const res = await llm.chat(channel, built.messages, {

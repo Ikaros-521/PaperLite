@@ -48,9 +48,11 @@ function fakeTab(path, text, id = path) {
 function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, diagnostics = [] } = {}) {
   const cm = fakeCm(cmText);
   let edited = false;
+  const seen = { beforeTabs: [], dirtied: [] };
   return {
     cm,
     edits: () => edited,
+    seen,
     executor: makeAgentExecutor({
       cm: () => cm,
       tabs: () => tabs,
@@ -59,7 +61,8 @@ function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, d
       folderIndex: () => folderIndex,
       rootDir: () => null,
       getDiagnostics: () => diagnostics,
-      beforeEdit: () => { edited = true; },
+      beforeEdit: (tb) => { edited = true; seen.beforeTabs.push(tb ? tb.path : null); },
+      markDirty: (tb) => seen.dirtied.push(tb.path),
       createFile: async () => ({ ok: true, msg: 'created' }),
       openByPath: async () => ({ ok: false, msg: 'not found' }),
     }),
@@ -167,7 +170,46 @@ assert.equal(stripToolBlocks('正文\n```tool\n{"tool":"a"'), '正文');
   assert.equal(cm.getValue(), 'aaa\n替换后\nbbb\n独特的一行\nccc', '只改第一处');
 }
 
-// ---------- insert_text：光标插入（fake 里是追加）也要快照 ----------
+// ---------- edit_file 带 path：改被指名的标签，不蹭活动标签 ----------
+{
+  const bg = fakeTab('intro.tex', 'x\n引言\ny');
+  const { executor, cm, seen } = makeDeps({
+    cmText: '活动文档\nAAA',
+    tabs: [fakeTab('main.tex', '活动文档\nAAA'), bg],
+    activeId: 'main.tex',
+  });
+  const r = await executor('edit_file', { path: 'intro.tex', old_text: '引言', new_text: '改后' });
+  assert.ok(r.ok, '后台标签可被指名编辑');
+  assert.equal(bg.doc.getValue(), 'x\n改后\ny', '改动落在被指名的文档');
+  assert.equal(cm.getValue(), '活动文档\nAAA', '活动文档一个字都不该动');
+  assert.deepEqual(seen.beforeTabs, ['intro.tex'], '快照要按被改标签算');
+  assert.deepEqual(seen.dirtied, ['intro.tex'], '后台标签没有 change 事件，必须补脏标记');
+  assert.ok(r.result.includes('intro.tex'), '结果要回显改的是哪个文件：' + r.result);
+
+  const ghost = await executor('edit_file', { path: 'ghost.tex', old_text: 'a', new_text: 'b' });
+  assert.ok(!ghost.ok);
+  assert.ok(ghost.result.includes('open_file'), '未打开要提示先 open_file：' + ghost.result);
+
+  const legacy = await executor('edit_file', { old_text: 'AAA', new_text: 'BBB' });
+  assert.ok(legacy.ok, '省略 path 沿用活动编辑器');
+  assert.equal(cm.getValue(), '活动文档\nBBB');
+  assert.equal(seen.beforeTabs[1], null, '活动编辑器的快照仍走活动文档');
+}
+
+// ---------- insert_text 只认当前光标所在文档 ----------
+{
+  const bg = fakeTab('intro.tex', 'x\n引言\ny');
+  const { executor, cm } = makeDeps({ cmText: '活动文档', tabs: [fakeTab('main.tex', '活动文档'), bg], activeId: 'main.tex' });
+  const wrong = await executor('insert_text', { text: 'z', path: 'intro.tex' });
+  assert.ok(!wrong.ok, 'path 不是活动文档时必须拒绝，否则文本落到别的文件');
+  assert.ok(wrong.result.includes('edit_file'), '拒绝时要指路 edit_file：' + wrong.result);
+  assert.equal(bg.doc.getValue(), 'x\n引言\ny', '被拒绝的插入不该碰任何文档');
+  const same = await executor('insert_text', { text: 'z', path: 'main.tex' });
+  assert.ok(same.ok, 'path 指向活动文档时放行');
+  assert.equal(cm.getValue(), '活动文档z');
+}
+
+
 {
   const { executor, edits } = makeDeps({ cmText: 'x' });
   const r = await executor('insert_text', { text: 'y' });
