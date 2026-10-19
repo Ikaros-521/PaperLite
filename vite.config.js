@@ -4,6 +4,16 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CSP_POLICY } from './scripts/csp.mjs';
+
+// GitHub Pages 只能发静态文件、下不了响应头，所以构建产物里补一条 meta CSP。
+// dev 不加：vite 的 HMR 与 sourcemap 要 eval，加了只会在开发时刷屏。
+// frame-ancestors 在 meta 里会被浏览器忽略，那条由 server.mjs 的响应头负责。
+const cspMeta = () => ({
+  name: 'paperlite-csp-meta',
+  apply: 'build',
+  transformIndexHtml: (html) => html.replace('<head>', '<head>\n    <meta http-equiv="Content-Security-Policy" content="' + CSP_POLICY + '">'),
+});
 
 const pdfRoot = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
 // cm5-vim 的 UMD 头按「codemirror 包内相对路径」require（../lib/codemirror 等），
@@ -58,7 +68,7 @@ const pdfResources = () => ({
 // base: './' 使构建产物为相对路径 —— 既可 dist/index.html 双击打开，也为 Electron(file://) 打包预留
 export default defineConfig({
   base: './',
-  plugins: [cmVimBridge(), react(), pdfResources()],
+  plugins: [cmVimBridge(), react(), pdfResources(), cspMeta()],
   // dev 预打包走 esbuild、不吃上面的插件改写 —— 排除后由插件在普通管线里接管；
   // vim 依赖的两个 addon 只有转换产物引用到，扫描器看不见，须显式收录
   optimizeDeps: {

@@ -13,13 +13,20 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { CSP_POLICY } from './scripts/csp.mjs';
 
 const PORT = Number(process.argv[2] || 8788);
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  // .mjs 必须是 JS MIME：pdf.js 用动态 import() 取 worker，拿到 octet-stream 会报
+  // 「Failed to fetch dynamically imported module」，PDF 预览整个打不开
+  '.mjs': 'text/javascript; charset=utf-8',
+  // .wasm 不对就没有 streaming compile（控制台会退到 ArrayBuffer 整块实例化，启动更慢）
+  '.wasm': 'application/wasm',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
-  '.woff2': 'font/woff2', '.json': 'application/json'
+  '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf',
+  '.json': 'application/json', '.map': 'application/json'
 };
 
 // 静态页与 API 共用的响应头。同源页面仍可能被别的站点用 iframe 套住（配合 localStorage
@@ -31,7 +38,8 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
-  'Content-Security-Policy': "frame-ancestors 'none'",
+  // frame-ancestors 只能走响应头（meta 里被忽略），其余指令与构建产物里的 meta 同源
+  'Content-Security-Policy': "frame-ancestors 'none'; " + CSP_POLICY,
 };
 
 // ---------------- 引擎检测 ----------------
