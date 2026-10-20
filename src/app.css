@@ -465,6 +465,36 @@ select.ct-chip.on { background-image:
 }
 .chat-code-acts button:hover { background: var(--hover); color: var(--ink); }
 .chat-md code { background: var(--hover); border-radius: 3px; padding: .1em .35em; font-size: .9em; }
+/* 模型回复的 Markdown：气泡只有 360px 宽，标题一律压到比正文大一点点的量级，
+   表格改成横向滚动，否则长表会把面板顶开 */
+.chat-md > :first-child { margin-top: 0; }
+.chat-md > :last-child { margin-bottom: 0; }
+.chat-md p { margin: 5px 0; }
+.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 {
+  font-family: inherit; color: var(--ink); margin: 9px 0 4px; line-height: 1.4;
+}
+.chat-md h1 { font-size: 15px; }
+.chat-md h2 { font-size: 14.5px; }
+.chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 { font-size: 14px; }
+.chat-md ul, .chat-md ol { margin: 5px 0; padding-left: 20px; }
+.chat-md li { margin: 2px 0; }
+.chat-md li > p { margin: 2px 0; }
+.chat-md blockquote {
+  margin: 6px 0; padding: 3px 10px; border-left: 2px solid var(--edge); border-radius: 0 4px 4px 0;
+  background: var(--chrome); color: var(--ink-soft);
+}
+.chat-md hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+.chat-md a { color: var(--accent-deep); text-decoration: underline; text-underline-offset: 2px; }
+.chat-md table { border-collapse: collapse; margin: 6px 0; display: block; max-width: 100%; overflow-x: auto; }
+.chat-md th, .chat-md td { border: 1px solid var(--line); padding: 3px 8px; font-size: 12.5px; text-align: left; }
+.chat-md th { background: var(--chrome); font-weight: 600; }
+/* 行内公式随字走，独立公式（$$）可能比气泡宽得多，只能自己滚 */
+.chat-md .katex { font-size: 1.02em; }
+.chat-md .equation { margin: 6px 0; overflow-x: auto; }
+.chat-md .md-img { color: var(--ink-faint); font-style: italic; }
+/* 用户气泡不走 Markdown，但换行与空格要照原样 */
+.chat-plain { white-space: pre-wrap; }
+.cca-lang { margin-left: auto; align-self: center; font-family: Consolas, monospace; font-size: 10.5px; color: var(--ink-faint); }
 .typing { color: var(--ink-faint); }
 .chat-input { border-top: 1px solid var(--line-soft); padding: 8px 10px; }
 .chat-input textarea {

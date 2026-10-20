@@ -3,6 +3,7 @@ import { useLang, useT } from '../useI18n.js';
 import * as ctx from '../context.js';
 import { showAlert as alert, showConfirm } from '../dialogs.js';
 import { stripToolBlocks, parseToolCalls } from '../workspace/agentTools.js';
+import { renderChatMarkdown, splitChatBlocks } from '../engines/markdown.js';
 import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS } from '../workspace/agentRuntime.js';
 import { dropTurn, editResend, MAX_SESSIONS } from '../workspace/chatSessions.js';
 import { thinkingSwitch } from '../llm.js';
@@ -533,13 +534,13 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
 
   // 正文里的 ```tool 块渲染为「工具调用」卡片（执行状态看紧随的 tool-result 卡片）；
   // 先统一 strip：流式中未闭合的 tool 块也不会把半截 JSON 露到正文
-  const renderWithTools = (text, mi) => {
+  const renderWithTools = (text, asMd) => {
     const { calls } = parseToolCalls(text);
     const stripped = stripToolBlocks(text);
-    if (!calls.length) return renderBlocks(stripped, mi);
+    if (!calls.length) return renderBlocks(stripped, asMd);
     return (
       <>
-        {stripped ? renderBlocks(stripped, mi) : null}
+        {stripped ? renderBlocks(stripped, asMd) : null}
         {calls.map((c, ci) => {
           const args = JSON.stringify(c.args || {});
           return (
@@ -555,28 +556,28 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     );
   };
 
-  const renderBlocks = (text, mi) => {
-    const parts = [];
-    const re = /```(latex|tex|markdown|md|js|python)?\n([\s\S]*?)```/g;
-    let last = 0, m, bi = 0;
-    while ((m = re.exec(text))) {
-      const code = m[2]; // 每轮捕获，避免闭包读到循环结束后的 null
-      if (m.index > last) parts.push(<div key={'t' + bi} className="chat-md">{miniMd(text.slice(last, m.index))}</div>);
-      parts.push(
+  // 模型回复走 Markdown；用户气泡不走——本项目正文全是 LaTeX，`_` 与 `$`
+  // 会被当成斜体和公式吃掉，把提问渲染坏比少个粗体严重得多。
+  // 「替换选区/替换全文」只对 LaTeX 围栏给（含裸围栏），json/bash 那两类按钮是噪音
+  const renderBlocks = (text, asMd) => splitChatBlocks(text).map((b, bi) => {
+    if (b.type === 'code') {
+      return (
         <div key={'c' + bi} className="chat-code">
-          <pre>{code}</pre>
+          <pre>{b.text}</pre>
           <div className="chat-code-acts">
-            <button onClick={() => copy(code)}>{t('chat.copy')}</button>
-            <button onClick={() => applyBlock(code, 'replaceSel')}>{t('chat.replaceSel')}</button>
-            <button onClick={() => applyBlock(code, 'replaceDoc')}>{t('chat.replaceDoc')}</button>
+            <button onClick={() => copy(b.text)}>{t('chat.copy')}</button>
+            {b.tex ? <button onClick={() => applyBlock(b.text, 'replaceSel')}>{t('chat.replaceSel')}</button> : null}
+            {b.tex ? <button onClick={() => applyBlock(b.text, 'replaceDoc')}>{t('chat.replaceDoc')}</button> : null}
+            {!b.tex && b.lang ? <span className="cca-lang">{b.lang}</span> : null}
           </div>
         </div>
       );
-      last = re.lastIndex; bi++;
     }
-    if (last < text.length) parts.push(<div key="te" className="chat-md">{miniMd(text.slice(last))}</div>);
-    return parts;
-  };
+    if (!b.text.trim()) return null;
+    return asMd
+      ? <div key={'t' + bi} className="chat-md" dangerouslySetInnerHTML={{ __html: renderChatMarkdown(b.text) }} />
+      : <div key={'t' + bi} className="chat-plain">{b.text}</div>;
+  });
 
   return (
     <aside
@@ -793,7 +794,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
                 </div>
               )
             ) : null}
-            {m.content ? renderWithTools(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
+            {m.content ? renderWithTools(m.content, m.role === 'assistant') : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
             {/* 每条气泡的快捷操作：复制正文（去掉工具块）、编辑重发（只给提问）、
                 从这里分一支到新会话、删除这一轮。流式进行中不给，避免边收边改列表 */}
             {!busy && (m.content || m.role === 'user') ? (
@@ -917,14 +918,4 @@ function beginPointerDrag(e, cursor, onMove) {
   document.body.classList.add('cp-dragging');
   try { handle.setPointerCapture(pointerId); } catch (err) { /* 捕获失败时由遮罩兜底 */ }
   e.preventDefault();
-}
-
-// 极简 Markdown 渲染（聊天内）：**粗体** / `code` / 列表 / 换行
-function miniMd(t) {
-  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  let h = esc(t);
-  h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  h = h.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  h = h.replace(/^[-*]\s+(.+)$/gm, '• $1');
-  return <span dangerouslySetInnerHTML={{ __html: h.replace(/\n/g, '<br/>') }} />;
 }

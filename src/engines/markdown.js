@@ -6,6 +6,9 @@ import MarkdownIt from 'markdown-it';
 import katex from 'katex';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: true });
+// 聊天气泡另开一份：模型习惯一行一句（不空行），不认单换行会把整段糊成一行；
+// 关掉 typographer，免得把 " -- (c) 换成弯引号与破折号——聊天里的内容常被抄回编辑器
+const mdChat = new MarkdownIt({ html: false, linkify: true, breaks: true, typographer: false });
 
 function renderMathSafe(tex, display) {
   try {
@@ -37,8 +40,52 @@ function atob64(s) {
   return Buffer.from(s, 'base64').toString('binary');
 }
 
+// 把 mathPass 藏起来的 @@MDX...@@ 还原成 KaTeX。
+// 聊天那份 md 开了 breaks，段内换行已经变成 <br> 混进公式里了，先还原成空格再交给 KaTeX
+function mathBackfill(html) {
+  return html.replace(/@@MDX([A-Za-z0-9+/=]+)@@/g, (_, b64) => {
+    let raw;
+    try { raw = decodeURIComponent(escape(atob64(b64))).replace(/<br\s*\/?>/gi, ' '); } catch (e) { return ''; }
+    if (raw.startsWith('@@D@@')) return '<div class="equation"><span class="eq-body">' + renderMathSafe(raw.slice(5), true) + '</span></div>';
+    return renderMathSafe(raw.slice(5), false);
+  });
+}
+
 export function renderMarkdown(src) {
   return renderMarkdownFull(src).html;
+}
+
+/** 聊天气泡用的 Markdown：同一套 markdown-it + KaTeX，但三处刻意不一样——
+ *  不注入标题锚点（mdh-N 是预览大纲的跳转目标，混进气泡会撞 id、大纲跳错地方）；
+ *  链接一律新窗口打开（点一下不该把正在写的稿子整页换掉）；
+ *  图片只留替代文字（CSP 的 img-src 不含远程 http，外链图必然显示成破图）。 */
+export function renderChatMarkdown(src) {
+  const html = mathBackfill(mathPass(mdChat.render(String(src || ''))));
+  return html
+    .replace(/<a href=/g, '<a target="_blank" rel="noopener noreferrer" href=')
+    .replace(/<img\b([^>]*)>/g, (tag, attrs) => {
+      const alt = /alt="([^"]*)"/.exec(attrs);
+      return alt && alt[1] ? '<span class="md-img">' + alt[1] + '</span>' : '';
+    });
+}
+
+/** 聊天正文切块：``` 围栏按任意语言收出来单独画（要挂复制/替换按钮，且不能交给
+ *  md 渲染成 <pre>），其余段落再走 renderChatMarkdown。
+ *  裸围栏也算 tex——本项目让模型回的代码块绝大多数就是不标语言的 LaTeX 片段。 */
+export function splitChatBlocks(src) {
+  const str = String(src || '');
+  const out = [];
+  const re = /```([^\n`]*)\n([\s\S]*?)```/g;
+  let last = 0, m;
+  while ((m = re.exec(str))) {
+    if (m.index > last) out.push({ type: 'md', text: str.slice(last, m.index) });
+    const lang = String(m[1] || '').trim().split(/\s+/)[0].toLowerCase();
+    const tex = !lang || lang === 'latex' || lang === 'tex';
+    out.push({ type: 'code', lang, tex, text: m[2] });
+    last = re.lastIndex;
+  }
+  if (last < str.length) out.push({ type: 'md', text: str.slice(last) });
+  return out;
 }
 
 // 引用块前缀剥掉后按普通行匹配：markdown-it 会把 `> # x` 渲染成 <blockquote><h1>
@@ -92,11 +139,6 @@ export function renderMarkdownFull(src) {
   });
   html = mathPass(html);
   // 回填数学
-  html = html.replace(/@@MDX([A-Za-z0-9+/=]+)@@/g, (_, b64) => {
-    let raw;
-    try { raw = decodeURIComponent(escape(atob64(b64))); } catch (e) { return ''; }
-    if (raw.startsWith('@@D@@')) return '<div class="equation"><span class="eq-body">' + renderMathSafe(raw.slice(5), true) + '</span></div>';
-    return renderMathSafe(raw.slice(5), false);
-  });
+  html = mathBackfill(html);
   return { html, headings };
 }
