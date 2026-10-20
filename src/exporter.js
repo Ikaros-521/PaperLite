@@ -1,6 +1,7 @@
 /* PaperLite · 导出模块（ESM）：打印 PDF / .tex / HTML / SVG / PNG */
 import { t } from './i18n.js';
 import { showAlert as alert } from './dialogs.js';
+import { escHtml } from './htmlEsc.js';
 
 export function downloadFile(name, content, mime) {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
@@ -79,7 +80,10 @@ export function exportPDF(contentHtml, meta) {
   })();
 }
 
-function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// 统一走 htmlEsc：这里的输出全在引号包围的属性与 <title> 里，少转义一个双引号
+// 就等于让 \documentclass 的选项能往外拼属性（导出沙箱不给 allow-scripts，
+// 但标记错乱照样毁排版）
+const esc = escHtml;
 
 // viewBox 容忍逗号/多空格分隔与缺项：畸形值落回 0，后续统一夹到 ≥32（NaN 会把 canvas 归零、导出空白图）
 function parseViewBox(el) {
