@@ -12,7 +12,7 @@
 import * as llm from '../llm.js';
 import * as ctx from '../context.js';
 import { tr, getLang } from '../i18n.js';
-import { parseToolCalls, toolsSchema } from './agentTools.js';
+import { parseToolCalls, toolsSchema, MUTATING_TOOLS } from './agentTools.js';
 
 export const AGENT_MAX_STEPS = 15;
 // 渐进式披露：工具结果只在最近几条保持全文，更早的衰减为一行占位
@@ -31,7 +31,13 @@ export const AGENT_WRITES_PER_RUN = 20;
 // 整轮挂钟上限：流式长回答不能掐单次请求（见 llm.js 的 timeoutMs 注释），但一轮 Agent
 // 总得有尽头，超了就当作步数用尽——只收口回答，不再执行工具
 export const AGENT_DEADLINE_MIN = 10;
-const WRITE_TOOLS = new Set(['edit_file', 'insert_text', 'create_file']);
+// 权限档位（对齐 Codex 的 read-only / on-request / full-access 三档思路）：
+//   ask  每次审核——每个改动手（edit_file / insert_text / create_file）执行前请用户确认
+//   auto 自动审核——不打断，直接执行（默认）
+//   full 完全访问——不打断、不挡隐藏路径读、不卡整轮改盘次数
+// 只读类工具（列文件/读文件/搜索/诊断/读选区）任何档位都直通。
+export const AGENT_APPROVALS = ['ask', 'auto', 'full'];
+export const AGENT_APPROVAL_DEFAULT = 'auto';
 const AGENT_CFG_KEY = 'paperlite.agentSettings.v1';
 
 function clampInt(v, min, max, dflt) {
@@ -42,13 +48,15 @@ function clampInt(v, min, max, dflt) {
 }
 
 export function loadAgentSettings() {
-  const dflt = { maxSteps: AGENT_MAX_STEPS, keepResults: TOOL_RESULT_KEEP };
+  const dflt = { maxSteps: AGENT_MAX_STEPS, keepResults: TOOL_RESULT_KEEP, approval: AGENT_APPROVAL_DEFAULT };
   try {
     const raw = JSON.parse(localStorage.getItem(AGENT_CFG_KEY) || '{}');
     if (!raw || typeof raw !== 'object') return dflt;
     return {
       maxSteps: clampInt(raw.maxSteps, 1, AGENT_STEPS_MAX, dflt.maxSteps),
       keepResults: clampInt(raw.keepResults, 1, AGENT_KEEP_MAX, dflt.keepResults),
+      // 档位只认白名单：手改/旧版数据里的野值回落到默认档，不能因为拼错就变成全访问
+      approval: AGENT_APPROVALS.includes(raw.approval) ? raw.approval : dflt.approval,
     };
   } catch (e) { return dflt; }
 }
@@ -98,6 +106,10 @@ export async function runAgentLoop(opts) {
   } = opts;
   const maxSteps = opts.maxSteps || AGENT_MAX_STEPS;
   const keep = clampInt(opts.keepResults, 1, AGENT_KEEP_MAX, TOOL_RESULT_KEEP);
+  // 权限档位与确认回调：'ask' 时每个改动手先问用户；requestApproval 缺失就退回
+  // 'auto'（宁可少拦一次，也不要把改动手卡死在没人应答的 await 上）
+  const approval = AGENT_APPROVALS.includes(opts.approval) ? opts.approval : AGENT_APPROVAL_DEFAULT;
+  const askEach = approval === 'ask' && typeof opts.requestApproval === 'function';
   const L = getLang();
 
   // 本地持有完整列表，每次变化整体推给 UI
@@ -185,11 +197,28 @@ export async function runAgentLoop(opts) {
           content: tr(L, 'agent.toolBatchLimit', { n: AGENT_TOOLS_PER_STEP }) });
         continue;
       }
-      if (WRITE_TOOLS.has(c.tool)) {
-        if (writes >= AGENT_WRITES_PER_RUN) {
-          push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
-            content: tr(L, 'agent.errWriteBudget', { n: AGENT_WRITES_PER_RUN }) });
-          continue;
+      if (MUTATING_TOOLS.has(c.tool)) {
+        // 「每次审核」档：改动动手前把落点与改动摘要摊给用户看，拒绝就原话回给模型
+        // （不拒绝就照常执行；档位只影响是否打断，不影响工具语义）
+        if (askEach) {
+          const info = typeof execute.describe === 'function'
+            ? execute.describe(c.tool, c.args)
+            : { mutates: true, tool: c.tool, path: String((c.args && c.args.path) || ''), detail: '' };
+          let yes = false;
+          try { yes = !!(await opts.requestApproval(info)); } catch (e) { yes = false; }
+          if (!yes) {
+            push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
+              content: tr(L, 'agent.errDeniedByUser', { tool: c.tool }) });
+            continue;
+          }
+        }
+        // 「完全访问」档由用户明确放弃这层保护；其余档位仍受整轮改盘次数约束
+        if (approval !== 'full') {
+          if (writes >= AGENT_WRITES_PER_RUN) {
+            push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
+              content: tr(L, 'agent.errWriteBudget', { n: AGENT_WRITES_PER_RUN }) });
+            continue;
+          }
         }
         writes++;
       }

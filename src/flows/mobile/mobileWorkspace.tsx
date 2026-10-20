@@ -113,7 +113,7 @@ interface MobileWorkspaceValue {
   setChannels: (updater: unknown) => void
   activeChannelId: string
   setActiveChannelId: (id: string) => void
-  agentCfg: { maxSteps: number; keepResults: number }
+  agentCfg: { maxSteps: number; keepResults: number; approval: string }
   setAgentCfg: (updater: (prev: { maxSteps: number; keepResults: number }) => { maxSteps: number; keepResults: number }) => void
   chatMessages: unknown[]
   setChatMessages: (updater: unknown) => void

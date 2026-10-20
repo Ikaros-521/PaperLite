@@ -512,6 +512,10 @@ export default function App() {
   // Agent 行为参数（步数上限等）：随浏览器保存，对话面板与设置弹窗共用一份
   const [agentCfg, setAgentCfg] = useState(() => loadAgentSettings());
   useEffect(() => { saveAgentSettings(agentCfg); }, [agentCfg]);
+  // agentEnv 的 useMemo 不随 agentCfg 重建，权限档位必须走 ref 读最新值
+  // （否则设置里改了级别，正在跑的 Agent 还按旧档走）
+  const agentCfgRef = useRef(agentCfg);
+  useEffect(() => { agentCfgRef.current = agentCfg; }, [agentCfg]);
   // 沉浸模式：涂在 <body> 上让 CSS 隐藏全部外壳；片段变更即落盘（失败静默，编辑仍在内存）
   useEffect(() => { document.body.classList.toggle('pl-zen', zen); }, [zen]);
   useEffect(() => { saveSnippets(snippets); }, [snippets]);
@@ -1179,7 +1183,13 @@ export default function App() {
       markDirty: (tb) => setTabs(ts => ts.map(x => x.doc === tb.doc ? { ...x, dirty: x.doc.getValue() !== x.saved } : x)),
       createFile: (p, c) => createFileForAgent(p, c),
       openByPath: p => openByPathForAgent(p),
+      approval: () => agentCfgRef.current.approval,
     }),
+    // 「每次审核」档的确认弹窗：路径与改动摘要由工具自己的落点解析生成
+    requestApproval: (info) => showConfirm(
+      (info.path ? info.path + '：' : '') + (info.detail || ''),
+      { title: tr(getLang(), 'agent.approveTitle'), confirmLabel: tr(getLang(), 'agent.approveAllow') }
+    ),
     buildBrief: () => agentProjectBrief({
       cm: () => cmLiveRef.current(),
       tabs: tabsRef.current,
@@ -1536,6 +1546,7 @@ export default function App() {
         onBusyChange={onChatBusy}
         agentEnv={agentEnv}
         agentCfg={agentCfg}
+        onAgentApproval={lv => setAgentCfg(s => ({ ...s, approval: lv }))}
       />
 
       <DialogHost />

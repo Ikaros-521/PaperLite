@@ -152,11 +152,13 @@ globalThis.localStorage = {
   setItem: (k, v) => { memStore[k] = String(v); },
 };
 saveAgentSettings({ maxSteps: 999, keepResults: 0 });
-assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1 }, '越界值要钳制到合法区间');
-saveAgentSettings({ maxSteps: 12, keepResults: 4 });
-assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4 }, '合法值要原样读回');
+assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1, approval: 'auto' }, '越界值要钳制到合法区间');
+saveAgentSettings({ maxSteps: 12, keepResults: 4, approval: 'ask' });
+assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4, approval: 'ask' }, '合法值要原样读回');
+saveAgentSettings({ approval: 'yolo-full-access' });
+assert.equal(loadAgentSettings().approval, 'auto', '野档位回默认档，不能因为拼错就变成完全访问');
 memStore['paperlite.agentSettings.v1'] = '{oops';
-assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5 }, '损坏数据回退默认值');
+assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5, approval: 'auto' }, '损坏数据回退默认值');
 delete globalThis.localStorage;
 
 // 单步工具数与整轮改盘次数：畸形或自我循环的输出不该一口气改几十处，
@@ -184,6 +186,48 @@ delete globalThis.localStorage;
     '被拦下的调用标注未执行');
   assert.equal(receipts.filter(m => /单步/.test(m.content)).length, (10 - AGENT_TOOLS_PER_STEP) * 6,
     '每步超额的两条都用「分批」文案');
+}
+
+// ---------- 权限档位：ask 逐个确认（可拒）、auto 不打断、full 免整轮改盘配额 ----------
+{
+  const editBatch = (n) => sseResponse(Array.from({ length: n }, (_, k) =>
+    '```tool\n{"tool":"edit_file","args":{"path":"main.tex","old_text":"a' + k + '","new_text":"b"}}\n```').join('\n'));
+  const describe = (name, args) => ({ mutates: true, tool: name, path: String(args.path || ''), detail: '「a」改成「b」' });
+
+  const run = async ({ approval, approve, steps = 1, perStep = 1 }) => {
+    let asked = 0, ran = 0;
+    const infos = [];
+    globalThis.fetch = async () => editBatch(perStep);
+    await runAgentLoop({
+      channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+      budget: 6000, maxSteps: steps, keepResults: 9, approval,
+      requestApproval: async (info) => { asked++; infos.push(info); return approve; },
+      execute: Object.assign(async (name) => { ran++; return { ok: true, result: 'APPLIED' }; }, { describe }),
+      onUpdate: () => {},
+    });
+    globalThis.fetch = realFetch;
+    return { asked, ran, infos };
+  }
+
+  const denied = await run({ approval: 'ask', approve: false });
+  assert.equal(denied.asked, 1, '「每次审核」档每个改动手问一次');
+  assert.equal(denied.ran, 0, '被拒的改动手不执行');
+  assert.equal(denied.infos[0].path, 'main.tex', '确认信息用工具自己的落点解析');
+  assert.ok(denied.infos[0].detail.includes('改成'), '确认信息带改动摘要');
+
+  const allowed = await run({ approval: 'ask', approve: true });
+  assert.equal(allowed.asked, 1, '确认后照常执行');
+  assert.equal(allowed.ran, 1, '批准的改动手落地');
+
+  const auto = await run({ approval: 'auto', approve: false });
+  assert.equal(auto.asked, 0, '「自动审核」不打断');
+  assert.equal(auto.ran, 1, '「自动审核」照常改');
+
+  // 完全访问档免掉「整轮改盘次数」这道刹车（每步仍受单步 8 条与步数上限约束）
+  const capped = await run({ approval: 'auto', approve: true, steps: 3, perStep: 10 });
+  assert.equal(capped.ran, AGENT_WRITES_PER_RUN, '默认档整轮改盘封顶');
+  const wide = await run({ approval: 'full', approve: true, steps: 3, perStep: 10 });
+  assert.equal(wide.ran, AGENT_TOOLS_PER_STEP * 3, '「完全访问」不受改盘次数限制');
 }
 
 console.log('agentRuntime: all tests passed');

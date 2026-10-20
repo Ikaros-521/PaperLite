@@ -35,6 +35,14 @@ function hiddenPath(p) {
   return String(p || '').split('/').some(seg => seg.startsWith('.'));
 }
 
+// 会动到用户正文或落盘的工具：权限分档只对这类工具设门槛，读类工具任何档位直通
+export const MUTATING_TOOLS = new Set(['edit_file', 'insert_text', 'create_file']);
+const BRIEF_LEN = 160;
+const briefText = (s) => {
+  const one = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  return one.length > BRIEF_LEN ? one.slice(0, BRIEF_LEN) + '…' : one;
+};
+
 /* ---- 模型侧工具清单（描述随界面语言） ---- */
 
 export function toolsSchema() {
@@ -118,6 +126,7 @@ export function outlineOf(text) {
  *   markDirty?: (tab: any) => void,        // 后台标签被改后补脏标记（不经过编辑器 change 事件）
  *   createFile: (path: string, content: string) => Promise<{ok: boolean, msg?: string}>,
  *   openByPath: (path: string) => Promise<{ok: boolean, msg?: string}>,
+ *   approval?: () => 'ask' | 'auto' | 'full',  // 权限档位；缺省按 'auto'。只有 'full' 放开隐藏路径读取
  * }}
  * @returns {(name: string, args: object) => Promise<{ok: boolean, result: string}>}
  */
@@ -137,6 +146,10 @@ export function makeAgentExecutor(deps) {
     ];
     return collectSearchFiles(tabsList, disk);
   }
+
+  // 权限档位：'ask' 每个改动手先确认；'auto' 不打断（默认）；'full' 免确认且放开
+  // 隐藏文件读取。没注入就当 'auto'——保守档，不会误开全访问。
+  const level = () => (typeof deps.approval === 'function' ? deps.approval() : 'auto') || 'auto';
 
   async function readFromDisk(path) {
     const root = deps.rootDir();
@@ -189,9 +202,10 @@ export function makeAgentExecutor(deps) {
     if (entry && typeof entry.source === 'string') return ok(entry.source);
     // 3) 直读磁盘（未进索引的文件类型）；区分「不存在」与「读取失败」——
     //    权限/超大/非法路径等原因如实回传，避免模型误以为文件不存在而反复重读或盲目重建
-    //    磁盘兜底不放开隐藏文件：用户选的目录可能很宽（家目录/文档），.env、.git/config
-    //    一旦被模型指名读到，就变成下一次请求里发给第三方渠道的素材
-    if (hiddenPath(path)) return fail(tr(L, 'agent.errHiddenPath', { path }));
+    //    磁盘兜底默认不放开隐藏文件：用户选的目录可能很宽（家目录/文档），.env、.git/config
+    //    一旦被模型指名读到，就变成下一次请求里发给第三方渠道的素材。「完全访问」档由
+    //    用户明确放弃这层保护，才允许读隐藏路径
+    if (hiddenPath(path) && level() !== 'full') return fail(tr(L, 'agent.errHiddenPath', { path }));
     try {
       const text = await readFromDisk(path);
       if (text != null) return ok(text);
@@ -302,7 +316,31 @@ export function makeAgentExecutor(deps) {
     return ok(tr(L, 'agent.insertDone', { path: labelOf(activePath) }));
   }
 
-  return async function execute(name, args) {
+  // 「每次审核」档要用给人看的确认文案：路径解析与工具真正落点走同一条（resolveTarget），
+  // 免得弹窗说改 a.tex、实际写进了别的文件
+  function describe(name, args) {
+    const L = getLang();
+    const a = args && typeof args === 'object' ? args : {};
+    const mutates = MUTATING_TOOLS.has(name);
+    if (name === 'edit_file') {
+      const target = resolveTarget(a);
+      return { mutates, tool: name, path: target.err ? String(a.path || '') : labelOf(target.label),
+        detail: tr(L, 'agent.reviewEdit', { old: briefText(a.old_text), next: briefText(a.new_text) }) };
+    }
+    if (name === 'insert_text') {
+      const active = (deps.tabs() || []).find(x => x && x.id === deps.activeId());
+      return { mutates, tool: name, path: labelOf(active ? deps.tabPath(active) : ''),
+        detail: tr(L, 'agent.reviewInsert', { text: briefText(a.text) }) };
+    }
+    if (name === 'create_file') {
+      const content = String(a.content == null ? '' : a.content);
+      return { mutates, tool: name, path: String(a.path || ''),
+        detail: tr(L, 'agent.reviewCreate', { n: content.length, first: briefText(content.split('\n')[0] || '') }) };
+    }
+    return { mutates, tool: name, path: String(a.path || ''), detail: '' };
+  }
+
+  const execute = async function (name, args) {
     const a = args && typeof args === 'object' ? args : {};
     try {
       switch (name) {
@@ -327,4 +365,7 @@ export function makeAgentExecutor(deps) {
       return fail(tr(getLang(), 'agent.toolCrashed', { msg: (e && e.message) || e }));
     }
   };
+  execute.describe = describe;
+  execute.level = level;
+  return execute;
 }

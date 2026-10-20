@@ -48,7 +48,7 @@ function fakeTab(path, text, id = path) {
   return { id, name: path, path, kind: 'tex', doc: fakeCm(text) };
 }
 
-function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, diagnostics = [], cmOpts = {}, disk = null } = {}) {
+function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, diagnostics = [], cmOpts = {}, disk = null, approval } = {}) {
   const cm = fakeCm(cmText, cmOpts);
   let edited = false;
   const seen = { beforeTabs: [], dirtied: [], diskReads: [] };
@@ -78,6 +78,7 @@ function makeDeps({ cmText = '', tabs = [], folderIndex = {}, activeId = null, d
       markDirty: (tb) => seen.dirtied.push(tb.path),
       createFile: async () => ({ ok: true, msg: 'created' }),
       openByPath: async () => ({ ok: false, msg: 'not found' }),
+      ...(approval ? { approval: () => approval } : {}),
     }),
   };
 }
@@ -313,6 +314,40 @@ assert.equal(stripToolBlocks('正文\n```tool\n{"tool":"a"'), '正文');
   assert.ok(!brief.includes(selText.slice(0, 10)), '选区全文不该进简报');
   assert.ok(brief.includes('read_selection'), '要提示可用工具读选区');
   assert.ok(brief.includes(String(selText.length)), '要报选区长度');
+}
+
+// ---------- describe()：给「每次审核」档看的落点与摘要 ----------
+{
+  const tab = fakeTab('main.tex', '第一行\nAAA\n第三行');
+  const { executor } = makeDeps({ cmText: '活动文档', tabs: [tab], activeId: 'main.tex' });
+  const e = executor.describe('edit_file', { path: 'main.tex', old_text: 'AAA', new_text: 'BBB' });
+  assert.equal(e.mutates, true, 'edit_file 是改动手');
+  assert.equal(e.path, 'main.tex', '落点用与工具同一套解析');
+  assert.ok(e.detail.includes('AAA') && e.detail.includes('BBB'), '摘要带旧串与新串：' + e.detail);
+  const ins = executor.describe('insert_text', { text: '插入的话' });
+  assert.equal(ins.mutates, true);
+  assert.equal(ins.path, 'main.tex', 'insert_text 落在活动文档');
+  assert.ok(ins.detail.includes('插入的话'), '插入摘要带正文');
+  const cf = executor.describe('create_file', { path: 'new/sec.tex', content: 'a'.repeat(50) });
+  assert.equal(cf.mutates, true);
+  assert.equal(cf.path, 'new/sec.tex');
+  assert.ok(/50/.test(cf.detail), '建文件摘要带长度：' + cf.detail);
+  assert.equal(executor.describe('read_file', { path: 'main.tex' }).mutates, false, '读类工具不需要审核');
+  assert.equal(executor.describe('nope', {}).mutates, false, '未知工具不算改动手');
+}
+
+// ---------- 隐藏路径只在「完全访问」档放开 ----------
+{
+  const disk = { 'ch1.tex': '正文', '.env': 'SECRET=1' };
+  const blocked = makeDeps({ disk });
+  const r1 = await blocked.executor('read_file', { path: '.env' });
+  assert.ok(!r1.ok, '默认档读不到隐藏文件');
+  assert.equal(blocked.seen.diskReads.length, 0, '拒绝发生在打开句柄之前');
+  const wide = makeDeps({ disk, approval: 'full' });
+  const r2 = await wide.executor('read_file', { path: '.env' });
+  assert.equal(r2.result, 'SECRET=1', '「完全访问」档由用户明确放弃这层保护');
+  const ask = makeDeps({ disk, approval: 'ask' });
+  assert.ok(!(await ask.executor('read_file', { path: '.env' })).ok, '「每次审核」也不放开隐藏文件');
 }
 
 console.log('agentTools: all tests passed');

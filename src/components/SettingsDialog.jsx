@@ -3,7 +3,7 @@ import { useLang, useT } from '../useI18n.js';
 import { testConnection, fetchModels, newChannel, baseUrlProblem, PLATFORM_PRESETS, PROTOCOLS, matchPreset, protocolOf } from '../llm.js';
 import { resolveWindow, inputBudget, formatTokens } from '../context.js';
 import { showConfirm } from '../dialogs.js';
-import { AGENT_STEPS_MAX, AGENT_KEEP_MAX } from '../workspace/agentRuntime.js';
+import { AGENT_STEPS_MAX, AGENT_KEEP_MAX, AGENT_APPROVALS } from '../workspace/agentRuntime.js';
 
 /* AI 设置弹窗：子页切换（渠道 / Agent）。
  * 渠道子页：多渠道管理（内置平台预设 / OpenAI 兼容与 Anthropic 协议 /
@@ -298,6 +298,13 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
           {tab === 'agent' && agentCfg && (
             <div className="ch-edit set-agent">
               <p className="hint">{t('set.agentIntro')}</p>
+              <label>
+                {t('set.agentApproval')}
+                <select value={agentCfg.approval || 'auto'} onChange={e => setAgentCfg(s => ({ ...s, approval: e.target.value }))}>
+                  {AGENT_APPROVALS.map(lv => <option key={lv} value={lv}>{t('set.agentApproval' + lv[0].toUpperCase() + lv.slice(1))}</option>)}
+                </select>
+                <span className="hint">{t('set.agentApprovalHint')}</span>
+              </label>
               <label>
                 {t('set.agentSteps')}
                 <NumInput min={1} max={AGENT_STEPS_MAX} value={agentCfg.maxSteps} emptyAs={1}

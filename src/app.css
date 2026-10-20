@@ -313,6 +313,13 @@ body.cp-dragging::before {
   font-size: 11px; color: var(--accent-deep); background: var(--badge-bg);
   border-radius: 4px; padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
 }
+/* Agent 模式行：徽章 + 权限档位下拉（档位就地可切，不必去设置弹窗） */
+.agent-row { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.agent-lv {
+  font-size: 11px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--paper); color: var(--ink-soft); max-width: 108px;
+}
+.agent-lv:disabled { opacity: .5; }
 /* Agent 工具调用 / 结果卡片 */
 .chat-tool-call {
   display: flex; align-items: center; gap: 6px; margin: 4px 0;

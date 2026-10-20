@@ -3,7 +3,7 @@ import { useLang, useT } from '../useI18n.js';
 import * as ctx from '../context.js';
 import { showAlert as alert, showConfirm } from '../dialogs.js';
 import { stripToolBlocks, parseToolCalls } from '../workspace/agentTools.js';
-import { runAgentLoop, agentSystemPrompt } from '../workspace/agentRuntime.js';
+import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS } from '../workspace/agentRuntime.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
  * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复、
@@ -13,7 +13,7 @@ import { runAgentLoop, agentSystemPrompt } from '../workspace/agentRuntime.js';
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onBusyChange = null }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -231,6 +231,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         maxSteps: agentCfg && agentCfg.maxSteps,
         keepResults: agentCfg && agentCfg.keepResults,
         execute: agentEnv.execute,
+        approval: agentCfg && agentCfg.approval,
+        requestApproval: agentEnv.requestApproval,
         onUpdate: publish,
         signal: ac.signal,
       });
@@ -427,7 +429,18 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           </button>
         )}
         {mode === 'agent' && agentEnv ? (
-          <span className="agent-badge" title={t('agent.badgeTip')}>{t('agent.badge')}</span>
+          // 权限档位就地可切：跑一轮 Agent 时才发现「每次审核」在设置弹窗里，
+          // 等于要么打断工作去开设置、要么整轮免确认
+          <span className="agent-row">
+            <span className="agent-badge" title={t('agent.badgeTip')}>{t('agent.badge')}</span>
+            {onAgentApproval && (
+              <select className="agent-lv" value={(agentCfg && agentCfg.approval) || 'auto'}
+                onChange={e => onAgentApproval(e.target.value)}
+                title={t('agent.lvTip')} disabled={busy}>
+                {AGENT_APPROVALS.map(lv => <option key={lv} value={lv}>{t('agent.lv' + lv[0].toUpperCase() + lv.slice(1))}</option>)}
+              </select>
+            )}
+          </span>
         ) : (
           <select value={scope} onChange={e => setScope(e.target.value)} title={t('chat.scopeTip')}>
             <option value="selection">{t('chat.scopeSel')}</option>
