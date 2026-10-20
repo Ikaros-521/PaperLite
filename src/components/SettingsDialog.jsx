@@ -317,6 +317,23 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                   onCommit={v => setAgentCfg(s => ({ ...s, keepResults: v || 1 }))} />
                 <span className="hint">{t('set.agentKeepHint')}</span>
               </label>
+              {/* 三个长任务开关：计划块 / 验收评审 / 状态落库。评审默认关——它会多花一轮请求，
+                  要不要为它付这份 token 是用户的判断，不是我们的默认值。 */}
+              <label className="inline">
+                <input type="checkbox" checked={agentCfg.plan !== false} onChange={e => setAgentCfg(s => ({ ...s, plan: e.target.checked }))} />
+                {t('set.agentPlan')}
+              </label>
+              <span className="hint block">{t('set.agentPlanHint')}</span>
+              <label className="inline">
+                <input type="checkbox" checked={!!agentCfg.review} onChange={e => setAgentCfg(s => ({ ...s, review: e.target.checked }))} />
+                {t('set.agentReview')}
+              </label>
+              <span className="hint block">{t('set.agentReviewHint')}</span>
+              <label className="inline">
+                <input type="checkbox" checked={agentCfg.persist !== false} onChange={e => setAgentCfg(s => ({ ...s, persist: e.target.checked }))} />
+                {t('set.agentPersist')}
+              </label>
+              <span className="hint block">{t('set.agentPersistHint')}</span>
             </div>
           )}
         </div>

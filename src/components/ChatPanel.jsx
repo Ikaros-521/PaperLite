@@ -33,6 +33,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const [compacting, setCompacting] = useState(false);
   const [compactSecs, setCompactSecs] = useState(0);
   const [note, setNote] = useState('');   // 状态栏短暂提示（压缩结果等）
+  const [agentTask, setAgentTask] = useState(null);  // 本轮 Agent 的任务状态（计划卡与回滚入口）
   const abortRef = useRef(null);
   const noteTimer = useRef(null);
   const listRef = useRef(null);
@@ -168,6 +169,25 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     return missing.length ? list.concat(missing) : list;
   }), [setMessages]);
 
+  // 对话落库：Agent 一轮就几十条消息，刷新即失等于把现场丢掉（改了半篇文档、
+  // 评审刚出结论）。流式中途不写库——只在停下来的 1.2 秒后存一次稳定状态。
+  // 加载要等 IndexedDB 回来，空列表且这轮还没见过任何消息时不写：否则启动那一次的
+  // 「空对话」会把刚要恢复的历史覆盖掉（读得慢就丢历史，这是会真发生的竞态）。
+  const sawMessages = useRef(false);
+  useEffect(() => {
+    if (!agentEnv || !agentEnv.chatKey) return undefined;
+    if (agentCfg && agentCfg.persist === false) return undefined;
+    if (busy || compacting) return undefined;
+    if (messages.length) sawMessages.current = true;
+    else if (!sawMessages.current) return undefined;
+    const timer = setTimeout(() => {
+      import('../workspace/taskStore.js')
+        .then(m => m.saveChat(agentEnv.chatKey, messages))
+        .catch(() => { /* 存不下不影响这轮回答 */ });
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [messages, busy, compacting, agentCfg, agentEnv]);
+
   if (!open) return null;
 
   // 拖拽：按下标题栏（按钮除外）浮窗化并跟随指针，双击标题回停靠（同图样式面板）
@@ -274,17 +294,19 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   // ---- Agent 模式：模型经文本协议调工具，循环执行直到给出最终回答 ----
   const runAgent = async (q) => {
     const brief = agentEnv.buildBrief();
+    const plan = !agentCfg || agentCfg.plan !== false;
     setReqUsage(null);
     setRealUsage(null);
+    setAgentTask(null);
     setBusy(true); busyRef.current = true;
     const ac = new AbortController();
     abortRef.current = ac;
     publish(messages.concat([{ role: 'user', content: q }]));
     try {
-      const { usage } = await runAgentLoop({
+      const { usage, task, answer } = await runAgentLoop({
         channel,
         messages: messages.concat([{ role: 'user', content: q }]),
-        system: agentSystemPrompt(),
+        system: agentSystemPrompt({ withTaskTools: plan }) + (plan ? t('agent.planRules') : ''),
         docHeader: t('ai.agentCtxHeader'),
         doc: brief,
         summaryHeader: t('ai.summaryHeader'),
@@ -294,10 +316,19 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         execute: agentEnv.execute,
         approval: agentCfg && agentCfg.approval,
         requestApproval: agentEnv.requestApproval,
+        plan,
+        activePath: agentEnv.activePath,
+        onTask: setAgentTask,
         onUpdate: publish,
         signal: ac.signal,
       });
       setRealUsage(usage || null);
+      if (task) {
+        persistTask(task);
+        // 评审是额外一整轮请求（实测 ~700 token），要能被「停止」掐掉：
+        // 复用本轮的 AbortController，它到 finally 才被清空
+        if (agentCfg && agentCfg.review) await runReview(task, answer, ac.signal);
+      }
     } catch (e) {
       if (e.name !== 'AbortError') {
         setMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content
@@ -308,6 +339,49 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       setBusy(false); busyRef.current = false;
       abortRef.current = null;
     }
+  };
+
+  // 验收评审：换一个只读的会话问「目标覆盖了吗、过程干净吗、结论可信吗」。
+  // 失败只落一条说明——已经做完的任务不该因为评审挂了而看起来失败了。
+  const runReview = async (task, answer, signal) => {
+    if (!channel) return;
+    const note = { role: 'assistant', kind: 'review', running: true, content: '', review: null, usage: null };
+    setMessages(ms => ms.concat([note]));
+    try {
+      const { runReview: rr } = await import('../workspace/agentReview.js');
+      const r = await rr({ channel, task, finalAnswer: answer, signal });
+      setMessages(ms => ms.map((m, i) => i === ms.length - 1 && m.kind === 'review' && m.running
+        ? { ...m, running: false, review: r.verdict, content: r.text, usage: r.usage } : m));
+      flashNote(t('agent.reviewUsage', { n: ctx.formatTokens(r.usage ? (r.usage.input + r.usage.output) : 0) }));
+    } catch (e) {
+      // 用户按停止：这条评审卡就地关掉，不算任务失败（正文已经交付完了）
+      const text = e && e.name === 'AbortError' ? t('llm.cancelled') : t('agent.reviewFailed', { msg: e.message || String(e) });
+      setMessages(ms => ms.map((m, i) => i === ms.length - 1 && m.kind === 'review' && m.running
+        ? { ...m, running: false, content: text } : m));
+    }
+  };
+
+  // 任务状态与审计落库（阶段三的 IndexedDB）；关掉开关时 persistTask 自己会跳过
+  const persistTask = async (task) => {
+    if (!agentCfg || agentCfg.persist === false) return;
+    try {
+      const { saveTask, saveCase } = await import('../workspace/taskStore.js');
+      await saveTask(task);
+      // 失败/熔断的任务才进案例库：成功任务的复盘价值低，却要把整条链路写进库里
+      if (task.phase === 'failed' || task.phase === 'tripped') await saveCase(task);
+    } catch (e) { /* 存不下不影响这轮回答，界面上也不报错 */ }
+  };
+
+  // 回滚到某个子任务的起点：内容整体替换回那一版，当前内容先记一条 beforeRestore
+  const rollbackTo = async (snap) => {
+    if (!agentEnv || !agentEnv.restore || busy) return;
+    const files = snap && snap.files ? Object.entries(snap.files).filter(([, id]) => id) : [];
+    if (!files.length) { flashNote(t('agent.snapshotNone', { n: snap.step })); return; }
+    if (!await showConfirm(t('agent.rollbackConfirm', { n: files.length, step: snap.step }))) return;
+    const r = await agentEnv.restore(Object.fromEntries(files));
+    if (r.restored) flashNote(t('agent.rollbackDone', { n: r.restored, step: snap.step }));
+    if (r.missing && r.missing.length) flashNote(t('agent.rollbackPartial', { list: r.missing.join(', ') }));
+    else if (!r.restored) flashNote(t('agent.rollbackFail'));
   };
 
   const send = async (preset, opts) => {
@@ -468,7 +542,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
               <button
                 title={t('chat.clear')}
                 disabled={busy || compacting || externalBusy}
-                onClick={() => { setMessages([]); setReqUsage(null); setRealUsage(null); setNote(''); }}
+                onClick={() => { setMessages([]); setReqUsage(null); setRealUsage(null); setNote(''); setAgentTask(null); }}
               >{lang === 'zh' ? '清' : 'Clr'}</button>
           {!narrow && <button title={t('chat.close')} onClick={onClose}>✕</button>}
         </span>
@@ -514,6 +588,45 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         )}
         {channel && channel.cot && <span className="cot-badge" title={t('chat.cotTip')}>{t('chat.cot')}</span>}
       </div>
+
+      {/* 任务状态面板：计划、每步的交付物与完成判定、快照回滚入口。
+          它是框架持有的状态，不是模型自述——所以模型说「我做完了」不算，标记要落在计划上。 */}
+      {mode === 'agent' && agentTask && agentTask.steps && agentTask.steps.length ? (
+        <div className="agent-plan">
+          <div className="ap-head">
+            <b>{t('agent.planCard')}</b>
+            <span className="ap-phase">{t('agent.planPhase', { phase: t('agent.phase.' + agentTask.phase) })}</span>
+            <span className="ap-count">{agentTask.steps.filter(s => s.status === 'done').length}/{agentTask.steps.length}</span>
+            <span className="ap-quota" title={t('agent.planQuotaTip')}>
+              {t('agent.planCalls')} {agentTask.counters.calls} · {t('agent.planWrites')} {agentTask.counters.writes} · {t('agent.planBlocked')} {agentTask.counters.blocked}
+            </span>
+          </div>
+          <ol className="ap-steps">
+            {agentTask.steps.map(s => (
+              <li key={s.n} className={'ap-step ' + s.status + (s.n === agentTask.currentStep ? ' cur' : '')}>
+                <span className="ap-mark">{({ done: '✓', doing: '▶', blocked: '!', skipped: '–' })[s.status] || '○'}</span>
+                <span className="ap-title">{s.n}. {s.title}</span>
+                <span className="ap-st">{t('agent.plan' + s.status[0].toUpperCase() + s.status.slice(1))}</span>
+                <div className="ap-meta">
+                  {s.deliverable}｜{s.doneWhen}
+                  {s.deps && s.deps.length ? ' ← ' + s.deps.join(', ') : ''}
+                  {s.note ? ' · ' + s.note : ''}
+                </div>
+              </li>
+            ))}
+          </ol>
+          {agentTask.snapshots && agentTask.snapshots.length ? (
+            <div className="ap-rolls">
+              {agentTask.snapshots.map((sn, si) => (
+                <button key={si} className="btn sm" disabled={busy || !agentEnv.restore}
+                  title={t('agent.rollbackTip')} onClick={() => rollbackTo(sn)}>
+                  ⟲ {t('agent.rollbackTo', { n: sn.step })}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div
         className="chat-list"
@@ -561,6 +674,32 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           </div>
         ) : m.kind === 'agent-limit' ? (
           <div key={i} className="chat-agent-limit">{m.content}</div>
+        ) : m.kind === 'review' ? (
+          <div key={i} className={'chat-review' + (m.running ? ' running' : m.review && m.review.goalOk && m.review.processOk && m.review.qualityOk ? ' ok' : ' warn')}>
+            <div className="cr-head">
+              <b>{t('agent.reviewTitle')}</b>
+              {m.running ? <em>{t('agent.reviewRunning')}</em>
+                : m.usage ? <em>{t('agent.reviewUsage', { n: ctx.formatTokens(m.usage.input + m.usage.output) })}</em> : null}
+            </div>
+            {!m.running && m.review ? (
+              <ul className="cr-list">
+                <li className={m.review.goalOk ? 'good' : 'bad'}>
+                  {m.review.goalOk ? t('agent.reviewGoalOk') : t('agent.reviewGoalBad')}
+                  {m.review.missing && m.review.missing.length ? ' ' + m.review.missing.join('；') : ''}
+                </li>
+                <li className={m.review.processOk ? 'good' : 'bad'}>
+                  {m.review.processOk ? t('agent.reviewProcessOk') : t('agent.reviewProcessBad')}
+                  {m.review.processIssues && m.review.processIssues.length ? ' ' + m.review.processIssues.join('；') : ''}
+                </li>
+                <li className={m.review.qualityOk ? 'good' : 'bad'}>
+                  {m.review.qualityOk ? t('agent.reviewQualityOk') : t('agent.reviewQualityBad')}
+                  {m.review.qualityIssues && m.review.qualityIssues.length ? ' ' + m.review.qualityIssues.join('；') : ''}
+                </li>
+              </ul>
+            ) : !m.running ? (
+              <div className="cr-body">{m.content ? (m.review ? m.content : t('agent.reviewNoVerdict') + ' ' + m.content) : ''}</div>
+            ) : null}
+          </div>
         ) : (
           <div key={i} className={'chat-msg ' + m.role}>
             {m.role === 'user' && m.ctxNote && <div className="chat-ctx">{m.ctxNote}</div>}

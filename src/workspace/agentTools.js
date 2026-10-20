@@ -5,12 +5,16 @@
  * 工具协议走「文本 fenced 块」而不是各家 tools API——OpenAI 兼容网关、
  * Anthropic 直连、Ollama 本机对 tools 字段的支持参差不齐，文本协议零兼容成本：
  *   模型需要调工具时输出  ```tool\n{"tool":"read_file","args":{"path":"main.tex"}}\n```
- * 本模块负责：解析模型输出（parseToolCalls）、工具清单文本（toolsSchema）、
- * 执行器工厂（makeAgentExecutor）。执行器依赖全部以 getter 注入，
- * 保证每次执行都取到最新的编辑器/标签/文件夹状态。
+ * 本模块负责：解析模型输出（parseToolCalls）、执行器工厂（makeAgentExecutor）。
+ * 工具「是什么」的定义（入参规格/是否改盘/失败降级/清单文本）在 toolRegistry.js，
+ * 执行器只负责「怎么做」：每个调用先过注册表校验，非法参数不进工具实现。
+ * 执行器依赖全部以 getter 注入，保证每次执行都取到最新的编辑器/标签/文件夹状态。
  */
 import { tr, getLang } from '../i18n.js';
 import { collectSearchFiles, searchInFiles } from '../searchIndex.js';
+import { validateCall, contentSig, toolDef, MUTATING_TOOLS } from './toolRegistry.js';
+
+export { toolsSchema, MUTATING_TOOLS, makeCallLedger } from './toolRegistry.js';
 
 // 单个工具结果回传给模型前的长度上限：防止 read_file 大文档直接吃光上下文预算
 export const TOOL_RESULT_MAX_CHARS = 12000;
@@ -22,13 +26,14 @@ function clampResult(text) {
     + '\n…(' + tr(getLang(), 'agent.toolTruncated', { n: s.length - TOOL_RESULT_MAX_CHARS }) + ')';
 }
 
-function ok(result) { return { ok: true, result: clampResult(result) }; }
-function fail(msg) { return { ok: false, result: String(msg) }; }
+// sig 取截断前的原文：两次读取都超出上限时，截断后的前缀可能一模一样，
+// 拿成品算签名会把「尾部其实变了」判成相同内容。
+function ok(result) { const s = String(result == null ? '' : result); return { ok: true, result: clampResult(s), sig: contentSig(s) }; }
+function fail(msg, code) { return { ok: false, result: String(msg), code: code || '' }; }
 
 // 嵌套量词的粗判：组内已带量词、组外面又跟量词（(a+)+ / (a*)* 这类爆炸串）。
 // 不做完整的安全分析，挡住模型最常写出的那种就够了——正则是逐行在 UI 线程 exec 的。
 const NESTED_QUANT = /\([^()]*(?:[+*?])\)[+*?{]/;
-const SEARCH_QUERY_MAX = 200;
 
 /** 路径任一段以 . 开头 = 隐藏文件或点开头的目录（. 与 .. 一起挡在门外） */
 function hiddenPath(p) {
@@ -36,30 +41,11 @@ function hiddenPath(p) {
 }
 
 // 会动到用户正文或落盘的工具：权限分档只对这类工具设门槛，读类工具任何档位直通
-export const MUTATING_TOOLS = new Set(['edit_file', 'insert_text', 'create_file']);
 const BRIEF_LEN = 160;
 const briefText = (s) => {
   const one = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   return one.length > BRIEF_LEN ? one.slice(0, BRIEF_LEN) + '…' : one;
 };
-
-/* ---- 模型侧工具清单（描述随界面语言） ---- */
-
-export function toolsSchema() {
-  const L = getLang();
-  const lines = [
-    '- list_files：' + tr(L, 'agent.tListFiles'),
-    '- read_file {path}：' + tr(L, 'agent.tReadFile'),
-    '- open_file {path}：' + tr(L, 'agent.tOpenFile'),
-    '- search_files {query, regex?, match_case?, whole_word?}：' + tr(L, 'agent.tSearch'),
-    '- read_selection：' + tr(L, 'agent.tReadSel'),
-    '- get_diagnostics：' + tr(L, 'agent.tDiag'),
-    '- edit_file {old_text, new_text, path?}：' + tr(L, 'agent.tEditFile'),
-    '- insert_text {text}：' + tr(L, 'agent.tInsert'),
-    '- create_file {path, content}：' + tr(L, 'agent.tCreateFile'),
-  ];
-  return lines.join('\n');
-}
 
 /* ---- 解析模型输出中的工具调用 ---- */
 
@@ -192,43 +178,57 @@ export function makeAgentExecutor(deps) {
   async function toolReadFile(args) {
     const L = getLang();
     const path = String(args.path || '').trim();
-    if (!path) return fail(tr(L, 'agent.errNoPath'));
     // 1) 打开的标签（拿编辑中的实时内容）
     const tab = (deps.tabs() || []).find(x => x && x.doc && deps.tabPath(x) === path);
-    if (tab) return ok(tab.id === deps.activeId() ? (deps.cm() ? deps.cm().getValue() : tab.doc.getValue()) : tab.doc.getValue());
+    if (tab) return sliceLines(ok(tab.id === deps.activeId() ? (deps.cm() ? deps.cm().getValue() : tab.doc.getValue()) : tab.doc.getValue()), args);
     // 2) 文件夹索引（已扫描进内存的 .tex/.bib/.txt）
     const fi = deps.folderIndex() || {};
     const entry = [...(fi.texFiles || []), ...(fi.bibFiles || []), ...(fi.textFiles || [])].find(f => f.path === path);
-    if (entry && typeof entry.source === 'string') return ok(entry.source);
+    if (entry && typeof entry.source === 'string') return sliceLines(ok(entry.source), args);
     // 3) 直读磁盘（未进索引的文件类型）；区分「不存在」与「读取失败」——
     //    权限/超大/非法路径等原因如实回传，避免模型误以为文件不存在而反复重读或盲目重建
     //    磁盘兜底默认不放开隐藏文件：用户选的目录可能很宽（家目录/文档），.env、.git/config
     //    一旦被模型指名读到，就变成下一次请求里发给第三方渠道的素材。「完全访问」档由
     //    用户明确放弃这层保护，才允许读隐藏路径
-    if (hiddenPath(path) && level() !== 'full') return fail(tr(L, 'agent.errHiddenPath', { path }));
+    if (hiddenPath(path) && level() !== 'full') return fail(tr(L, 'agent.errHiddenPath', { path }), 'hidden_path');
     try {
       const text = await readFromDisk(path);
-      if (text != null) return ok(text);
+      if (text != null) return sliceLines(ok(text), args);
     } catch (e) {
-      if (e && e.name === 'NotFoundError') return fail(tr(L, 'agent.errFileNotFound', { path }));
-      return fail(tr(L, 'agent.toolCrashed', { msg: (e && e.message) || e }));
+      if (e && e.name === 'NotFoundError') return fail(tr(L, 'agent.errFileNotFound', { path }), 'file_not_found');
+      // 超大文件走 too_large：降级建议是「用行区间局部读」，不是「换工具」
+      if (e && /2MB|toolTooLarge/.test(String(e.message || e))) return fail(e.message, 'too_large');
+      return fail(tr(L, 'agent.toolCrashed', { msg: (e && e.message) || e }), 'tool_crashed');
     }
-    return fail(tr(L, 'agent.errFileNotFound', { path }));
+    return fail(tr(L, 'agent.errFileNotFound', { path }), 'file_not_found');
+  }
+
+  /** 行区间读取：长文档整篇进上下文是长任务最常见的一种浪费，给了区间模型才会分段看 */
+  function sliceLines(r, args) {
+    if (!r.ok) return r;
+    const from = args.from_line, count = args.max_lines;
+    if (!from && !count) return r;
+    const lines = r.result.split('\n');
+    const a = Math.max(0, (from || 1) - 1);
+    const b = count ? a + count : lines.length;
+    const picked = lines.slice(a, b);
+    // sig 沿用整篇的签名（ok() 里按截断前原文算的）：它只回答「底层内容变没变」，
+    // 与这次截取的区间无关，两次同区间重读因此能正确判重
+    return { ...r, result: picked.join('\n') };
   }
 
   function toolSearch(args) {
     const L = getLang();
+    // query 的必填与长度上限在注册表里，这里只留「跑起来才知道」的语义检查
     const query = String(args.query || '');
-    if (!query) return fail(tr(L, 'agent.errNoQuery'));
-    if (query.length > SEARCH_QUERY_MAX) return fail(tr(L, 'agent.errQueryTooLong', { n: SEARCH_QUERY_MAX }));
-    if (args.regex === true && NESTED_QUANT.test(query)) return fail(tr(L, 'agent.errRegexUnsafe'));
+    if (args.regex === true && NESTED_QUANT.test(query)) return fail(tr(L, 'agent.errRegexUnsafe'), 'regex_unsafe');
     const r = searchInFiles(searchFiles(), {
       query,
       regex: args.regex === true,
       matchCase: args.match_case === true || args.matchCase === true,
       wholeWord: args.whole_word === true || args.wholeWord === true,
     });
-    if (!r.ok) return fail(tr(L, 'agent.errBadRegex'));
+    if (!r.ok) return fail(tr(L, 'agent.errBadRegex'), 'bad_regex');
     if (!r.matches.length) return ok(tr(L, 'agent.searchNoHit', { query }));
     const shown = r.matches.slice(0, 40)
       .map(m => m.path + ':' + (m.line + 1) + ': ' + m.text.trim().slice(0, 160));
@@ -249,7 +249,7 @@ export function makeAgentExecutor(deps) {
   function toolReadSelection() {
     const L = getLang();
     const c = deps.cm();
-    if (!c) return fail(tr(L, 'agent.errNoEditor'));
+    if (!c) return fail(tr(L, 'agent.errNoEditor'), 'no_editor');
     const sel = c.getSelection();
     if (!sel) return ok(tr(L, 'agent.selEmpty'));
     return ok(sel);
@@ -264,56 +264,61 @@ export function makeAgentExecutor(deps) {
     const tabs = deps.tabs() || [];
     if (!path) {
       const c = deps.cm();
-      if (!c) return { err: tr(L, 'agent.errNoEditor') };
+      if (!c) return { err: tr(L, 'agent.errNoEditor'), code: 'no_editor' };
       const active = tabs.find(x => x && x.id === deps.activeId());
       return { doc: c, tab: null, label: active ? deps.tabPath(active) : '' };
     }
     const tab = tabs.find(x => x && x.doc && deps.tabPath(x) === path);
     if (tab) return { doc: tab.doc, tab, label: path };
-    return { err: tr(L, 'agent.errNotOpen', { path }) };
+    return { err: tr(L, 'agent.errNotOpen', { path }), code: 'not_open' };
   }
 
   const labelOf = (t) => t || tr(getLang(), 'agent.filesActive');
+
+  // 回滚要找的是「文件路径」，不是给人看的标签（省略 path 时 labelOf 会回「当前编辑」）。
+  // 快照 id 由 deps.beforeEdit 返回——版本历史那一头才有 id，工具这头只能转述。
+  const activePath = () => {
+    const a = (deps.tabs() || []).find(x => x && x.id === deps.activeId());
+    return a ? deps.tabPath(a) : '';
+  };
+  const pathOf = (target) => (target.tab ? deps.tabPath(target.tab) : activePath());
 
   function toolEditFile(args) {
     const L = getLang();
     const oldText = String(args.old_text == null ? '' : args.old_text);
     const newText = String(args.new_text == null ? '' : args.new_text);
-    if (!oldText) return fail(tr(L, 'agent.errNoOldText'));
     const target = resolveTarget(args);
-    if (target.err) return fail(target.err);
+    if (target.err) return fail(target.err, target.code);
     const doc = target.doc;
     const value = doc.getValue();
     const first = value.indexOf(oldText);
-    if (first < 0) return fail(tr(L, 'agent.errOldNotFound'));
-    if (value.indexOf(oldText, first + 1) >= 0) return fail(tr(L, 'agent.errOldAmbiguous'));
-    if (deps.beforeEdit) deps.beforeEdit(target.tab);
+    if (first < 0) return fail(tr(L, 'agent.errOldNotFound'), 'old_not_found');
+    if (value.indexOf(oldText, first + 1) >= 0) return fail(tr(L, 'agent.errOldAmbiguous'), 'old_ambiguous');
+    const versionId = deps.beforeEdit ? deps.beforeEdit(target.tab) : null;
     const from = doc.posFromIndex(first);
     const to = doc.posFromIndex(first + oldText.length);
     doc.replaceRange(newText, from, to);
     // 后台标签的 Doc 没有挂载编辑器，改动不会经过 change 事件：不补脏标记，
     // 关标签时会跳过「未保存确认」，把 agent 刚写进去的内容一起丢掉
     if (target.tab && deps.markDirty) deps.markDirty(target.tab);
-    return ok(tr(L, 'agent.editDone', { path: labelOf(target.label), n: newText.length }));
+    return { ...ok(tr(L, 'agent.editDone', { path: labelOf(target.label), n: newText.length })), file: pathOf(target), versionId };
   }
 
   function toolInsert(args) {
     const L = getLang();
     const c = deps.cm();
-    if (!c) return fail(tr(L, 'agent.errNoEditor'));
+    if (!c) return fail(tr(L, 'agent.errNoEditor'), 'no_editor');
     const text = String(args.text == null ? '' : args.text);
-    if (!text) return fail(tr(L, 'agent.errNoOldText'));
     const path = String(args.path || '').trim();
-    const active = (deps.tabs() || []).find(x => x && x.id === deps.activeId());
-    const activePath = active ? deps.tabPath(active) : '';
+    const activePathNow = activePath();
     // 插入点定义就是「用户眼前的光标」：跨文档插入没有语义，宁可拒绝也不写进别的文件
-    if (path && path !== activePath) return fail(tr(L, 'agent.errInsertActiveOnly', { path, active: labelOf(activePath) }));
-    if (deps.beforeEdit) deps.beforeEdit(null);
+    if (path && path !== activePathNow) return fail(tr(L, 'agent.errInsertActiveOnly', { path, active: labelOf(activePathNow) }), 'insert_active_only');
+    const versionId = deps.beforeEdit ? deps.beforeEdit(null) : null;
     // 插入点的语义是「光标处插入」：CM5 的 replaceSelection 在有选区时是*替换*，
     // 划词问 Agent 之后它插一段话，用户选中的正文就没了
     const cur = c.getCursor();
     c.replaceRange(text, cur, cur);
-    return ok(tr(L, 'agent.insertDone', { path: labelOf(activePath) }));
+    return { ...ok(tr(L, 'agent.insertDone', { path: labelOf(activePathNow) })), file: activePathNow, versionId };
   }
 
   // 「每次审核」档要用给人看的确认文案：路径解析与工具真正落点走同一条（resolveTarget），
@@ -341,7 +346,15 @@ export function makeAgentExecutor(deps) {
   }
 
   const execute = async function (name, args) {
-    const a = args && typeof args === 'object' ? args : {};
+    // 校验先行：必填缺失、类型不对、超长度上限的调用不进工具实现。运行循环也会先过
+    // 一遍（framework 侧拦截并记审计），这里是第二道——测试与任何直接调用执行器的
+    // 路径都走同一条规格，不会出现「绕过循环就没校验」。
+    const v = validateCall(name, args);
+    if (!v.ok) return fail(v.error, v.code);
+    const a = v.args;
+    const def = toolDef(name);
+    // 计划类动作的落点是任务状态，归运行循环处理；真到了文件执行器说明调用方漏了分发
+    if (!def || def.domain !== 'fs') return fail(tr(getLang(), 'agent.errTaskToolDirect'), 'task_tool_direct');
     try {
       switch (name) {
         case 'list_files': return toolListFiles();
@@ -353,16 +366,19 @@ export function makeAgentExecutor(deps) {
         case 'insert_text': return toolInsert(a);
         case 'create_file': {
           const r = await deps.createFile(String(a.path || ''), String(a.content == null ? '' : a.content));
-          return r && r.ok ? ok(r.msg || 'ok') : fail((r && r.msg) || tr(getLang(), 'agent.errCreateFailed'));
+          // 依赖方（App 的建文件入口）自带错误码：沿用它，注册表才知道该给哪条降级建议
+          // file 用依赖方规范化后的真实路径——模型写「./a/../../b.tex」时落点不是它写的那个
+          return r && r.ok ? { ...ok(r.msg || 'ok'), file: r.path || String(a.path || '') }
+            : fail((r && r.msg) || tr(getLang(), 'agent.errCreateFailed'), (r && r.code) || 'create_failed');
         }
         case 'open_file': {
           const r = await deps.openByPath(String(a.path || ''));
-          return r && r.ok ? ok(r.msg || 'ok') : fail((r && r.msg) || tr(getLang(), 'agent.errFileNotFound', { path: String(a.path || '') }));
+          return r && r.ok ? ok(r.msg || 'ok') : fail(r && r.msg || tr(getLang(), 'agent.errFileNotFound', { path: String(a.path || '') }), (r && r.code) || 'file_not_found');
         }
-        default: return fail(tr(getLang(), 'agent.errUnknownTool', { name: String(name) }));
+        default: return fail(tr(getLang(), 'agent.errUnknownTool', { name: String(name) }), 'unknown_tool');
       }
     } catch (e) {
-      return fail(tr(getLang(), 'agent.toolCrashed', { msg: (e && e.message) || e }));
+      return fail(tr(getLang(), 'agent.toolCrashed', { msg: (e && e.message) || e }), 'tool_crashed');
     }
   };
   execute.describe = describe;

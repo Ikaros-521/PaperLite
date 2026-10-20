@@ -516,6 +516,27 @@ export default function App() {
   // （否则设置里改了级别，正在跑的 Agent 还按旧档走）
   const agentCfgRef = useRef(agentCfg);
   useEffect(() => { agentCfgRef.current = agentCfg; }, [agentCfg]);
+  // 对话恢复：一个项目键只读一次，且只在面板当前是空的时写入——用户已经开聊之后
+  // 再把旧记录倒进来，会盖掉他正在写的这一轮。
+  // 不能用「effect cleanup 里置 alive=false」来防过期结果：dev 的 StrictMode 会把
+  // effect 跑两遍，第一遍的异步结果回来时已作废，第二遍又被「只读一次」的锁挡住，
+  // 结果是历史永远进不来。改成在回调里比对当前键，并在失败时放开锁允许重试。
+  const chatRestoredRef = useRef('');
+  const chatKeyRef = useRef('');
+  useEffect(() => {
+    const key = rootDir ? 'dir:' + rootDir.name : 'draft';
+    chatKeyRef.current = key;
+    if (agentCfg.persist === false || chatRestoredRef.current === key) return undefined;
+    chatRestoredRef.current = key;
+    import('./workspace/taskStore.js')
+      .then(m => m.loadChat(key))
+      .then(list => {
+        if (chatKeyRef.current !== key) { chatRestoredRef.current = ''; return; }
+        if (list && list.length) setChatMessages(prev => prev.length ? prev : list);
+      })
+      .catch(() => { chatRestoredRef.current = ''; });
+    return undefined;
+  }, [rootDir, agentCfg.persist]);
   // 沉浸模式：涂在 <body> 上让 CSS 隐藏全部外壳；片段变更即落盘（失败静默，编辑仍在内存）
   useEffect(() => { document.body.classList.toggle('pl-zen', zen); }, [zen]);
   useEffect(() => { saveSnippets(snippets); }, [snippets]);
@@ -1121,11 +1142,12 @@ export default function App() {
     // 旧写法 replace(/^[./\\]+/, '') 把 ../x 静默改成 x、.latexmkrc 改成 latexmkrc：
     // 悄悄换目标比直接拒绝更糟（模型以为建在 a/ 下，实际落在别处）。现在按段校验。
     const segs = String(path || '').replace(/\/+/g, '/').split('/').filter(Boolean);
-    if (!segs.length || /[\\:*?"<>|\u0000-\u001f]/.test(String(path || ''))) return { ok: false, msg: tr(L, 'app.badFileName') };
-    if (segs.some(s => s.startsWith('.'))) return { ok: false, msg: tr(L, 'agent.errHiddenPath', { path: String(path || '') }) };
+    // code 回给执行器：注册表按错误码追加「下一步该怎么做」，没有码就只能把原文丢回给模型猜
+    if (!segs.length || /[\\:*?"<>|\u0000-\u001f]/.test(String(path || ''))) return { ok: false, msg: tr(L, 'app.badFileName'), code: 'bad_name' };
+    if (segs.some(s => s.startsWith('.'))) return { ok: false, msg: tr(L, 'agent.errHiddenPath', { path: String(path || '') }), code: 'hidden_path' };
     const clean = segs.join('/');
     if (String(content == null ? '' : content).length > 2 * 1024 * 1024) {
-      return { ok: false, msg: tr(L, 'fs.tooLarge', { size: (String(content).length / 1048576).toFixed(1) }) };
+      return { ok: false, msg: tr(L, 'fs.tooLarge', { size: (String(content).length / 1048576).toFixed(1) }), code: 'too_large' };
     }
     const root = rootDirRef.current;
     if (root) {
@@ -1138,18 +1160,19 @@ export default function App() {
         // 没开成标签的磁盘文件没有历史快照，盖完不可恢复 → 先探测，已存在就拒绝。
         let exists = true;
         try { await dir.getFileHandle(name); } catch (e) { if (e && e.name === 'NotFoundError') exists = false; else throw e; }
-        if (exists) return { ok: false, msg: tr(L, 'agent.errFileExists', { path: clean }) };
+        if (exists) return { ok: false, msg: tr(L, 'agent.errFileExists', { path: clean }), code: 'file_exists' };
         const handle = await fs.createFile(dir, name);
         await fs.writeFileText(handle, content);
-        await openFileTab(handle, clean, root);
+        await openFileTab(handle, clean, rootDirRef.current);
         setTreeKey(n => n + 1);
-        return { ok: true, msg: tr(L, 'agent.createdInFolder', { path: clean }) };
-      } catch (e) { return { ok: false, msg: String((e && e.message) || e) }; }
+        // path 回给执行器：任务状态要记下「这一步新建了哪个文件」，回滚时才敢说清楚
+        return { ok: true, path: clean, msg: tr(L, 'agent.createdInFolder', { path: clean }) };
+      } catch (e) { return { ok: false, msg: String((e && e.message) || e), code: 'create_failed' }; }
     }
     const dup = tabsRef.current.find(x => x.name === clean || x.path === clean);
-    if (dup) return { ok: false, msg: tr(L, 'agent.errFileExists', { path: clean }) };
+    if (dup) return { ok: false, msg: tr(L, 'agent.errFileExists', { path: clean }), code: 'file_exists' };
     addDraft(clean, content);   // 未连文件夹：内存草稿标签（浏览器自动落盘）
-    return { ok: true, msg: tr(L, 'agent.createdDraft', { path: clean }) };
+    return { ok: true, path: clean, msg: tr(L, 'agent.createdDraft', { path: clean }) };
   }, [openFileTab, addDraft]);
 
   const openByPathForAgent = useCallback(async (path) => {
@@ -1163,8 +1186,40 @@ export default function App() {
       const opened = await openFileTab(entry.handle, entry.path, rootDirRef.current);
       if (opened) return { ok: true, msg: clean };
     }
-    return { ok: false, msg: tr(L, 'agent.errFileNotFound', { path: clean }) };
+    return { ok: false, msg: tr(L, 'agent.errFileNotFound', { path: clean }), code: 'file_not_found' };
   }, [openFileTab]);
+
+  // Agent 子任务回滚：把快照里的每个文件恢复到「该子任务开始前」那一版。
+  // 与历史面板的恢复同一套语义（当前内容先记 beforeRestore，再整体替换，再记 restore），
+  // 差别只在这里要一次处理多个文件，还可能碰到没打开的标签。
+  // 只回滚内容，不删文件：本轮新建的文件由用户自己决定去留（自动删除用户目录里的
+  // 东西这件事不该由一个确认按钮顺带做掉）。
+  const restoreAgentSnapshot = useCallback(async (files) => {
+    const entries = Object.entries(files || {});
+    const missing = [];
+    let restored = 0;
+    for (const [path, id] of entries) {
+      if (!id) { continue; }
+      let tab = tabsRef.current.find(x => tabPathRef.current(x) === path);
+      if (!tab) {
+        const r = await openByPathForAgent(path);
+        if (!r || !r.ok) { missing.push(path); continue; }
+        tab = tabsRef.current.find(x => tabPathRef.current(x) === path);
+      }
+      if (!tab || !tab.doc) { missing.push(path); continue; }
+      const key = tab.historyKey;
+      const ver = readHistory(key).find(v => v.id === id);
+      if (!ver) { missing.push(path); continue; }
+      recordVersion(key, tab.doc.getValue(), { reason: 'beforeRestore', force: true });
+      tab.doc.replaceRange(ver.text, { line: 0, ch: 0 }, tab.doc.posFromIndex(tab.doc.getValue().length), 'historyRestore');
+      recordVersion(key, ver.text, { reason: 'restore', label: ver.label, force: true });
+      setTabs(ts => ts.map(x => x === tab ? { ...x, dirty: tab.doc.getValue() !== x.saved } : x));
+      restored++;
+    }
+    setCompileResult(null);
+    setTreeKey(n => n + 1);
+    return { restored, missing };
+  }, [openByPathForAgent]);
 
   const agentEnv = useMemo(() => ({
     execute: makeAgentExecutor({
@@ -1197,8 +1252,17 @@ export default function App() {
       tabPath: tb => tabPathRef.current(tb),
       diagnostics: issuesRef.current,
     }),
+    // 省略 path 的改动手落在哪个文件：跑偏拦截要拿它当落点，不能只信模型写的路径
+    activePath: () => {
+      const a = tabsRef.current.find(x => x && x.id === activeIdRef.current);
+      return a ? tabPathRef.current(a) : '';
+    },
+    restore: (files) => restoreAgentSnapshot(files),
+    // 对话落库的键：文件夹名优先，没连文件夹时统一归到 draft。
+    // 用名字而不是句柄——同一目录重开后句柄会变，历史不该跟着丢。
+    chatKey: rootDir ? 'dir:' + rootDir.name : 'draft',
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [createFileForAgent, openByPathForAgent]);
+  }), [createFileForAgent, openByPathForAgent, restoreAgentSnapshot, rootDir]);
 
   // ---- 导出 ----
   const exportPdfPrint = () => {

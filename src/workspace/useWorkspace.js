@@ -148,19 +148,23 @@ export function useWorkspace(ui) {
     setHistoryTick(n => n + 1);
   }, []);
 
+  // snapshot / snapshotTab 返回「这一条版本的 id」（失败为 null），不是布尔：
+  // Agent 的子任务快照要把「改前是哪一版」交给任务状态，回滚才找得到落点。
+  // 调用方一律按真假判断使用，null 与 false 同样表示没存成。
   const snapshot = useCallback((label = '', reason = 'manual', force = true) => {
-    if (!activeTab?.doc) return false;
+    if (!activeTab?.doc) return null;
     const result = recordVersion(historyKey, activeTab.doc.getValue(), { label, reason, force });
     noteHistory(result);
-    return result.ok;
+    return result.ok ? (result.version && result.version.id) || null : null;
   }, [activeTab, historyKey, noteHistory]);
 
   /** 给指定标签打快照（agent 编辑后台标签时用）。不这么走的话快照会写到活动文档的
    *  历史键上：改的是 A，留版本的是 B，回滚时两边都对不上。 */
   const snapshotTab = useCallback((tab, label = '') => {
-    if (!tab?.doc) return false;
-    noteHistory(recordVersion(historyKeyOf(tab), tab.doc.getValue(), { label, reason: 'manual', force: true }));
-    return true;
+    if (!tab?.doc) return null;
+    const result = recordVersion(historyKeyOf(tab), tab.doc.getValue(), { label, reason: 'manual', force: true });
+    noteHistory(result);
+    return result.ok ? (result.version && result.version.id) || null : null;
   }, [historyKeyOf, noteHistory]);
 
   useEffect(() => {

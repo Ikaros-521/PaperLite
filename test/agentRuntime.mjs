@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { runAgentLoop, agentSystemPrompt, loadAgentSettings, saveAgentSettings, AGENT_TOOLS_PER_STEP, AGENT_WRITES_PER_RUN } from '../src/workspace/agentRuntime.js';
+import { contentSig } from '../src/workspace/toolRegistry.js';
 import * as ctxBudget from '../src/context.js';
 import { setLang } from '../src/i18n.js';
 
@@ -152,13 +153,13 @@ globalThis.localStorage = {
   setItem: (k, v) => { memStore[k] = String(v); },
 };
 saveAgentSettings({ maxSteps: 999, keepResults: 0 });
-assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1, approval: 'auto' }, '越界值要钳制到合法区间');
-saveAgentSettings({ maxSteps: 12, keepResults: 4, approval: 'ask' });
-assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4, approval: 'ask' }, '合法值要原样读回');
+assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1, approval: 'auto', plan: true, review: false, persist: true }, '越界值要钳制到合法区间');
+saveAgentSettings({ maxSteps: 12, keepResults: 4, approval: 'ask', plan: false });
+assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4, approval: 'ask', plan: false, review: false, persist: true }, '合法值要原样读回');
 saveAgentSettings({ approval: 'yolo-full-access' });
 assert.equal(loadAgentSettings().approval, 'auto', '野档位回默认档，不能因为拼错就变成完全访问');
 memStore['paperlite.agentSettings.v1'] = '{oops';
-assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5, approval: 'auto' }, '损坏数据回退默认值');
+assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5, approval: 'auto', plan: true, review: false, persist: true }, '损坏数据回退默认值');
 delete globalThis.localStorage;
 
 // 单步工具数与整轮改盘次数：畸形或自我循环的输出不该一口气改几十处，
@@ -228,6 +229,192 @@ delete globalThis.localStorage;
   assert.equal(capped.ran, AGENT_WRITES_PER_RUN, '默认档整轮改盘封顶');
   const wide = await run({ approval: 'full', approve: true, steps: 3, perStep: 10 });
   assert.equal(wide.ran, AGENT_TOOLS_PER_STEP * 3, '「完全访问」不受改盘次数限制');
+}
+
+/* ---------- 框架侧拦截：非法参数不进执行器、同内容重读瘦身、重复失败关掉死路 ---------- */
+{
+  const call = (t, a) => '```tool\n' + JSON.stringify({ tool: t, args: a }) + '\n```';
+
+  // A) edit_file 缺 new_text：执行器一次都不该被调用，回执要带缺的参数与下一步
+  {
+    const ran = [], lists = [];
+    let n = 0;
+    globalThis.fetch = async () => {
+      n++;
+      return sseResponse(n === 1 ? call('edit_file', { old_text: '只有旧串' }) : '改好了。');
+    };
+    await runAgentLoop({
+      channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+      budget: 6000, maxSteps: 4, keepResults: 9,
+      execute: async (name) => { ran.push(name); return { ok: true, result: 'SHOULD-NOT-RUN' }; },
+      onUpdate: l => lists.push(l),
+    });
+    globalThis.fetch = realFetch;
+    assert.equal(ran.length, 0, '非法参数不进执行器');
+    const rec = lists[lists.length - 1].find(m => m.kind === 'tool-result');
+    assert.ok(rec && !rec.ok, '非法调用要有失败回执');
+    assert.ok(rec.content.includes('new_text'), '回执要指出缺哪个参数：' + rec.content);
+    assert.ok(rec.content.includes('下一步'), '回执要带降级建议');
+  }
+
+  // B) 同一个 read_file 重读且内容未变：第二次回执换成一行「与第 N 步相同」，
+  //    正文不再进上下文（长任务里这是最省 token 的一道）
+  {
+    const lists = [], sig = contentSig('main.tex 的正文');
+    let n = 0;
+    globalThis.fetch = async () => {
+      n++;
+      return sseResponse(n <= 2 ? call('read_file', { path: 'main.tex' }) : '读完了。');
+    };
+    await runAgentLoop({
+      channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+      budget: 6000, maxSteps: 4, keepResults: 9,
+      execute: async () => ({ ok: true, result: 'main.tex 的正文', sig }),
+      onUpdate: l => lists.push(l),
+    });
+    globalThis.fetch = realFetch;
+    const recs = lists[lists.length - 1].filter(m => m.kind === 'tool-result');
+    assert.equal(recs.length, 2, '两次调用两条回执');
+    assert.equal(recs[0].content, 'main.tex 的正文', '第一次给全文');
+    assert.ok(/完全相同/.test(recs[1].content), '第二次只给一行相同说明：' + recs[1].content);
+    assert.ok(!recs[1].content.includes('main.tex 的正文'), '重复正文不进上下文');
+  }
+
+  // C) 内容变了就必须给新结果（判重只在真的没变时生效）
+  {
+    const lists = [];
+    let n = 0;
+    globalThis.fetch = async () => {
+      n++;
+      return sseResponse(n <= 2 ? call('read_file', { path: 'main.tex' }) : '读完了。');
+    };
+    await runAgentLoop({
+      channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+      budget: 6000, maxSteps: 4, keepResults: 9,
+      execute: async () => { const v = n === 1 ? '改之前' : '改之后'; return { ok: true, result: v, sig: contentSig(v) }; },
+      onUpdate: l => lists.push(l),
+    });
+    globalThis.fetch = realFetch;
+    const recs = lists[lists.length - 1].filter(m => m.kind === 'tool-result');
+    assert.deepEqual(recs.map(m => m.content), ['改之前', '改之后'], '内容变了就是新结果');
+  }
+
+  // D) 同一条失败调用连着三次后，框架不再执行它（模型在跟自己绕圈）
+  {
+    const ran = [], lists = [];
+    let n = 0;
+    // 同一步里连发四条一模一样的失败调用：前三条真的执行（各记一次失败），第四条起
+    // 框架按台账拦下——放在同一步是为了把「重复调用拦截」与「零推进熔断」分开验
+    globalThis.fetch = async () => {
+      n++;
+      return sseResponse(n === 1
+        ? call('read_file', { path: 'nope.tex' }) + call('read_file', { path: 'nope.tex' })
+          + call('read_file', { path: 'nope.tex' }) + call('read_file', { path: 'nope.tex' })
+        : '放弃这条路。');
+    };
+    await runAgentLoop({
+      channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+      budget: 6000, maxSteps: 6, keepResults: 9,
+      execute: async (name) => { ran.push(name); return { ok: false, result: '未找到文件', code: 'file_not_found' }; },
+      onUpdate: l => lists.push(l),
+    });
+    globalThis.fetch = realFetch;
+    assert.equal(ran.length, 3, '三次之后不再执行：' + ran.length);
+    const recs = lists[lists.length - 1].filter(m => m.kind === 'tool-result');
+    assert.equal(recs.length, 4, '被拦下的调用同样要有回执');
+    assert.ok(/失败 3 次/.test(recs[3].content), '第四条说明是被框架拦下：' + recs[3].content);
+    assert.ok(recs[0].content.includes('list_files'), '失败建议按错误码追加：' + recs[0].content);
+  }
+
+  // E) 零推进熔断：连续几步既没成功调用也没推进计划 → 框架终止，不再陪模型绕圈
+  {
+    let n = 0, ran = 0;
+    const lists = [];
+    globalThis.fetch = async () => {
+      n++;
+      // 每步换一个不同的失败参数：重复拦截管不到它，只能靠零推进收口
+      return sseResponse(call('read_file', { path: 'nope' + n + '.tex' }));
+    };
+    await runAgentLoop({
+      channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+      budget: 6000, maxSteps: 12, keepResults: 9,
+      execute: async () => { ran++; return { ok: false, result: '未找到文件', code: 'file_not_found' }; },
+      onUpdate: l => lists.push(l),
+    });
+    globalThis.fetch = realFetch;
+    assert.equal(ran, 3, '三步无推进即熔断：' + ran);
+    assert.ok(lists[lists.length - 1].some(m => m.kind === 'agent-limit' && /熔断/.test(m.content)),
+      '熔断原因要写进收口提示');
+  }
+}
+
+/* ---------- 计划块：状态归框架持有，快照在子任务完成时打，跑偏改动被拦 ---------- */
+{
+  const seq = [
+    { tool: 'set_plan', args: { goal: '修完 main.tex 的语法', steps: [
+      { title: '读原文', deliverable: 'main.tex 的当前正文', done_when: 'read_file 成功' },
+      { title: '改第一行', deliverable: 'main.tex 第一行的替换文本', done_when: 'edit_file 成功', deps: [1] },
+    ] } },
+    { tool: 'update_plan', args: { step: 2, status: 'doing' } },        // 前置 1 未完成 → 拒
+    { tool: 'update_plan', args: { step: 1, status: 'doing' } },
+    { tool: 'read_file', args: { path: 'main.tex' } },
+    { tool: 'update_plan', args: { step: 1, status: 'done' } },
+    { tool: 'update_plan', args: { step: 2, status: 'doing' } },        // 现在才允许
+    { tool: 'edit_file', args: { old_text: 'a', new_text: 'b' } },      // 落点 main.tex，计划里出现过
+    { tool: 'edit_file', args: { path: 'secret.tex', old_text: 'x', new_text: 'y' } },  // 跑偏
+    { tool: 'update_plan', args: { step: 2, status: 'done' } },         // 触发快照
+  ];
+  let n = 0;
+  const ran = [];
+  const requests = [];
+  const lists = [];
+  const tasks = [];
+  globalThis.fetch = async (u, opts) => {
+    requests.push(JSON.parse(opts.body).messages);
+    const c = seq[n++];
+    if (!c) return sseResponse('全部完成。');
+    return sseResponse('```tool\n' + JSON.stringify(c) + '\n```');
+  };
+  const { task } = await runAgentLoop({
+    channel, messages: [{ role: 'user', content: '修完 main.tex 的语法' }],
+    system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+    budget: 8000, maxSteps: 14, keepResults: 9, plan: true,
+    activePath: () => 'main.tex',
+    onTask: t => tasks.push(t),
+    execute: async (name, args) => {
+      ran.push(name + ':' + (args.path || ''));
+      if (name === 'edit_file') return { ok: true, result: '已替换', file: args.path || 'main.tex', versionId: 'ver-1' };
+      return { ok: true, result: '正文' };
+    },
+    onUpdate: l => lists.push(l),
+  });
+  globalThis.fetch = realFetch;
+
+  assert.equal(ran.filter(x => /^(set_plan|update_plan)/.test(x)).length, 0, '计划类动作不进文件执行器');
+  assert.deepEqual(ran, ['read_file:main.tex', 'edit_file:'], '跑偏的 edit_file 没被执行');
+
+  const last = lists[lists.length - 1];
+  const rec = last.filter(m => m.kind === 'tool-result');
+  assert.ok(rec.some(m => m.tool === 'update_plan' && !m.ok && /前置/.test(m.content)), '前置未完成要拒绝开工');
+  assert.ok(rec.some(m => m.tool === 'set_plan' && m.ok && /计划已登记/.test(m.content)), '计划登记成功');
+  assert.ok(rec.some(m => /已存快照/.test(m.content)), '子任务完成要打快照');
+  assert.ok(rec.some(m => !m.ok && /与当前子任务无关/.test(m.content)), '跑偏改动被拦并说明原因');
+
+  // 请求侧带的是结构化状态而不是整段历史重述
+  const briefs = requests.map(ms => ms.map(m => m.content).join('\n'));
+  assert.ok(briefs[5].includes('任务目标'), '简报要有目标锚定');
+  assert.ok(briefs[5].includes('完成判定'), '简报要带上当前子任务的交付物与完成判定');
+  assert.ok(briefs[8].includes('1/2 完成'), '简报里的进度由框架统计（跑到第 9 个动作时）');
+  assert.ok(briefs[9].includes('2/2 完成'), '子任务全部标记完成后进度才进位');
+
+  const view = tasks[tasks.length - 1];
+  assert.equal(view.phase, 'completed');
+  assert.deepEqual(view.steps.map(s => s.status), ['done', 'done']);
+  assert.equal(view.snapshots.length, 1, '只有改了文件的那一步留下快照');
+  assert.deepEqual(view.snapshots[0].files, { 'main.tex': 'ver-1' }, '快照存的是改前版本 id');
+  assert.equal(view.counters.blocked, 1, '拦下过一次跑偏');
+  assert.equal(task.doneSteps.length, 2);
+  assert.equal(task.touched.join(','), 'main.tex', '被拦下的落点不该记进已改动清单');
 }
 
 console.log('agentRuntime: all tests passed');

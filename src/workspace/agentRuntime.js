@@ -12,7 +12,9 @@
 import * as llm from '../llm.js';
 import * as ctx from '../context.js';
 import { tr, getLang } from '../i18n.js';
-import { parseToolCalls, toolsSchema, MUTATING_TOOLS } from './agentTools.js';
+import { parseToolCalls } from './agentTools.js';
+import { toolsSchema, MUTATING_TOOLS, TASK_TOOLS, validateCall, makeCallLedger, adviceFor } from './toolRegistry.js';
+import { createTask, setPlan, updateStep, takeSnapshot, noteChange, recordAudit, writeDrift, checkCircuit, stepProgress, taskBrief, taskSummary, CIRCUIT_LIMITS } from './agentTask.js';
 
 export const AGENT_MAX_STEPS = 15;
 // 渐进式披露：工具结果只在最近几条保持全文，更早的衰减为一行占位
@@ -38,6 +40,9 @@ export const AGENT_DEADLINE_MIN = 10;
 // 只读类工具（列文件/读文件/搜索/诊断/读选区）任何档位都直通。
 export const AGENT_APPROVALS = ['ask', 'auto', 'full'];
 export const AGENT_APPROVAL_DEFAULT = 'auto';
+// 整轮工具调用总数（含被拦下的）：步数限的是「模型轮次」，这条限的是动作数。
+// 没有它，模型可以每步只发一条无效调用，用 50 步 × 单步配额绕开所有刹车
+export const AGENT_CALLS_PER_RUN = CIRCUIT_LIMITS.calls;
 const AGENT_CFG_KEY = 'paperlite.agentSettings.v1';
 
 function clampInt(v, min, max, dflt) {
@@ -47,8 +52,17 @@ function clampInt(v, min, max, dflt) {
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
 }
 
+// 布尔项只认明确的真假：undefined/损坏数据回默认值，别把「没写过」读成 false
+function boolOf(v, dflt) {
+  if (v === undefined || v === null) return dflt;
+  return v === true || v === 'true' || v === 1;
+}
+
 export function loadAgentSettings() {
-  const dflt = { maxSteps: AGENT_MAX_STEPS, keepResults: TOOL_RESULT_KEEP, approval: AGENT_APPROVAL_DEFAULT };
+  const dflt = {
+    maxSteps: AGENT_MAX_STEPS, keepResults: TOOL_RESULT_KEEP,
+    approval: AGENT_APPROVAL_DEFAULT, plan: true, review: false, persist: true,
+  };
   try {
     const raw = JSON.parse(localStorage.getItem(AGENT_CFG_KEY) || '{}');
     if (!raw || typeof raw !== 'object') return dflt;
@@ -57,6 +71,9 @@ export function loadAgentSettings() {
       keepResults: clampInt(raw.keepResults, 1, AGENT_KEEP_MAX, dflt.keepResults),
       // 档位只认白名单：手改/旧版数据里的野值回落到默认档，不能因为拼错就变成全访问
       approval: AGENT_APPROVALS.includes(raw.approval) ? raw.approval : dflt.approval,
+      plan: boolOf(raw.plan, dflt.plan),
+      review: boolOf(raw.review, dflt.review),
+      persist: boolOf(raw.persist, dflt.persist),
     };
   } catch (e) { return dflt; }
 }
@@ -65,11 +82,11 @@ export function saveAgentSettings(cfg) {
   try { localStorage.setItem(AGENT_CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* ignore */ }
 }
 
-export function agentSystemPrompt() {
+export function agentSystemPrompt(opts = {}) {
   const L = getLang();
   return tr(L, 'ai.agentSystem', {
     lang: L === 'en' ? 'English' : '中文',
-    tools: toolsSchema(),
+    tools: toolsSchema(opts),
   });
 }
 
@@ -84,6 +101,18 @@ function historyForLlm(list, L, keep) {
     : m);
 }
 
+/** 审计里只留参数的形状，不留正文：日志要能复盘「调了什么、成没成」，
+ *  但不该把用户正文再抄一份进任务状态（那份钱已经花在工具结果里了） */
+const AUDIT_ARG_MAX = 120;
+function briefArgs(a) {
+  const o = {};
+  for (const [k, v] of Object.entries(a || {})) {
+    o[k] = typeof v === 'string' && v.length > 40 ? v.length + 'chars' : v;
+  }
+  const s = JSON.stringify(o);
+  return s.length > AUDIT_ARG_MAX ? s.slice(0, AUDIT_ARG_MAX) + '…' : s;
+}
+
 /**
  * @param opts {{
  *   channel, messages,          // UI 消息数组（含本轮 user 提问，末尾无需 assistant 占位）
@@ -96,8 +125,11 @@ function historyForLlm(list, L, keep) {
  *   execute: (name, args) => Promise<{ok, result}>,
  *   onUpdate: (messages: any[]) => void,
  *   signal?: AbortSignal,
+ *   plan?: boolean,             // 计划块与任务状态（默认开）；关掉退回单循环，但所有刹车仍在
+ *   activePath?: () => string,  // 活动文档路径：省略 path 的改动手要靠它判断落点
+ *   onTask?: (view) => void,    // 任务状态发布给界面（计划卡与回滚入口）
  * }}
- * @returns {Promise<{usage: any|null}>}  最后一步的 usage（无则 null）
+ * @returns {Promise<{usage: any|null, task: object}>}  最后一步的 usage 与任务小结
  */
 export async function runAgentLoop(opts) {
   const {
@@ -110,6 +142,7 @@ export async function runAgentLoop(opts) {
   // 'auto'（宁可少拦一次，也不要把改动手卡死在没人应答的 await 上）
   const approval = AGENT_APPROVALS.includes(opts.approval) ? opts.approval : AGENT_APPROVAL_DEFAULT;
   const askEach = approval === 'ask' && typeof opts.requestApproval === 'function';
+  const planMode = opts.plan !== false;
   const L = getLang();
 
   // 本地持有完整列表，每次变化整体推给 UI
@@ -121,10 +154,31 @@ export async function runAgentLoop(opts) {
   // 装填、装不下即弃——多步循环后最早的提问可能被整体丢掉，之后每步模型都没有
   // 任务目标只能空转。装配后若被丢弃，在最新侧重注入：模型最后看到的即任务目标。
   const origQ = [...list].reverse().find(m => m && m.role === 'user' && !m.kind);
+
+  // 任务状态归框架持有：模型只能用 set_plan / update_plan 提议，通过了校验才落进状态。
+  // goal 直接取用户原话——它比模型复述的版本更权威，跑偏时拿它对齐。
+  const task = createTask({ goal: (origQ && origQ.content) || '' });
+  const publishTask = () => {
+    if (typeof opts.onTask !== 'function') return;
+    opts.onTask({
+      id: task.id, goal: task.goal, phase: task.phase, currentStep: task.currentStep,
+      steps: task.steps.map(s => ({ ...s, deps: s.deps.slice() })),
+      snapshots: task.snapshots.slice(),
+      counters: { ...task.counters },
+      touched: Object.keys(task.touched),
+    });
+  };
+
   const build = () => {
     const built = ctx.buildPayload({
       system, docHeader, doc, summaryHeader, history: historyForLlm(list, L, keep), budget,
     }).messages;
+    if (planMode) {
+      // 结构化工作记忆放在最新侧：模型每步先看到目标、当前子任务的交付物与完成判定、
+      // 剩余额度，再往下看历史。goal 已经在简报里，所以不再单独重注原始提问
+      // （同一句话占两份预算是本该被这套状态消灭掉的那种浪费）。
+      return built.concat([{ role: 'system', content: taskBrief(task, AGENT_TOOLS_PER_STEP) }]);
+    }
     if (origQ && !built.some(m => m && m.role === 'user' && m.content === origQ.content)) {
       return built.concat([{ role: 'user', content: origQ.content }]);
     }
@@ -134,14 +188,35 @@ export async function runAgentLoop(opts) {
   let usage = null;
   const startedAt = Date.now();
   let writes = 0;
+  // 调用台账属框架而不是模型：模型看不到「这条是缓存来的」，只看到结果变小了
+  const ledger = makeCallLedger();
+  publishTask();
+  const finish = (phase) => {
+    task.phase = phase;
+    publishTask();
+    // answer 带出去给验收评审用：ChatPanel 手里的 messages 是发布快照，闭包里读到的是
+    // 进循环前的那一份，自己找最后一条 assistant 会拿到空串
+    const lastAssistant = [...list].reverse().find(m => m && m.role === 'assistant' && m.content);
+    return { usage, task: taskSummary(task), answer: lastAssistant ? String(lastAssistant.content) : '' };
+  };
+
+  try {
   for (let step = 0; step <= maxSteps; step++) {
-    // 用尽步数或超过整轮挂钟：允许再答一次，但不许再调工具
+    // 熔断条件由框架判（步数 / 调用数 / 零推进 / 挂钟），命中即收口，不再问模型
+    const trip = checkCircuit(task, { maxCalls: AGENT_CALLS_PER_RUN, deadlineMs: AGENT_DEADLINE_MIN * 60_000 });
     const overTime = Date.now() - startedAt > AGENT_DEADLINE_MIN * 60_000;
-    const last = step === maxSteps || overTime;
+    const last = step === maxSteps || overTime || !!trip;
     if (last) {
-      push({ role: 'user', kind: 'agent-limit', content: overTime
-        ? tr(L, 'agent.deadlineNote', { n: AGENT_DEADLINE_MIN })
-        : tr(L, 'agent.limitNote', { n: maxSteps }) });
+      if (trip) task.circuit = { reason: trip.reason, at: Date.now() };
+      task.phase = trip ? 'tripped' : 'closing';
+      const tripKey = trip ? (trip.reason === 'calls' ? 'agent.circuitCalls'
+        : trip.reason === 'no_progress' ? 'agent.circuitNoProgress' : 'agent.circuitTime') : '';
+      push({ role: 'user', kind: 'agent-limit', content: trip
+        ? tr(L, tripKey, { n: trip.n })
+        : overTime
+          ? tr(L, 'agent.deadlineNote', { n: AGENT_DEADLINE_MIN })
+          : tr(L, 'agent.limitNote', { n: maxSteps }) });
+      publishTask();
     }
 
     // 装配要在追加 assistant 占位之前：占位的空消息没有信息量，不该占预算
@@ -174,10 +249,11 @@ export async function runAgentLoop(opts) {
       for (const c of calls) {
         push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false, content: tr(L, 'agent.stepLimitTool') });
       }
-      return { usage };
+      return finish(trip ? 'tripped' : 'completed');
     }
-    if (!calls.length && !badErrs.length) return { usage };
+    if (!calls.length && !badErrs.length) return finish('completed');
 
+    let progressed = false;
     // 执行工具：调用卡片信息直接挂在结果消息上（assistant 正文里的 ```tool 块由 UI 渲染成卡片）
     for (let i = 0; i < calls.length; i++) {
       const c = calls[i];
@@ -197,17 +273,78 @@ export async function runAgentLoop(opts) {
           content: tr(L, 'agent.toolBatchLimit', { n: AGENT_TOOLS_PER_STEP }) });
         continue;
       }
+      // 参数校验属框架层：非法调用不进执行器（不进工具实现也就没资格算一次改盘配额），
+      // 回执里直接带上缺哪个参数、该怎么做，模型下一轮才有机会改对
+      const v = validateCall(c.tool, c.args);
+      if (!v.ok) {
+        task.counters.blocked++;
+        recordAudit(task, { step, tool: c.tool, args: briefArgs(c.args), ok: false, code: v.code, chars: 0 });
+        push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
+          content: v.error + (adviceFor(v.code) ? '\n' + adviceFor(v.code) : '') });
+        continue;
+      }
+      // 计划类动作只改任务状态，由框架校验后落地——状态所有权不在模型手里
+      if (TASK_TOOLS.has(c.tool)) {
+        if (!planMode) {
+          push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: false,
+            content: tr(L, 'agent.planDisabled') });
+          continue;
+        }
+        const r = c.tool === 'set_plan' ? setPlan(task, v.args) : updateStep(task, v.args);
+        recordAudit(task, { step, tool: c.tool, args: briefArgs(v.args), ok: !!r.ok, code: r.ok ? '' : 'plan_rejected', chars: 0 });
+        if (!r.ok) {
+          push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: false, content: r.error });
+          continue;
+        }
+        progressed = true;
+        task.counters.calls++;
+        let note = c.tool === 'set_plan'
+          ? tr(L, 'agent.planAccepted', { n: r.steps.length })
+            + (r.goalDrift ? '\n' + tr(L, 'agent.goalDriftNote') : '')
+          : tr(L, 'agent.planUpdated', { n: v.args.step, status: v.args.status });
+        if (r.needsSnapshot) {
+          const snap = takeSnapshot(task, v.args.step);
+          note += snap
+            ? '\n' + tr(L, 'agent.snapshotted', { n: snap.step, files: Object.keys(snap.files).length })
+              + (snap.created.length ? '\n' + tr(L, 'agent.snapshotKeeps', { list: snap.created.join(', ') }) : '')
+            : '\n' + tr(L, 'agent.snapshotNone', { n: v.args.step });
+        }
+        publishTask();
+        push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: true, content: note });
+        continue;
+      }
+      // 同一条调用连着失败三次，说明模型在跟自己绕圈而不是在推进任务：框架拒绝再执行。
+      // 这不是熔断（整轮还能继续），只是关掉这一条死路
+      if (ledger.shouldBlock(c.tool, v.args)) {
+        task.counters.blocked++;
+        recordAudit(task, { step, tool: c.tool, args: briefArgs(v.args), ok: false, code: 'repeat_blocked', chars: 0 });
+        push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: false,
+          content: tr(L, 'agent.errRepeatBlocked', { tool: c.tool }) });
+        continue;
+      }
       if (MUTATING_TOOLS.has(c.tool)) {
+        // 前置校验（落点侧）：这一步声明的交付物里没有出现过的文件，改动先拦下来。
+        // 语义相关性要问模型（每轮都问就是双倍 token），但「改的文件跟这步说好的
+        // 不是同一个」是字符串就能判的跑偏，而且是长任务里最贵的一种。
+        const target = String(v.args.path || '').trim()
+          || (typeof opts.activePath === 'function' ? String(opts.activePath() || '') : '');
+        if (planMode && task.steps.length && writeDrift(task, target)) {
+          task.counters.blocked++;
+          recordAudit(task, { step, tool: c.tool, args: briefArgs(v.args), ok: false, code: 'drift', chars: 0 });
+          push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: false,
+            content: tr(L, 'agent.driftBlocked', { n: task.currentStep || 0, path: target || '?' }) });
+          continue;
+        }
         // 「每次审核」档：改动动手前把落点与改动摘要摊给用户看，拒绝就原话回给模型
         // （不拒绝就照常执行；档位只影响是否打断，不影响工具语义）
         if (askEach) {
           const info = typeof execute.describe === 'function'
-            ? execute.describe(c.tool, c.args)
-            : { mutates: true, tool: c.tool, path: String((c.args && c.args.path) || ''), detail: '' };
+            ? execute.describe(c.tool, v.args)
+            : { mutates: true, tool: c.tool, path: String((v.args && v.args.path) || ''), detail: '' };
           let yes = false;
           try { yes = !!(await opts.requestApproval(info)); } catch (e) { yes = false; }
           if (!yes) {
-            push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
+            push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: false,
               content: tr(L, 'agent.errDeniedByUser', { tool: c.tool }) });
             continue;
           }
@@ -215,22 +352,49 @@ export async function runAgentLoop(opts) {
         // 「完全访问」档由用户明确放弃这层保护；其余档位仍受整轮改盘次数约束
         if (approval !== 'full') {
           if (writes >= AGENT_WRITES_PER_RUN) {
-            push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: false, ok: false,
+            push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: false,
               content: tr(L, 'agent.errWriteBudget', { n: AGENT_WRITES_PER_RUN }) });
             continue;
           }
         }
         writes++;
+        task.counters.writes = writes;
       }
-      push({ role: 'user', kind: 'tool-result', tool: c.tool, args: c.args, running: true, content: '' });
-      const r = await execute(c.tool, c.args);
-      patchLast(m => ({ ...m, running: false, ok: r.ok, content: r.result }));
+      push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: true, content: '' });
+      const r = await execute(c.tool, v.args);
+      task.counters.calls++;
+      if (r.ok) progressed = true;
+      // 只读工具重读同一份内容时，回执换成一行「与本轮第 N 次调用相同」：正文不重复进
+      // 上下文，模型也不会以为自己读到了新东西。失败时附上注册表给的降级建议
+      const dup = ledger.observe(c.tool, v.args, r);
+      if (dup) task.counters.cacheHits++;
+      const dupNote = dup ? tr(L, 'agent.cacheSameAs', { n: dup.dupOf, tool: c.tool }) : '';
+      const hint = !r.ok ? adviceFor(r.code) : '';
+      patchLast(m => ({ ...m, running: false, ok: r.ok, content: dupNote || (r.result + (hint ? '\n' + hint : '')) }));
+      recordAudit(task, {
+        step, tool: c.tool, args: briefArgs(v.args), ok: !!r.ok, code: r.code || '',
+        chars: String(r.result || '').length, dupOf: dup ? dup.dupOf : 0,
+      });
+      // 改盘成功的落点与「改前版本 id」要交给任务状态：子任务完成时靠它打快照
+      if (r.ok && MUTATING_TOOLS.has(c.tool)) {
+        if (c.tool === 'create_file') noteCreate(task, r.file || String(v.args.path || ''));
+        else noteChange(task, r.file, r.versionId);
+      }
     }
     for (const b of badErrs) {
       push({ role: 'user', kind: 'tool-result', tool: '(json)', args: {}, running: false, ok: false, content: b.result });
     }
+    // 零推进计数：整步既没有成功调用、也没动过计划 → 下一步就是熔断的候选
+    stepProgress(task, progressed || !!badErrs.length);
+    publishTask();
   }
-  return { usage };
+  // 走到这里说明步数循环自然结束（正常情况下已在收口步返回）
+  return finish('completed');
+  } catch (e) {
+    task.phase = e && e.name === 'AbortError' ? 'aborted' : 'failed';
+    publishTask();
+    throw e;
+  }
 }
 
 /** UI 消息数组 → 纯文本预览（供测试与调试） */
