@@ -65,6 +65,19 @@ export async function writeFileText(fileHandle, text) {
   }
 }
 
+/** 写二进制（图片/附件）。与 writeFileText 同一套收尾：失败必须 abort 掉 writable，
+ *  否则留着交换文件与句柄锁，下一次同名写入更慢甚至直接失败 */
+export async function writeBlob(fileHandle, blob) {
+  const w = await fileHandle.createWritable();
+  try {
+    await w.write(blob);
+    await w.close();
+  } catch (e) {
+    try { await w.abort(); } catch (e2) { /* 同上 */ }
+    throw e;
+  }
+}
+
 export async function createFile(dirHandle, name) {
   return dirHandle.getFileHandle(name, { create: true });
 }

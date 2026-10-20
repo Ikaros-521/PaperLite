@@ -9,6 +9,9 @@ import * as fs from './fs.js';
 import { infoFor } from './fileTypes.js';
 import { makeTab } from './workspace/tabModel.js';
 
+/** Markdown 无文件夹时才走 base64 内嵌，超过这个体积改让用户选文件夹（约 400KB 文本） */
+export const MAX_INLINE_IMAGE_BYTES = 300 * 1024;
+
 /** 原名去除 LaTeX 不友好字符后，避开已打开标签与磁盘重名，追加 (2)/(3)… 序号 */
 export async function pickUniqueName(original, { tabsRef, dir }) {
   if (!validName(original)) throw new Error('bad file name');
@@ -40,6 +43,12 @@ export async function pickUniqueName(original, { tabsRef, dir }) {
 export async function insertImageFile({ file, targetDoc, from, to, isMd, dir, tabsRef, setTabs, onTreeChanged, t, alertBox }) {
   try {
     if (isMd && !dir && !/\.pdf$/i.test(file.name)) {
+      // base64 整份进正文 = 每个字符都要跟着草稿写进 localStorage。配额（约 5MB）一旦撑爆，
+      // 连带渠道配置、版本历史、主题全写不进去——那时用户看到的是一堆莫名其妙的保存失败
+      if (file.size > MAX_INLINE_IMAGE_BYTES) {
+        alertBox(t('img.tooBigToInline', { name: file.name, size: (file.size / 1024).toFixed(0), max: (MAX_INLINE_IMAGE_BYTES / 1024).toFixed(0) }));
+        return;
+      }
       const data = await new Promise((resolve, reject) => {
         const reader = new FileReader(); reader.onload = () => resolve(reader.result);
         reader.onerror = () => reject(reader.error); reader.readAsDataURL(file);
@@ -51,8 +60,7 @@ export async function insertImageFile({ file, targetDoc, from, to, isMd, dir, ta
     const name = await pickUniqueName(original, { tabsRef, dir });
     if (dir) {
       const handle = await fs.createFile(dir, name);
-      const writable = await handle.createWritable();
-      await writable.write(file); await writable.close();
+      await fs.writeBlob(handle, file);
       onTreeChanged && onTreeChanged();
     } else {
       const asset = makeTab({ name, kind: infoFor(name).kind, imageUrl: URL.createObjectURL(file) });
