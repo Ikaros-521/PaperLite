@@ -364,19 +364,23 @@ select.ct-chip.on { background-image:
 /* Agent 工具调用 / 结果卡片 */
 .chat-tool-call {
   display: flex; align-items: center; gap: 6px; margin: 4px 0;
+  max-width: 100%; overflow: hidden;
   font-size: 11.5px; color: var(--ink-soft); background: var(--chrome);
   border: 1px dashed var(--edge); border-radius: 6px; padding: 4px 8px;
 }
-.chat-tool-call .ctc-gear { color: var(--accent); }
-.chat-tool-call code { color: var(--accent-deep); font-weight: 600; }
-.chat-tool-call .ctc-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .75; }
+/* 参数是不重要的一侧：flex 项默认 min-width:auto 缩不到 0，长 JSON 会反过来把
+   齿轮和工具名挤成多行（工具名带下划线还会被断词）。名字不许缩，参数负责溢出隐藏。 */
+.chat-tool-call .ctc-gear { color: var(--accent); flex: 0 0 auto; }
+.chat-tool-call code { color: var(--accent-deep); font-weight: 600; flex: 0 0 auto; white-space: nowrap; }
+.chat-tool-call .ctc-args { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .75; }
 .chat-tool-result {
   align-self: stretch; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--chrome);
   padding: 5px 8px; font-size: 11.5px; color: var(--ink-soft);
 }
-.chat-tool-result .ctr-head { display: flex; align-items: baseline; gap: 8px; }
+.chat-tool-result .ctr-head { display: flex; align-items: baseline; gap: 8px; max-width: 100%; overflow: hidden; }
+.chat-tool-result .ctr-head > span:first-child { flex: 0 0 auto; white-space: nowrap; }
 .chat-tool-result .ctr-head code { color: var(--accent-deep); }
-.chat-tool-result .ctr-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
+.chat-tool-result .ctr-args { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
 .chat-tool-result .ctr-body {
   font-family: Consolas, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-word;
   max-height: 140px; overflow: auto; margin: 4px 0 0; color: var(--ink-soft);

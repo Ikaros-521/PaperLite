@@ -529,6 +529,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const when = (ts) => (ts ? new Date(ts).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
   // 折叠偏好跨会话保留：这是界面习惯，不是本轮任务状态
   const foldPlan = (v) => { setPlanOpen(v); manualPlanRef.current = true; try { localStorage.setItem(PLAN_OPEN_KEY, v ? '1' : '0'); } catch (e) { /* 存不下只是下次回到默认 */ } };
+  const argsTip = (s) => (s.length > 3000 ? s.slice(0, 3000) + '…' : s);
 
   // 正文里的 ```tool 块渲染为「工具调用」卡片（执行状态看紧随的 tool-result 卡片）；
   // 先统一 strip：流式中未闭合的 tool 块也不会把半截 JSON 露到正文
@@ -539,13 +540,17 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     return (
       <>
         {stripped ? renderBlocks(stripped, mi) : null}
-        {calls.map((c, ci) => (
-          <div key={'tool' + ci} className="chat-tool-call">
-            <span className="ctc-gear">⚙</span>
-            <code>{c.tool}</code>
-            <span className="ctc-args">{JSON.stringify(c.args)}</span>
-          </div>
-        ))}
+        {calls.map((c, ci) => {
+          const args = JSON.stringify(c.args || {});
+          return (
+            <div key={'tool' + ci} className="chat-tool-call">
+              <span className="ctc-gear">⚙</span>
+              <code>{c.tool}</code>
+              {/* 参数只占一行，完整内容交给悬浮；不截断的话一次编辑的正文能把整屏糊住 */}
+              <span className="ctc-args" title={argsTip(args)}>{args}</span>
+            </div>
+          );
+        })}
       </>
     );
   };
@@ -718,16 +723,19 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             </div>
             <div className="chat-summary-b">{m.content}</div>
           </div>
-        ) : m.kind === 'tool-result' ? (
-          <div key={i} className={'chat-tool-result' + (m.running ? ' running' : m.ok ? '' : ' bad')}>
-            <div className="ctr-head">
-              <span>{m.running ? '⏳' : (m.ok ? '✅' : '❌')} {t('agent.toolRan')} <code>{m.tool}</code></span>
-              <span className="ctr-args">{JSON.stringify(m.args || {}).slice(0, 140)}</span>
-              {m.content ? <button className="ctr-copy" title={t('chat.copyResult')} onClick={() => copy(String(m.content))}>⧉</button> : null}
+        ) : m.kind === 'tool-result' ? (() => {
+          const a = JSON.stringify(m.args || {});
+          return (
+            <div key={i} className={'chat-tool-result' + (m.running ? ' running' : m.ok ? '' : ' bad')}>
+              <div className="ctr-head">
+                <span>{m.running ? '⏳' : (m.ok ? '✅' : '❌')} {t('agent.toolRan')} <code>{m.tool}</code></span>
+                <span className="ctr-args" title={argsTip(a)}>{a.slice(0, 140)}</span>
+                {m.content ? <button className="ctr-copy" title={t('chat.copyResult')} onClick={() => copy(String(m.content))}>⧉</button> : null}
+              </div>
+              <pre className="ctr-body">{String(m.content || '').slice(0, 1500)}</pre>
             </div>
-            <pre className="ctr-body">{String(m.content || '').slice(0, 1500)}</pre>
-          </div>
-        ) : m.kind === 'agent-limit' ? (
+          );
+        })() : m.kind === 'agent-limit' ? (
           <div key={i} className="chat-agent-limit">{m.content}</div>
         ) : m.kind === 'review' ? (
           <div key={i} className={'chat-review' + (m.running ? ' running' : m.review && m.review.goalOk && m.review.processOk && m.review.qualityOk ? ' ok' : ' warn')}>
