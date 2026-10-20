@@ -81,6 +81,9 @@ export default function PreviewPane({
           const lib = await loadPdfLibrary();
           if (cancelled) return;
           const task = lib.getDocument(pdfOptions({ data: new Uint8Array(await file.arrayBuffer()) }));
+          // 本轮已被下一轮取代：这一份既不进 tasks（下一轮只会回收它自己那份），也没有
+          // 人再替它 destroy —— 就地拆掉，否则每键都漏一个 pdf.js worker
+          if (cancelled) { task.destroy(); return; }
           tasks.push(task);
           const doc = await task.promise, page = await doc.getPage(1);
           if (cancelled) return;
@@ -94,8 +97,10 @@ export default function PreviewPane({
           if (!cancelled) img.src = data;
         } else {
           const url = URL.createObjectURL(file);
+          // 同上：本轮已作废，urls 归属的缓存对象刚被下一轮回收过，再记进去就没人再 revoke
+          if (cancelled) { URL.revokeObjectURL(url); return; }
           urls.set(original, url);
-          if (!cancelled) img.src = url;
+          img.src = url;
         }
       })().catch(error => { if (!cancelled) img.title = original + ': ' + error.message; }));
     }

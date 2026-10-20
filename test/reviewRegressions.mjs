@@ -116,6 +116,21 @@ assert.notEqual(reNode.src, firstUrl);
 assert.equal(revoked.has(reNode.src), false, 'A fresh run installs a live URL');
 cleanup && cleanup();
 
+// 轮次被取代：作废之后才造出来的 blob 不归任何仍被持有的缓存对象管（下一轮只回收
+// 它自己那份），生产者必须就地吊销，否则打字一轮漏一个
+const created = [];
+graphicsContext.URL.createObjectURL = () => { const u = 'blob:race-' + ++nextUrl; created.push(u); return u; };
+graphicsContext.assetTabs[0] = { name: 'figure.png', uploadedFile: { name: 'figure.png', lastModified: 3, size: 12 } };
+const raced = image('figure.png');
+graphicsContext.paperRef.current.querySelectorAll = () => [raced, remoteImage];
+cleanup = graphicsEffect();
+cleanup();                      // 不给这一轮落定的机会：cleanup 先跑，cancelled 立即为真
+await tick(); await tick();
+assert.equal(raced.src, 'figure.png', '取消的一轮不把 URL 写到新节点上');
+assert.ok(created.length, '这一轮确实造过 blob');
+assert.ok(revoked.has(created[created.length - 1]), '取消后才创建的 blob 就地吊销：' + created.join(','));
+cleanup && cleanup();
+
 // Mock only browser transports; execute the engine module and lifecycle logic.
 function engineHarness({ manifestPending = false, prepareGraphics } = {}) {
   const workers = [], timers = new Map();

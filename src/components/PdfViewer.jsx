@@ -35,7 +35,7 @@ function PdfPage({ pdf, number, scale, width, height, root, flash, onBackSync })
       render = page.render({ canvasContext: target.getContext('2d'), viewport,
         transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0] });
       const lib = await loadPdfLibrary();
-      if (cancelled) return;
+      if (cancelled) { render.cancel(); return; }   // render 已启动：不取消就是一次没人看的整页渲染
       text.current.replaceChildren();
       textRender = new lib.TextLayer({ textContentSource: page.streamTextContent(),
         container: text.current, viewport });
@@ -189,7 +189,7 @@ const PdfViewer = forwardRef(function PdfViewer({ url, title = 'PDF', lang = 'zh
       setFlash({ page: hit.page, x: hit.x, y: hit.y });
       return true;
     },
-  }), [current]);
+  }), [current, pages]);
   useEffect(() => {
     if (!flash) return undefined;
     const timer = setTimeout(() => setFlash(null), 1800);
