@@ -6,6 +6,9 @@
 import { t, getLang } from './i18n.js';
 
 const LS_KEY = 'paperlite.llm.channels.v1';
+// 「深度思考」默认值从关改成开，对存量渠道只做一次迁移；标记先落盘，
+// 用户之后手动关掉就不会每次启动被翻回来
+const COT_DEFAULT_KEY = 'paperlite.llm.cotDefault.v1';
 
 // ---------------- 协议与平台预设 ----------------
 
@@ -69,6 +72,13 @@ export function loadChannels() {
   try {
     const arr = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
     if (!Array.isArray(arr)) return [];
+    let migrateCot = false;
+    try {
+      if (!localStorage.getItem(COT_DEFAULT_KEY)) {
+        localStorage.setItem(COT_DEFAULT_KEY, '1');
+        migrateCot = true;
+      }
+    } catch (e) { /* 存储写不进去就不迁移：否则每次启动都会盖掉用户手动关掉的开关 */ }
     return arr.map(c => {
       const next = {
         ...c,
@@ -79,6 +89,7 @@ export function loadChannels() {
         temperature: normTemperature(c.temperature)
       };
       delete next.contextLimit;
+      if (migrateCot && !next.cot) next.cot = true;
       return next;
     });
   } catch (e) { return []; }
@@ -98,7 +109,8 @@ export function newChannel() {
     apiKey: '',
     chatModel: 'paperlite-mock',
     embedModel: '',
-    cot: false,
+    // 深度思考默认开启：机械类请求（摘要、批量校对）自己带 noReasoning 关掉，不受这里影响
+    cot: true,
     temperature: null,
     ctxWindow: 0
   };

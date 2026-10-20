@@ -3,7 +3,7 @@
  * 这些都关系到 API Key 会不会离开本机、坏服务端能不能把标签页拖死。
  */
 import assert from 'node:assert/strict';
-import { chat, fetchModels, baseUrlProblem, thinkingSwitch } from '../src/llm.js';
+import { chat, fetchModels, baseUrlProblem, thinkingSwitch, loadChannels, saveChannels, newChannel } from '../src/llm.js';
 import { setLang } from '../src/i18n.js';
 
 setLang('zh');
@@ -136,4 +136,20 @@ assert.equal(seen.length, 0, '校验失败不该已经发出请求');
 }
 
 globalThis.fetch = realFetch;
+
+// ---- 深度思考默认开启：新建渠道直接 true，存量渠道只翻一次 ----
+{
+  const store = new Map();
+  store.set('paperlite.llm.channels.v1', JSON.stringify([{ id: 'a', protocol: 'openai', baseUrl: 'https://x.test/v1', chatModel: 'm', cot: false }]));
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
+  const first = loadChannels();
+  assert.equal(first[0].cot, true, '首次加载把存量渠道翻成开启');
+  saveChannels(first);
+  assert.equal(loadChannels()[0].cot, true, '应用侧回写后（App 的保存效果），重启仍是开启');
+  saveChannels([{ ...first[0], cot: false }]);
+  assert.equal(loadChannels()[0].cot, false, '迁移只发生一次：用户手动关掉后不会再被启动翻回来');
+  assert.equal(newChannel().cot, true, '新建渠道默认开启深度思考');
+  delete globalThis.localStorage;
+}
+
 console.log('LLM channel: base URL validation, redirect policy on every path, SSE cancel-on-error and delta parsing passed.');

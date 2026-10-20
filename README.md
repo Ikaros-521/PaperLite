@@ -83,7 +83,7 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 - **协议**：OpenAI 兼容（`/chat/completions`）或 Anthropic（`/v1/messages`，`x-api-key` + `anthropic-version`，浏览器直连自动声明）
 - Base URL / API Key / **对话模型** / **检索模型**（embedding，用于文档检索增强；Anthropic 协议无嵌入接口，检索自动回退）
 - **模型下拉**：点「获取模型」拉取该渠道可用模型列表（`/models`），输入即过滤、点选填入，也可直接手输
-- **思维链开关**（OpenAI 协议发送推理提示，`reasoning_content`；Anthropic 协议启用 extended thinking，`thinking` 块——均可在对话中折叠查看 💭）
+- **思维链开关**（OpenAI 协议发送推理提示，`reasoning_content`；Anthropic 协议启用 extended thinking，`thinking` 块——均可在对话中折叠查看 💭）**默认开启**，输入框上方「◈ 深度思考」可随时关掉；摘要与批量校对这类机械请求不走推理，不受这个默认值影响
 - **上下文窗口**（默认按模型自动推断，可手动指定，tokens 口径）
 - **测试连接**（按协议拉取 /models 或对话探活，内联显示结果）
 
