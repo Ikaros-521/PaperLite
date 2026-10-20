@@ -14,6 +14,9 @@ import { openDriver } from './idb.js';
 export const CHAT_MSG_MAX = 200;
 export const CHAT_BODY_MAX = 6000;
 export const CHAT_REASONING_MAX = 1500;
+// 工具参数里的长文本（create_file 的 content、edit_file 的 new_text）单条可到 200 万字符：
+// 卡片只要够画出「改了哪个文件、改了什么的大致样子」，整篇正文留在库里纯属重复
+const ARG_STR_MAX = 600;
 export const TASK_MAX = 40;
 export const CASE_MAX = 20;
 // 会话行的前缀：与旧的「c:项目键」单对话记录区分开（那条会被 adoptLegacyChat 升级掉）
@@ -22,6 +25,19 @@ const SESSION_ROW = 's:';
 function clip(s, n) {
   const v = String(s == null ? '' : s);
   return v.length > n ? v.slice(0, n) + '…' : v;
+}
+
+/** 参数按形状裁剪：字符串截断，数组与对象照结构递归——卡片要画的还是「改了哪个文件」，
+ *  但不能因为保留整篇正文让每条历史都涨到几 MB */
+function clipArgs(v) {
+  if (typeof v === 'string') return clip(v, ARG_STR_MAX);
+  if (Array.isArray(v)) return v.map(clipArgs);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const [k, x] of Object.entries(v)) out[k] = clipArgs(x);
+    return out;
+  }
+  return v;
 }
 
 /**
@@ -34,7 +50,7 @@ export function trimMessages(list) {
     const out = { role: m.role, content: clip(m.content, m.role === 'assistant' ? CHAT_BODY_MAX : CHAT_BODY_MAX) };
     if (m.kind) out.kind = m.kind;
     if (m.tool) out.tool = m.tool;
-    if (m.args) out.args = (() => { try { return JSON.parse(JSON.stringify(m.args)); } catch (e) { return {}; } })();
+    if (m.args) out.args = clipArgs(m.args);
     if (typeof m.ok === 'boolean') out.ok = m.ok;
     if (m.ctxNote) out.ctxNote = clip(m.ctxNote, 200);
     if (m.count != null) out.count = m.count;

@@ -67,6 +67,11 @@ export function useWorkspace(ui) {
   // ---- 草稿自动保存：整组草稿标签各存一份。写失败必须让人看见——静默 catch 等于静默丢稿 ----
   const draftsWarnedRef = useRef(false);
   const draftMembership = tabs.filter(tab => tab.kind === 'draft').map(tab => tab.id).join(',');
+  // 后台草稿被改（Agent 的 edit_file/insert_text、历史恢复）不经过编辑器 change 事件：
+  // activeValue、tabs.length、draftMembership 三者都不动，防抖不重挂就等于这笔改动不落盘。
+  // 由这些写盘点位显式 bump，别把 effect 改成依赖整个 tabs——写失败的 setTabs 会自激重跑。
+  const [draftTick, setDraftTick] = useState(0);
+  const touchDrafts = useCallback(() => setDraftTick(n => n + 1), []);
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
@@ -86,7 +91,7 @@ export function useWorkspace(ui) {
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [activeValue, tabs.length, draftMembership]);
+  }, [activeValue, tabs.length, draftMembership, draftTick]);
 
   // 草稿写入失败或尚在防抖等待期间，也必须防止刷新丢稿。
   useEffect(() => {
@@ -291,8 +296,7 @@ export function useWorkspace(ui) {
             const opened = tabsRef.current.find(tab => tab.handle && tab.path === file.name);
             if ((exists || opened) && !await confirm(t('app.overwriteConfirm', { name: file.name }))) continue;
             const handle = await fs.createFile(rootDir, file.name);
-            const writable = await handle.createWritable();
-            await writable.write(file); await writable.close();
+            await fs.writeBlob(handle, file);
             if (opened) {
               if (opened.doc) {
                 const value = await file.text();
@@ -665,6 +669,6 @@ export function useWorkspace(ui) {
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
     addDraft, renameTab, renameTabPath, dropDeletedTabs,
-    onDocChange, activateTab,
+    onDocChange, activateTab, touchDrafts,
   };
 }

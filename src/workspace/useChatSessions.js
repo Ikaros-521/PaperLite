@@ -13,6 +13,8 @@ import { MAX_SESSIONS, newSession, evictSessions, deriveTitle, forkMessages, for
 
 const POINTER_KEY = 'paperlite.chat.active.v1';
 const SAVE_DEBOUNCE_MS = 1200;
+// 写库失败的补写次数上限：库里塞不下时不该一直重试，但一次网络/配额抖动值得再来两下
+const SAVE_RETRY_MAX = 3;
 
 function readPointer() {
   try { return JSON.parse(localStorage.getItem(POINTER_KEY) || '{}') || {}; } catch (e) { return {}; }
@@ -35,6 +37,8 @@ export function useChatSessions({ projectKey, persist = true }) {
   const loadedRef = useRef('');
   const hydratedRef = useRef(false);
   const dirtyRef = useRef(new Set());      // 待落库的会话 id（切会话不能把它清掉）
+  const retryRef = useRef(0);               // 连续补写次数
+  const [retryTick, setRetryTick] = useState(0);   // 只用来在写失败后重新触发落库 effect
   const sessionsRef = useRef([]);
   sessionsRef.current = sessions;
   keyRef.current = projectKey || '';
@@ -87,8 +91,17 @@ export function useChatSessions({ projectKey, persist = true }) {
         const m = await import('./taskStore.js');
         for (const id of ids) {
           const s = sessionsRef.current.find(x => x.id === id);
-          if (s && (s.messages || []).length) await m.saveSession({ ...s, projectKey });
+          if (!s || !(s.messages || []).length) continue;
+          // 写库失败不抛错，只回 false（配额满/事务被拦）。留原样不清脏集合就等于静默丢历史；
+          // 但无限重试会在 permanently 写不进时变成后台常驻，所以按轮次封顶
+          const saved = await m.saveSession({ ...s, projectKey });
+          if (!saved && retryRef.current < SAVE_RETRY_MAX) {
+            dirtyRef.current.add(id);
+            retryRef.current++;
+            setRetryTick(n => n + 1);
+          }
         }
+        if (!dirtyRef.current.size) retryRef.current = 0;
         // 淘汰以库为准：内存列表可能滞后一帧，按它算会留下多出来的旧行
         const rows = await m.listSessions(projectKey);
         const keep = evictSessions(rows, activeRef.current, MAX_SESSIONS);
@@ -99,7 +112,7 @@ export function useChatSessions({ projectKey, persist = true }) {
       } catch (e) { ids.forEach(i => dirtyRef.current.add(i)); }
     }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [sessions, activeId, projectKey, persist]);
+  }, [sessions, activeId, projectKey, persist, retryTick]);
 
   const setMessages = useCallback(fn => {
     dirtyRef.current.add(activeRef.current);

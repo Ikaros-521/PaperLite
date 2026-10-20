@@ -52,6 +52,15 @@ function memoryDriver() {
   assert.equal(capped.length, CHAT_MSG_MAX, '只留最近 ' + CHAT_MSG_MAX + ' 条');
   assert.equal(capped[capped.length - 1].content, 'm' + (CHAT_MSG_MAX + 59));
   assert.equal(capped[0].content, 'm60', '截的是最早的那头');
+
+  // create_file / edit_file 的参数里可能整篇正文（百万字级）：正文已截，参数同样要截，
+  // 否则每条历史都带一份全文，库越滚越大且下次加载把它们全读回来
+  const heavy = trimMessages([{ role: 'user', kind: 'tool-result', tool: 'create_file',
+    args: { path: 'ch2.tex', content: 'y'.repeat(200000), lines: ['a'.repeat(5000), 'b'] }, ok: true, content: '建好了' }]);
+  assert.ok(heavy[0].args.content.length < 700, 'args 里的长字符串要截断：' + heavy[0].args.content.length);
+  assert.equal(heavy[0].args.path, 'ch2.tex', '短参数原样保留，卡片照样画得出落点');
+  assert.ok(Array.isArray(heavy[0].args.lines) && heavy[0].args.lines[0].length < 700, '嵌套数组里的字符串同样裁');
+  assert.equal(heavy[0].args.lines[1], 'b');
 }
 
 /* ---------- 对话往返 ---------- */

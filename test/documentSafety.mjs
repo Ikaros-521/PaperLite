@@ -212,8 +212,10 @@ console.log('PDF exports: matching source, stale rejection/acceptance and docume
 
 // Autosave failure remains visible, retries clear it, and disk saves leave the draft set.
 const autoBegin = workspaceSrc.indexOf('  useEffect(() => {', workspaceSrc.indexOf('  const draftMembership'));
-const autoEndMarker = '  }, [activeValue, tabs.length, draftMembership]);';
+const autoEndMarker = '  }, [activeValue, tabs.length, draftMembership, draftTick]);';
 const autoSource = workspaceSrc.slice(autoBegin, workspaceSrc.indexOf(autoEndMarker, autoBegin) + autoEndMarker.length);
+// 依赖数组一改这里就要跟上：draftTick 是后台标签（Agent 改稿、历史恢复）重新武装防抖的扳机
+assert.ok(autoSource.includes('draftTick'), '草稿防抖必须依赖 draftTick，否则后台改动不落盘');
 let autosave, rejectAuto = false, storedDrafts;
 const autoStorage = { setItem: (_, text) => { if (rejectAuto) throw new Error('quota'); storedDrafts = JSON.parse(text); } };
 const autoModel = modelWith({
@@ -223,7 +225,7 @@ const autoModel = modelWith({
 value = 'browser draft';
 tabs = [{ id: 1, kind: 'draft', saved: '', doc: { getValue: () => value } }];
 vm.runInNewContext(autoSource, {
-  ...common, tabs, activeValue: value, draftMembership: '1', draftsWarnedRef: { current: false },
+  ...common, tabs, activeValue: value, draftMembership: '1', draftTick: 0, draftsWarnedRef: { current: false },
   flashRef: { current: () => {} },
   persistDrafts: autoModel.persistDrafts, markDraftsStored: autoModel.markDraftsStored,
   useEffect: fn => fn(), setTimeout: fn => { autosave = fn; return 1; }, clearTimeout() {},

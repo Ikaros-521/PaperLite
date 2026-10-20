@@ -104,7 +104,7 @@ export default function App() {
     openFolder, closeFolder, restoreFolder, openFileTab,
     newFile, makeCopy, uploadFiles, saveTabAs, saveActive, closeTab,
     addDraft, renameTabPath, dropDeletedTabs,
-    onDocChange: applyDocChange,
+    onDocChange: applyDocChange, touchDrafts,
   } = useWorkspace({
     t, flash, alertBox: alert, confirm: showConfirm, prompt: showPrompt,
     onTreeChanged: () => setTreeKey(n => n + 1), onSideTab: setSideTab,
@@ -1205,6 +1205,8 @@ export default function App() {
     }
     setCompileResult(null);
     setTreeKey(n => n + 1);
+    // 恢复的可能不是当前标签：不经过编辑器 change，要显式让草稿防抖重挂
+    if (restored) touchDrafts();
     return { restored, missing };
   }, [openByPathForAgent]);
 
@@ -1222,7 +1224,10 @@ export default function App() {
       // 传 tab 时是后台标签（edit_file 带 path）：快照要落到被改标签自己的历史键
       beforeEdit: (tb) => tb ? snapshotTabRef.current(tb, tr(getLang(), 'hist.beforeAi'))
         : (snapshotRef.current && snapshotRef.current(tr(getLang(), 'hist.beforeAi'), 'manual', true)),
-      markDirty: (tb) => setTabs(ts => ts.map(x => x.doc === tb.doc ? { ...x, dirty: x.doc.getValue() !== x.saved } : x)),
+      markDirty: (tb) => {
+        setTabs(ts => ts.map(x => x.doc === tb.doc ? { ...x, dirty: x.doc.getValue() !== x.saved } : x));
+        touchDrafts();
+      },
       createFile: (p, c) => createFileForAgent(p, c),
       openByPath: p => openByPathForAgent(p),
       approval: () => agentCfgRef.current.approval,
