@@ -4,6 +4,7 @@ import * as ctx from '../context.js';
 import { showAlert as alert, showConfirm } from '../dialogs.js';
 import { stripToolBlocks, parseToolCalls } from '../workspace/agentTools.js';
 import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS } from '../workspace/agentRuntime.js';
+import { dropTurn, editResend, MAX_SESSIONS } from '../workspace/chatSessions.js';
 import { thinkingSwitch } from '../llm.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
@@ -18,7 +19,7 @@ const NEAR_BOTTOM = 80;    // 距底部小于此像素才视为「贴着底部�
 // scrollHeight 会随流式增长，所以这个值必须在滚动发生的那一刻读，不能缓存
 const gapToBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight;
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null, sessions = null, activeSessionId = '', onNewSession = null, onSwitchSession = null, onDeleteSession = null, onForkSession = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -35,6 +36,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const [compactSecs, setCompactSecs] = useState(0);
   const [note, setNote] = useState('');   // 状态栏短暂提示（压缩结果等）
   const [agentTask, setAgentTask] = useState(null);  // 本轮 Agent 的任务状态（计划卡与回滚入口）
+  const [showSessions, setShowSessions] = useState(false);  // 会话列表浮层
   const abortRef = useRef(null);
   const noteTimer = useRef(null);
   const listRef = useRef(null);
@@ -170,24 +172,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     return missing.length ? list.concat(missing) : list;
   }), [setMessages]);
 
-  // 对话落库：Agent 一轮就几十条消息，刷新即失等于把现场丢掉（改了半篇文档、
-  // 评审刚出结论）。流式中途不写库——只在停下来的 1.2 秒后存一次稳定状态。
-  // 加载要等 IndexedDB 回来，空列表且这轮还没见过任何消息时不写：否则启动那一次的
-  // 「空对话」会把刚要恢复的历史覆盖掉（读得慢就丢历史，这是会真发生的竞态）。
-  const sawMessages = useRef(false);
-  useEffect(() => {
-    if (!agentEnv || !agentEnv.chatKey) return undefined;
-    if (agentCfg && agentCfg.persist === false) return undefined;
-    if (busy || compacting) return undefined;
-    if (messages.length) sawMessages.current = true;
-    else if (!sawMessages.current) return undefined;
-    const timer = setTimeout(() => {
-      import('../workspace/taskStore.js')
-        .then(m => m.saveChat(agentEnv.chatKey, messages))
-        .catch(() => { /* 存不下不影响这轮回答 */ });
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, [messages, busy, compacting, agentCfg, agentEnv]);
+  // 对话与任务状态的落库在宿主侧（useChatSessions 是会话的唯一所有者）：
+  // 面板只负责改 messages，不自己决定「存哪、存几份、什么时候淘汰」。
 
   if (!open) return null;
 
@@ -482,7 +468,40 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     cm.focus && cm.focus();
   };
 
-  const copy = (text) => navigator.clipboard && navigator.clipboard.writeText(text);
+  // 复制失败（非安全上下文、权限被拒）不该抛未捕获的 rejection：给一句提示
+  const copy = (text) => {
+    const done = () => flashNote(t('chat.copied'));
+    if (!navigator.clipboard || !navigator.clipboard.writeText) { flashNote(t('chat.copyFailed')); return; }
+    Promise.resolve(navigator.clipboard.writeText(text)).then(done, () => flashNote(t('chat.copyFailed')));
+  };
+
+  // 消息级操作。删除与编辑重发都走 chatSessions 的同一套「轮次」语义：
+  // 点用户提问 = 连着它后面那段回答与工具回执一起处理，点回答 = 只动那一条。
+  const removeMessage = async (i) => {
+    if (busy || !messages[i]) return;
+    const turn = messages[i].role === 'user' && !messages[i].kind;
+    if (!await showConfirm(t(turn ? 'chat.deleteTurnConfirm' : 'chat.deleteOneConfirm'))) return;
+    publish(dropTurn(messages, i));
+  };
+  const resendAt = async (i) => {
+    if (busy || !messages[i]) return;
+    const r = editResend(messages, i);
+    publish(r.list);
+    setInput(r.text);
+    stickRef.current = true;
+    setTimeout(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }, 60);
+  };
+  const forkAt = async (i) => {
+    if (!onForkSession) return;
+    await onForkSession(i);
+    flashNote(t('chat.forked'));
+  };
+  const removeSession = async (s) => {
+    if (busy || !onDeleteSession) return;
+    if (!await showConfirm(t('chat.deleteSessionConfirm', { title: s.title || t('chat.sessionUntitled') }))) return;
+    await onDeleteSession(s.id);
+  };
+  const when = (ts) => (ts ? new Date(ts).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
 
   // 正文里的 ```tool 块渲染为「工具调用」卡片（执行状态看紧随的 tool-result 卡片）；
   // 先统一 strip：流式中未闭合的 tool 块也不会把半截 JSON 露到正文
@@ -548,6 +567,11 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         {!narrow && <span className="sp-drag" title={t('chat.drag')}>⠿</span>}
         <span className="sp-t">{t('chat.title')}</span>
         <span className="cp-head-acts">
+          {sessions && sessions.length > 0 && (
+            <button title={t('chat.sessions')} aria-expanded={showSessions ? 'true' : 'false'}
+              className={showSessions ? 'on' : ''}
+              onClick={() => setShowSessions(v => !v)}>🗂</button>
+          )}
           <button title={t('chat.settings')} onClick={onOpenSettings}>⚙</button>
               <button
                 title={t('chat.clear')}
@@ -557,6 +581,33 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           {!narrow && <button title={t('chat.close')} onClick={onClose}>✕</button>}
         </span>
       </div>
+
+      {/* 会话列表：切换 / 新建 / 删除。刻意做小——超过上限由宿主按最近使用时间自动
+          淘汰当前会话以外的旧会话，历史管理是「回头找那一句」，不是网盘。 */}
+      {showSessions && sessions && sessions.length > 0 && (
+        <div className="chat-sessions">
+          <div className="cs-head">
+            <b>{t('chat.sessionsTitle')}</b>
+            <button className="btn sm" disabled={busy || !onNewSession}
+              onClick={async () => { if (onNewSession) { await onNewSession(); setAgentTask(null); } setShowSessions(false); }}>
+              ＋ {t('chat.newSession')}
+            </button>
+            <span className="cs-hint">{t('chat.sessionsHint', { n: sessions.length, max: MAX_SESSIONS })}</span>
+          </div>
+          <ul className="cs-list">
+            {sessions.map(s => (
+              <li key={s.id} className={s.id === activeSessionId ? 'on' : ''}>
+                <button className="cs-item" title={s.title} disabled={busy}
+                  onClick={() => { if (onSwitchSession) onSwitchSession(s.id); setShowSessions(false); }}>
+                  <span className="cs-t">{s.title}</span>
+                  <span className="cs-m">{t('chat.sessionMsgs', { n: s.count })} · {when(s.updatedAt)}</span>
+                </button>
+                <button className="cs-del" title={t('chat.deleteSession')} disabled={busy} onClick={() => removeSession(s)}>✕</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* 任务状态面板：计划、每步的交付物与完成判定、快照回滚入口。
           它是框架持有的状态，不是模型自述——所以模型说「我做完了」不算，标记要落在计划上。 */}
@@ -638,6 +689,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             <div className="ctr-head">
               <span>{m.running ? '⏳' : (m.ok ? '✅' : '❌')} {t('agent.toolRan')} <code>{m.tool}</code></span>
               <span className="ctr-args">{JSON.stringify(m.args || {}).slice(0, 140)}</span>
+              {m.content ? <button className="ctr-copy" title={t('chat.copyResult')} onClick={() => copy(String(m.content))}>⧉</button> : null}
             </div>
             <pre className="ctr-body">{String(m.content || '').slice(0, 1500)}</pre>
           </div>
@@ -649,6 +701,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
               <b>{t('agent.reviewTitle')}</b>
               {m.running ? <em>{t('agent.reviewRunning')}</em>
                 : m.usage ? <em>{t('agent.reviewUsage', { n: ctx.formatTokens(m.usage.input + m.usage.output) })}</em> : null}
+              {m.content ? <button className="ctr-copy" title={t('chat.copyResult')} onClick={() => copy(String(m.content))}>⧉</button> : null}
             </div>
             {!m.running && m.review ? (
               <ul className="cr-list">
@@ -699,6 +752,16 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
               )
             ) : null}
             {m.content ? renderWithTools(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
+            {/* 每条气泡的快捷操作：复制正文（去掉工具块）、编辑重发（只给提问）、
+                从这里分一支到新会话、删除这一轮。流式进行中不给，避免边收边改列表 */}
+            {!busy && (m.content || m.role === 'user') ? (
+              <div className="chat-msg-acts">
+                {m.content ? <button title={t('chat.copyMsg')} onClick={() => copy(stripToolBlocks(m.content))}>⧉</button> : null}
+                {m.role === 'user' && !m.kind ? <button title={t('chat.editResend')} onClick={() => resendAt(i)}>✎</button> : null}
+                {onForkSession && m.content ? <button title={t('chat.forkHere')} onClick={() => forkAt(i)}>⑂</button> : null}
+                <button title={t('chat.deleteMsg')} onClick={() => removeMessage(i)}>🗑</button>
+              </div>
+            ) : null}
           </div>
         ))}
       </div>

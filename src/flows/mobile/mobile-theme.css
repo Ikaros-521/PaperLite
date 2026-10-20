@@ -749,6 +749,12 @@ body,
   flex: 1 1 100%;
 }
 
+/* 触屏没有 hover：气泡的快捷操作常显，并给到可点的尺寸 */
+.pl-mobile #chatPanel .chat-msg-acts { opacity: 1; gap: 4px; }
+.pl-mobile #chatPanel .chat-msg-acts button { min-height: 32px; min-width: 32px; font-size: 14px; }
+.pl-mobile #chatPanel .cs-item { min-height: 44px; }
+.pl-mobile #chatPanel .cs-del { min-width: 40px; font-size: 15px; }
+
 /* 用量条：轨道先占整行，百分比与「压缩」按钮再同行，避免三块挤成竖排 */
 .pl-mobile #chatPanel .ctx-bar {
   flex-wrap: wrap;

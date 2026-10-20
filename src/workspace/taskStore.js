@@ -16,6 +16,8 @@ export const CHAT_BODY_MAX = 6000;
 export const CHAT_REASONING_MAX = 1500;
 export const TASK_MAX = 40;
 export const CASE_MAX = 20;
+// 会话行的前缀：与旧的「c:项目键」单对话记录区分开（那条会被 adoptLegacyChat 升级掉）
+const SESSION_ROW = 's:';
 
 function clip(s, n) {
   const v = String(s == null ? '' : s);
@@ -100,6 +102,49 @@ export function makeTaskStore(driver) {
       if (!ok || !key) return false;
       return driver.remove('chats', 'c:' + key);
     },
+    /* ---- 会话（一个项目下多条对话）----
+     * 行键带项目前缀：同一浏览器里换文件夹时两套会话互不覆盖。
+     * 上限淘汰由调用方决定（它才知道哪条是当前会话），这里只提供批量删除。 */
+    async saveSession(session) {
+      if (!ok || !session || !session.id || !session.projectKey) return false;
+      // updatedAt 用会话自己带的值（调用方每次消息变化时刷新），不用「写库这一刻」：
+      // 同一毫秒里连存两条会话时，写库时刻相同会让列表排序退化成插入顺序。
+      // seq 只作为同毫秒的次键。
+      const row = {
+        id: SESSION_ROW + session.projectKey + '/' + session.id,
+        projectKey: session.projectKey,
+        sessionId: session.id,
+        title: clip(session.title, 80),
+        createdAt: session.createdAt || Date.now(),
+        updatedAt: session.updatedAt || Date.now(),
+        seq: ++tick,
+        messages: trimMessages(session.messages),
+      };
+      return !!(await driver.put('chats', row));
+    },
+    async listSessions(projectKey) {
+      if (!ok || !projectKey) return [];
+      const all = await driver.all('chats');
+      return (all || [])
+        .filter(r => r && r.projectKey === projectKey && r.sessionId)
+        .map(r => ({ id: r.sessionId, projectKey: r.projectKey, title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt, messages: r.messages || [] }))
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    },
+    async deleteSession(projectKey, sessionId) {
+      if (!ok || !projectKey || !sessionId) return false;
+      return driver.remove('chats', SESSION_ROW + projectKey + '/' + sessionId);
+    },
+    /**
+     * 旧版「一个项目一份对话」的记录升级成会话：读出来给调用方当第一条会话，
+     * 并立刻删掉旧行——留着的话下一次保存又会被当成空历史覆盖回去。
+     */
+    async adoptLegacyChat(projectKey) {
+      if (!ok || !projectKey) return null;
+      const row = await driver.get('chats', 'c:' + projectKey);
+      if (!row || !Array.isArray(row.messages) || !row.messages.length) return null;
+      await driver.remove('chats', 'c:' + projectKey);
+      return { id: 'legacy-' + Date.now().toString(36), projectKey, title: '', createdAt: row.updatedAt || Date.now(), updatedAt: row.updatedAt || Date.now(), messages: row.messages };
+    },
     async saveTask(task) {
       if (!ok || !task || !task.id) return false;
       // 审计与快照才是长任务的价值所在，但整轮正文不该跟着落库
@@ -151,3 +196,7 @@ export async function saveTask(task) { return (await getTaskStore()).saveTask(ta
 export async function saveCase(task) { return (await getTaskStore()).saveCase(task); }
 export async function saveChat(key, messages) { return (await getTaskStore()).saveChat(key, messages); }
 export async function loadChat(key) { return (await getTaskStore()).loadChat(key); }
+export async function saveSession(session) { return (await getTaskStore()).saveSession(session); }
+export async function listSessions(projectKey) { return (await getTaskStore()).listSessions(projectKey); }
+export async function deleteSession(projectKey, id) { return (await getTaskStore()).deleteSession(projectKey, id); }
+export async function adoptLegacyChat(projectKey) { return (await getTaskStore()).adoptLegacyChat(projectKey); }

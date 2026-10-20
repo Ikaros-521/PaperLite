@@ -132,6 +132,12 @@ function ChatTab() {
           inject={ws.chatInject as never}
           onBeforeApply={ws.beforeAiApply}
           agentCfg={ws.agentCfg as never}
+          sessions={ws.chatBriefs as never}
+          activeSessionId={ws.chatActiveId}
+          onNewSession={ws.startChatSession as never}
+          onSwitchSession={ws.switchChatSession as never}
+          onDeleteSession={ws.deleteChatSession as never}
+          onForkSession={ws.forkChatSession as never}
         />
       </div>
     </div>

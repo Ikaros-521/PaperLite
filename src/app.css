@@ -319,6 +319,32 @@ select.ct-chip.on { background-image:
   linear-gradient(45deg, transparent 50%, var(--on-accent) 50%),
   linear-gradient(135deg, var(--on-accent) 50%, transparent 50%); }
 .ct-grow { flex: 1 1 auto; min-width: 4px; }
+/* 会话列表浮层：切换 / 新建 / 删除，标题取第一条提问 */
+.chat-sessions {
+  flex: 0 0 auto; margin: 0 10px 4px; padding: 6px 8px; max-height: 42%; overflow: auto;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper);
+}
+.chat-sessions .cs-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.chat-sessions .cs-head b { color: var(--accent-deep); font-size: 12px; }
+.chat-sessions .cs-hint { margin-left: auto; font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; }
+.chat-sessions ul.cs-list { list-style: none; margin: 0; padding: 0; }
+.cs-list li { display: flex; align-items: stretch; gap: 4px; border-top: 1px dotted var(--edge); }
+.cs-list li.on { background: var(--badge-bg); border-radius: 6px; }
+.cs-item { flex: 1 1 auto; min-width: 0; text-align: left; border: 0; background: none; cursor: pointer; padding: 5px 6px; color: var(--ink); }
+.cs-item .cs-t { display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-item .cs-m { display: block; font-size: 10.5px; color: var(--ink-faint); }
+.cs-del { border: 0; background: none; color: var(--ink-faint); cursor: pointer; font-size: 12px; padding: 0 6px; border-radius: 5px; }
+.cs-del:hover { color: var(--seal-deep); background: rgba(var(--shadow-rgb), .06); }
+/* 气泡的快捷操作：桌面悬停才显形（触屏下由 mobile-theme 常显），满屏小按钮是噪音 */
+.chat-msg-acts { display: flex; gap: 2px; margin-top: 2px; opacity: 0; transition: opacity .12s; }
+.chat-msg:hover .chat-msg-acts, .chat-msg-acts:focus-within { opacity: 1; }
+.chat-msg-acts button {
+  border: 1px solid transparent; background: none; color: var(--ink-faint); cursor: pointer;
+  font-size: 11px; border-radius: 5px; padding: 1px 5px;
+}
+.chat-msg-acts button:hover { border-color: var(--line); color: var(--accent-deep); background: var(--paper); }
+.ctr-copy { border: 0; background: none; color: var(--ink-faint); cursor: pointer; font-size: 11px; padding: 0 4px; }
+.ctr-copy:hover { color: var(--accent-deep); }
 /* 验收评审卡片：另一个会话给出的结论，与执行内容视觉上分开（灰底 + 三条结论） */
 .chat-review {
   align-self: stretch; border: 1px solid var(--line); border-left: 3px solid var(--edge);

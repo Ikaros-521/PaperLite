@@ -51,6 +51,7 @@ import { buildLLMContext, aiFixIssuePrompt, agentProjectBrief } from './workspac
 import { runFixQueue } from './workspace/aiFixQueue.js';
 import { makeAgentExecutor } from './workspace/agentTools.js';
 import { loadAgentSettings, saveAgentSettings } from './workspace/agentRuntime.js';
+import { useChatSessions } from './workspace/useChatSessions.js';
 import { escHtml } from './htmlEsc.js';
 import { LangContext } from './useI18n.js';
 
@@ -182,7 +183,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(null); // 'keys' | 'feedback' | 'about' | null
   const [tourStage, setTourStage] = useState(null); // 'welcome' | 'tour' | null
-  const [chatMessages, setChatMessages] = useState([]);
+  // 对话恢复与多会话状态在 agentCfg 之后统一建（见 useChatSessions）
   // AI 修复串行队列状态：{ active, total, done, per: { [issueId]: { status, attempt, error } } }
   const [fixRun, setFixRun] = useState(null);
   const [selIds, setSelIds] = useState(() => new Set()); // 勾选待修复的 issue id
@@ -516,27 +517,13 @@ export default function App() {
   // （否则设置里改了级别，正在跑的 Agent 还按旧档走）
   const agentCfgRef = useRef(agentCfg);
   useEffect(() => { agentCfgRef.current = agentCfg; }, [agentCfg]);
-  // 对话恢复：一个项目键只读一次，且只在面板当前是空的时写入——用户已经开聊之后
-  // 再把旧记录倒进来，会盖掉他正在写的这一轮。
-  // 不能用「effect cleanup 里置 alive=false」来防过期结果：dev 的 StrictMode 会把
-  // effect 跑两遍，第一遍的异步结果回来时已作废，第二遍又被「只读一次」的锁挡住，
-  // 结果是历史永远进不来。改成在回调里比对当前键，并在失败时放开锁允许重试。
-  const chatRestoredRef = useRef('');
-  const chatKeyRef = useRef('');
-  useEffect(() => {
-    const key = rootDir ? 'dir:' + rootDir.name : 'draft';
-    chatKeyRef.current = key;
-    if (agentCfg.persist === false || chatRestoredRef.current === key) return undefined;
-    chatRestoredRef.current = key;
-    import('./workspace/taskStore.js')
-      .then(m => m.loadChat(key))
-      .then(list => {
-        if (chatKeyRef.current !== key) { chatRestoredRef.current = ''; return; }
-        if (list && list.length) setChatMessages(prev => prev.length ? prev : list);
-      })
-      .catch(() => { chatRestoredRef.current = ''; });
-    return undefined;
-  }, [rootDir, agentCfg.persist]);
+  // 多会话：会话列表是唯一真相源，chatMessages 就是活动会话的 messages（见 useChatSessions）。
+  // 项目键决定这一批会话归属哪个项目：文件夹名优先，没连文件夹统一归到 draft。
+  // 用名字而不是句柄——同一目录重开后句柄会变，历史不该跟着丢。
+  const chatKey = rootDir ? 'dir:' + rootDir.name : 'draft';
+  const chat = useChatSessions({ projectKey: chatKey, persist: agentCfg.persist !== false });
+  const chatMessages = chat.messages;
+  const setChatMessages = chat.setMessages;
   // 沉浸模式：涂在 <body> 上让 CSS 隐藏全部外壳；片段变更即落盘（失败静默，编辑仍在内存）
   useEffect(() => { document.body.classList.toggle('pl-zen', zen); }, [zen]);
   useEffect(() => { saveSnippets(snippets); }, [snippets]);
@@ -1258,11 +1245,9 @@ export default function App() {
       return a ? tabPathRef.current(a) : '';
     },
     restore: (files) => restoreAgentSnapshot(files),
-    // 对话落库的键：文件夹名优先，没连文件夹时统一归到 draft。
-    // 用名字而不是句柄——同一目录重开后句柄会变，历史不该跟着丢。
-    chatKey: rootDir ? 'dir:' + rootDir.name : 'draft',
+    chatKey,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [createFileForAgent, openByPathForAgent, restoreAgentSnapshot, rootDir]);
+  }), [createFileForAgent, openByPathForAgent, restoreAgentSnapshot, chatKey]);
 
   // ---- 导出 ----
   const exportPdfPrint = () => {
@@ -1612,6 +1597,12 @@ export default function App() {
         agentEnv={agentEnv}
         agentCfg={agentCfg}
         onAgentApproval={lv => setAgentCfg(s => ({ ...s, approval: lv }))}
+        sessions={chat.briefs}
+        activeSessionId={chat.activeId}
+        onNewSession={chat.onStart}
+        onSwitchSession={chat.onSwitch}
+        onDeleteSession={chat.onDelete}
+        onForkSession={chat.onFork}
       />
 
       <DialogHost />

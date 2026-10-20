@@ -10,6 +10,7 @@ import zhCN from 'antd-mobile/es/locales/zh-CN'
 import enUS from 'antd-mobile/es/locales/en-US'
 import { useWorkspace } from '../../workspace/useWorkspace.js'
 import { useCompile } from '../../workspace/useCompile.js'
+import { useChatSessions } from '../../workspace/useChatSessions.js'
 import { hasDocumentclass } from '../../mainDoc.js'
 import { buildLLMContext } from '../../workspace/chatContext.js'
 import { makeTab } from '../../workspace/tabModel.js'
@@ -117,6 +118,12 @@ interface MobileWorkspaceValue {
   setAgentCfg: (updater: (prev: { maxSteps: number; keepResults: number }) => { maxSteps: number; keepResults: number }) => void
   chatMessages: unknown[]
   setChatMessages: (updater: unknown) => void
+  chatBriefs: { id: string; title: string; updatedAt: number; count: number }[]
+  chatActiveId: string
+  startChatSession: () => Promise<unknown>
+  switchChatSession: (id: string) => void
+  deleteChatSession: (id: string) => Promise<void>
+  forkChatSession: (index: number) => Promise<unknown>
   chatInject: { text: string; n: number } | null
   sendChatInject: (text: string) => void
   buildContext: ChatContextBuilder
@@ -196,13 +203,19 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
   // ---- AI 对话：渠道、消息、上下文构造全部复用桌面实现 ----
   const [channels, setChannels] = useState(() => llm.loadChannels())
   const [activeChannelId, setActiveChannelId] = useState(() => (llm.loadChannels()[0] || {}).id || '')
-  const [chatMessages, setChatMessages] = useState([])
   const [chatInject, setChatInject] = useState<{ text: string; n: number } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   useEffect(() => { llm.saveChannels(channels) }, [channels])
   // Agent 行为参数：与桌面读写同一个 localStorage 键，设置弹窗 Agent 子页共用
   const [agentCfg, setAgentCfg] = useState(loadAgentSettings)
   useEffect(() => { saveAgentSettings(agentCfg) }, [agentCfg])
+  // 多会话：与桌面同一个 hook（会话列表是唯一真相源，落库走 IndexedDB）
+  const chat = useChatSessions({
+    projectKey: ws.rootDir ? 'dir:' + (ws.rootDir as { name?: string }).name : 'draft',
+    persist: agentCfg.persist !== false,
+  })
+  const chatMessages = chat.messages
+  const setChatMessages = chat.setMessages
 
   const activeValueRef = useRef(ws.activeValue)
   activeValueRef.current = ws.activeValue
@@ -374,6 +387,12 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     setAgentCfg,
     chatMessages,
     setChatMessages,
+    chatBriefs: chat.briefs,
+    chatActiveId: chat.activeId,
+    startChatSession: chat.onStart,
+    switchChatSession: chat.onSwitch,
+    deleteChatSession: chat.onDelete,
+    forkChatSession: chat.onFork,
     chatInject,
     sendChatInject,
     buildContext,
@@ -384,7 +403,7 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
     scale,
     setScale,
     scaleFont: SCALE_FONT[scale],
-  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chatInject, buildContext, beforeAiApply, sendChatInject, insertCitation, settingsOpen, scale, setScale])
+  }), [t, lang, setLang, ws, activeTab, treeTick, compileLayer, channels, activeChannelId, chatMessages, chat, chatInject, buildContext, beforeAiApply, sendChatInject, insertCitation, settingsOpen, scale, setScale])
 
   return (
     // antd-mobile 自带文案（下拉刷新 / 没有更多了 / 搜索框、蒙层等 aria-label）默认是 zh-CN，
