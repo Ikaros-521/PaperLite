@@ -3,7 +3,7 @@
  * 这些都关系到 API Key 会不会离开本机、坏服务端能不能把标签页拖死。
  */
 import assert from 'node:assert/strict';
-import { chat, fetchModels, baseUrlProblem } from '../src/llm.js';
+import { chat, fetchModels, baseUrlProblem, thinkingSwitch } from '../src/llm.js';
 import { setLang } from '../src/i18n.js';
 
 setLang('zh');
@@ -82,6 +82,57 @@ assert.equal(seen.length, 0, '校验失败不该已经发出请求');
 {
   globalThis.fetch = async () => ({ ok: true, status: 200, headers: new Map(), text: async () => '<html>网关挂了</html>' });
   await assert.rejects(chat(openaiCh, [{ role: 'user', content: 'hi' }], { stream: false }), /JSON/);
+}
+
+// ---- 思维链开关要真的落到请求上：不勾选时对支持的渠道显式请求关闭推理 ----
+{
+  const bodies = [];
+  globalThis.fetch = async (u, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    return okJson({ choices: [{ message: { content: 'ok' } }] });
+  };
+  const think = (model, cot, opts = {}) => chat({ ...openaiCh, chatModel: model, cot },
+    [{ role: 'user', content: 'hi' }], { stream: false, ...opts });
+
+  await think('glm-4.5', false);
+  assert.deepEqual(bodies[0].thinking, { type: 'disabled' }, 'GLM-4.5 默认思考，关的时候要发显式关闭字段');
+  await think('qwen3-30b', false);
+  assert.equal(bodies[1].enable_thinking, false, 'Qwen3 走 enable_thinking');
+  await think('deepseek-r1', false);
+  assert.equal(bodies[2].enable_thinking, undefined, 'R1 没有可关的开关，不发假字段');
+  assert.equal(bodies[2].thinking, undefined);
+  await think('gpt-4o', false);
+  assert.deepEqual([bodies[3].thinking, bodies[3].enable_thinking], [undefined, undefined], '普通模型什么都不加');
+  await think('glm-4.5', true);
+  assert.equal(bodies[4].thinking, undefined, '勾选启用时不能同时发关闭字段');
+  assert.ok(String(bodies[4].messages[0].content).includes('推理'), '启用时带思维链引导的系统提示');
+  await think('qwen3-30b', false, { noReasoning: true });
+  assert.equal(bodies[5].enable_thinking, false, '摘要这类机械任务也走同一条关闭路径');
+
+  // 开关识别与界面口径一致
+  assert.equal(thinkingSwitch('glm-4.5'), 'thinking');
+  assert.equal(thinkingSwitch('GLM-Z1-Air'), 'thinking');
+  assert.equal(thinkingSwitch('qwen3-235b-a22b'), 'enable_thinking');
+  assert.equal(thinkingSwitch('deepseek-r1'), null, 'R1 属于「无法关闭」，界面要如实说明');
+  assert.equal(thinkingSwitch('gpt-4o'), null);
+}
+
+// ---- 不认关闭字段的网关：400 后去掉可选字段重试一次，而不是整条请求失败 ----
+{
+  let n = 0;
+  globalThis.fetch = async (u, opts) => {
+    n++;
+    const body = JSON.parse(opts.body);
+    if (n === 1 && body.enable_thinking !== undefined) {
+      return { ok: false, status: 400, headers: new Map(), text: async () => 'unknown field enable_thinking' };
+    }
+    seen.push(body);
+    return okJson({ choices: [{ message: { content: '重试成功' } }] });
+  };
+  const r = await chat({ ...openaiCh, chatModel: 'qwen3-30b', cot: false }, [{ role: 'user', content: 'hi' }], { stream: false });
+  assert.equal(r.content, '重试成功', '降级重试照常出结果');
+  assert.equal(n, 2, '一次 400 一次重试');
+  assert.equal(seen[seen.length - 1].enable_thinking, undefined, '重试时把可选扩展字段去掉');
 }
 
 globalThis.fetch = realFetch;

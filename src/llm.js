@@ -198,8 +198,8 @@ function chatOpenAI(channel, messages, opts) {
   };
   // 流式默认不回计量，需显式声明；个别网关不认识该字段会在解析层降级重试
   if (body.stream) body.stream_options = { include_usage: true };
-  // 摘要这类机械任务不需要推理：GLM-4.5 / Z1 系支持显式关闭，能省下十几秒
-  if (opts.noReasoning && /glm-4\.5|glm-z1|glm4\.5/i.test(body.model)) body.thinking = { type: 'disabled' };
+  // 摘要这类机械任务不需要推理，等价于「明确关到底」
+  if (!channel.cot || opts.noReasoning) disableThinking(body);
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
   const temp = resolveTemperature(channel, opts);
   if (temp !== undefined) body.temperature = temp;
@@ -211,6 +211,30 @@ function chatOpenAI(channel, messages, opts) {
   }
 
   return parseOpenAIStream(url(channel, '/chat/completions'), channel, body, opts);
+}
+
+/**
+ * 关掉思维链要真的关掉：只加一句「请不要展示推理」关不掉网关默认开启的推理输出
+ * （GLM-4.5 / Qwen3 这类是「默认思考」模型，reasoning_content 照样回来），
+ * 所以这里按模型家族发对应家族的显式关闭字段。
+ * @returns {'thinking'|'enable_thinking'|null} 用哪个字段关的；null 表示这个模型
+ *   没有可关的开关（DeepSeek-R1 这类只会思考），界面要如实说明而不是假装关掉了。
+ */
+export function thinkingSwitch(model) {
+  const m = String(model || '');
+  if (/glm-4\.5|glm-z1|glm4\.5|glm-5/i.test(m)) return 'thinking';
+  // DashScope 兼容口径：enable_thinking=false；非流式或部分网关不认这个字段，
+  // 由 OPTIONAL_FIELDS 的 400 降级重试兜住。DeepSeek-R1 这类「只会思考」的模型不在这里列
+  // ——它没有可关的开关，界面要按「无法关闭」如实说明，而不是发一个被忽略的字段
+  if (/qwen3|qwq|-thinking/i.test(m)) return 'enable_thinking';
+  return null;
+}
+
+export function disableThinking(body) {
+  const kind = thinkingSwitch(body.model);
+  if (kind === 'thinking') body.thinking = { type: 'disabled' };
+  else if (kind === 'enable_thinking') body.enable_thinking = false;
+  return !!kind;
 }
 
 // Anthropic /v1/messages：system 独立传参、角色需交替、max_tokens 必填；思维链映射为 thinking
@@ -309,15 +333,17 @@ export function isRetryable(err) {
 }
 
 // ---- 请求 + 解析（两种协议各自归一化 usage，缺字段时返回 null 由界面降级估算） ----
-// stream_options / thinking 都是可选扩展字段，个别网关不认识会回 400，去掉后重试一次而不是让整个请求失败
-const OPTIONAL_FIELDS = ['stream_options', 'thinking'];
+// stream_options / thinking / enable_thinking 都是可选扩展字段，个别网关不认识会回 400，去掉后重试一次而不是让整个请求失败
+const OPTIONAL_FIELDS = ['stream_options', 'thinking', 'enable_thinking'];
 
 async function postJson(u, channel, body, opts) {
   const send = () => fetch(u, {
     method: 'POST', headers: headers(channel), body: JSON.stringify(body), signal: opts.signal, redirect: 'error'
   });
   let r = await send();
-  if (!r.ok && r.status === 400 && OPTIONAL_FIELDS.some(f => body[f])) {
+  // 判断用「字段存在」而不是「字段为真」：enable_thinking:false 本身就是假值，
+  // 用真值判断等于「显式关闭推理的请求一旦 400 就不重试」
+  if (!r.ok && r.status === 400 && OPTIONAL_FIELDS.some(f => body[f] !== undefined)) {
     OPTIONAL_FIELDS.forEach(f => { delete body[f]; });
     r = await send();
   }
