@@ -120,7 +120,10 @@ export function newChannel() {
 
 /** Base URL 必须是带协议的绝对 http(s) 地址。漏写协议（api.openai.com/v1）会被解析成
  *  同源相对路径，Bearer / x-api-key 就原样发给托管本站的服务器了；javascript:、data:
- *  之类同理挡掉。返回 '' 表示没问题，否则是一条可以直接显示的文案。 */
+ *  之类同理挡掉。返回 '' 表示没问题，否则是一条可以直接显示的文案。
+ *  明文 http 只放行本机回环：Ollama / LM Studio / 伴随服务都是本地明文，
+ *  而远程主机走 http 时 Key 与整篇文稿都是过网裸奔，https 没有理由省。 */
+const LOCAL_HTTP_HOSTS = /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])$/i;
 export function baseUrlProblem(base) {
   const s = String(base || '').trim();
   if (!s) return t('llm.needBaseUrl');
@@ -128,6 +131,7 @@ export function baseUrlProblem(base) {
   try { u = new URL(s); } catch (e) { return t('llm.badBaseUrl'); }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return t('llm.badBaseUrl');
   if (!u.hostname) return t('llm.badBaseUrl');
+  if (u.protocol === 'http:' && !LOCAL_HTTP_HOSTS.test(u.hostname)) return t('llm.httpLocalOnly');
   return '';
 }
 
@@ -163,18 +167,28 @@ function headers(channel) {
   };
 }
 
+// 一次性请求的默认超时：挂起的端点会把「测试连接」永久钉在转圈上，关掉弹窗也撤不掉。
+// 对话流不能套总超时（长回答本来就要几十秒），所以只给这类短请求兜底。
+const ONESHOT_TIMEOUT_MS = 20000;
+function timeoutSignal(explicit) {
+  if (explicit) return explicit;
+  return typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(ONESHOT_TIMEOUT_MS) : undefined;
+}
+
 // ---------------- 模型列表 ----------------
 
 // 拉取渠道可用模型（兼容 {data:[{id}]} / {models:[…]} / [string] 等常见返回）
-export async function fetchModels(channel) {
+export async function fetchModels(channel, opts = {}) {
   const u = protocolOf(channel) === 'anthropic'
     ? anthropicUrl(channel, 'models')
     : url(channel, '/models');
+  const signal = timeoutSignal(opts.signal);
   // redirect:'error'：跨源重定向只剥 Authorization/Cookie，自定义头（Anthropic 的
   // x-api-key）是原样转发的——跟着 302 走就等于把 Key 交给重定向目标
-  const r = await fetch(u, { headers: headers(channel), redirect: 'error' });
-  if (!r.ok) throw new Error('HTTP ' + r.status + '：' + (await r.text()).slice(0, 160));
-  const j = await r.json().catch(() => null);
+  const r = await fetch(u, { headers: headers(channel), redirect: 'error', signal });
+  if (!r.ok) throw new Error('HTTP ' + r.status + '：' + (await cappedText(r).catch(() => '')).slice(0, 160));
+  // 上限走 cappedText：模型列表端点没有理由比对话响应更值得信任，r.json() 是整块缓冲
+  const j = await readJson(r);
   const arr = (j && (j.data || j.models)) || (Array.isArray(j) ? j : []);
   const ids = arr
     .map(m => (typeof m === 'string' ? m : (m && (m.id || m.name || m.model))))
@@ -185,13 +199,13 @@ export async function fetchModels(channel) {
 // ---------------- 测试连接 ----------------
 
 // 优先 /models，失败则发一条极短对话
-export async function testConnection(channel) {
+export async function testConnection(channel, opts = {}) {
   try {
     let ids = [];
     try {
-      ids = (await fetchModels(channel)).slice(0, 5);
+      ids = (await fetchModels(channel, opts)).slice(0, 5);
     } catch (e) {
-      await chat(channel, [{ role: 'user', content: 'ping' }], { maxTokens: 5 });
+      await chat(channel, [{ role: 'user', content: 'ping' }], { maxTokens: 5, signal: timeoutSignal(opts.signal) });
       return { ok: true, msg: t('llm.okChatOnly', { msg: e.message || e }) };
     }
     return { ok: true, msg: ids.length ? t('llm.ok', { models: t('llm.okModels', { models: ids.join(getLang() === 'en' ? ', ' : '、') }) }) : t('llm.ok', { models: '' }) };
@@ -360,7 +374,7 @@ async function postJson(u, channel, body, opts) {
     r = await send();
   }
   if (!r.ok) {
-    const text = (await r.text().catch(() => '')).slice(0, 200);
+    const text = (await cappedText(r).catch(() => '')).slice(0, 200);
     const e = new Error('HTTP ' + r.status + '：' + text);
     e.status = r.status;
     e.code = r.status === 429 ? 'rate' : (r.status >= 500 || r.status === 408) ? 'server' : 'client';
@@ -413,10 +427,36 @@ async function* sseData(r) {
 
 /** 非流式响应：先按上限取文本再解析，坏 JSON 给一句人话而不是 SyntaxError */
 async function readJson(r) {
-  const text = await r.text();
-  if (text.length > MAX_STREAM_BYTES) throw bodyOversize();
+  const text = await cappedText(r);
   try { return JSON.parse(text); }
   catch (e) { const err = new Error(t('llm.badJson')); err.code = 'client'; err.__llm = true; throw err; }
+}
+
+/** 带上限地读完整响应体。上限必须在字节进内存之前判：先 await r.text() 再比长度，
+ *  等于已经整块缓冲完才拒，恶意/异常网关照样把标签页撑爆。桩对象没有可读流时退回 text()。 */
+async function cappedText(r, max = MAX_STREAM_BYTES) {
+  const reader = r.body && typeof r.body.getReader === 'function' ? r.body.getReader() : null;
+  if (!reader) {
+    const text = await r.text();
+    if (text.length > max) throw bodyOversize();
+    return text;
+  }
+  const dec = new TextDecoder();
+  const parts = [];
+  let seen = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      seen += (value && value.length) || 0;
+      if (seen > max) throw bodyOversize();
+      parts.push(dec.decode(value, { stream: true }));
+    }
+    parts.push(dec.decode());
+    return parts.join('');
+  } finally {
+    try { reader.cancel(); } catch (e) { /* 已经关了 */ }
+  }
 }
 
 function openAIUsage(u) {

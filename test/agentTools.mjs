@@ -245,6 +245,8 @@ assert.equal(stripToolBlocks('正文\n```tool\n{"tool":"a"'), '正文');
   const { executor } = makeDeps({ tabs: [fakeTab('main.tex', 'aaa\nbbb')] });
   const nested = await executor('search_files', { query: '(a+)+b', regex: true });
   assert.ok(!nested.ok, '嵌套量词正则直接拒绝，否则整页冻住');
+  const alt = await executor('search_files', { query: '(a|aa)+b', regex: true });
+  assert.ok(!alt.ok, '组内交替 + 组外量词（(a|aa)+）同样是指数回溯，必须一起拒绝');
   const long = await executor('search_files', { query: 'q'.repeat(201) });
   assert.ok(!long.ok, '超长查询拒绝');
   const safe = await executor('search_files', { query: 'a+', regex: true });
@@ -348,6 +350,33 @@ assert.equal(stripToolBlocks('正文\n```tool\n{"tool":"a"'), '正文');
   assert.equal(r2.result, 'SECRET=1', '「完全访问」档由用户明确放弃这层保护');
   const ask = makeDeps({ disk, approval: 'ask' });
   assert.ok(!(await ask.executor('read_file', { path: '.env' })).ok, '「每次审核」也不放开隐藏文件');
+}
+
+// ---------- 隐藏路径的闸要盖住索引与实时标签，不只磁盘兜底 ----------
+// App.jsx 的目录扫描只跳过 JUNK 那几个名字，.notes/ 之类的点开头目录照样进 folderIndex；
+// 闸只管第 3 条分支等于前两条白给
+{
+  const fi = {
+    texFiles: [{ path: 'main.tex', source: '正文' }],
+    textFiles: [{ path: '.notes/private.md', source: 'SECRET-IN-INDEX' }],
+    bibFiles: [], imageFiles: ['.assets/secret.png'],
+  };
+  const tabs = [fakeTab('main.tex', 'aaa'), fakeTab('.hidden.tex', 'SECRET-IN-TAB')];
+  const { executor } = makeDeps({ tabs, folderIndex: fi });
+  assert.ok(!(await executor('read_file', { path: '.notes/private.md' })).ok, '索引里的隐藏文件读不到');
+  assert.ok(!(await executor('read_file', { path: '.hidden.tex' })).ok, '已打开的隐藏标签同样读不到');
+  assert.equal((await executor('read_file', { path: 'main.tex' })).ok, true, '普通路径不受影响');
+
+  const hit = await executor('search_files', { query: 'SECRET-IN-INDEX' });
+  // 无命中提示会把查询词原样回显，判据是「没有把隐藏文件当命中结果」而不是不含该词
+  assert.ok(!hit.result.includes('.notes/private.md'), '搜索命中也不能带出隐藏文件路径：' + hit.result);
+  const listed = await executor('list_files', {});
+  assert.ok(!listed.result.includes('.notes/private.md') && !listed.result.includes('.assets/secret.png'),
+    '清单不把隐藏路径报给模型：' + listed.result);
+
+  const wide = makeDeps({ tabs, folderIndex: fi, approval: 'full' });
+  assert.equal((await wide.executor('read_file', { path: '.notes/private.md' })).result, 'SECRET-IN-INDEX',
+    '「完全访问」档仍然照旧放开');
 }
 
 console.log('agentTools: all tests passed');

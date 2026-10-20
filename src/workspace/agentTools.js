@@ -32,8 +32,13 @@ function ok(result) { const s = String(result == null ? '' : result); return { o
 function fail(msg, code) { return { ok: false, result: String(msg), code: code || '' }; }
 
 // 嵌套量词的粗判：组内已带量词、组外面又跟量词（(a+)+ / (a*)* 这类爆炸串）。
-// 不做完整的安全分析，挡住模型最常写出的那种就够了——正则是逐行在 UI 线程 exec 的。
+// 再加上「组内交替 + 组外量词」（(a|aa)+ 型）：只靠嵌套判据漏得最多，因为它的组里
+// 没有量词。不做完整的安全分析，挡住模型最常写出的两种就够了——正则是逐行在 UI 线程
+// exec 的，一条病态模式就能冻住整个标签页；认不出的形态由 searchInFiles 的墙钟预算兜住。
 const NESTED_QUANT = /\([^()]*(?:[+*?])\)[+*?{]/;
+const ALT_QUANT = /\([^()]*(?:\|[^()]*)+\)[+*?{]/;
+// 病态正则执行预算：单次搜索最多占 UI 线程这么久
+const SEARCH_TIME_BUDGET_MS = 1200;
 
 /** 路径任一段以 . 开头 = 隐藏文件或点开头的目录（. 与 .. 一起挡在门外） */
 function hiddenPath(p) {
@@ -119,7 +124,6 @@ export function outlineOf(text) {
 export function makeAgentExecutor(deps) {
   // 项目文件清单：打开标签（实时内容）优先，磁盘索引去重补齐（与全局搜索同一装配口径）
   function searchFiles() {
-    const L = getLang();
     // 活动 Tab 的 Doc 与 cm.getDoc() 是同一对象，直接读 doc 拿到的就是编辑中的实时内容
     const tabsList = (deps.tabs() || [])
       .filter(x => x && x.doc)
@@ -130,12 +134,19 @@ export function makeAgentExecutor(deps) {
       ...((fi.bibFiles || []).map(f => ({ path: f.path, text: f.source }))),
       ...((fi.textFiles || []).map(f => ({ path: f.path, text: f.source }))),
     ];
-    return collectSearchFiles(tabsList, disk);
+    // 搜索命中等于整行内容进结果，与 read_file 同一条隐私口径：隐藏路径默认不进候选。
+    // 两份清单各自过滤——合并成一个数组会让 collectSearchFiles 把磁盘文件标成已打开
+    const keep = (f) => !hiddenBlocked(f.path);
+    return collectSearchFiles(tabsList.filter(keep), disk.filter(keep));
   }
 
   // 权限档位：'ask' 每个改动手先确认；'auto' 不打断（默认）；'full' 免确认且放开
   // 隐藏文件读取。没注入就当 'auto'——保守档，不会误开全访问。
   const level = () => (typeof deps.approval === 'function' ? deps.approval() : 'auto') || 'auto';
+
+  // 隐藏路径的闸必须一次算在所有读盘入口上：扫描（App.jsx folderIndex）只跳过
+  // JUNK 那几个名字，.notes/ 之类的点开头目录照样进索引，闸只管磁盘兜底分支等于没管
+  const hiddenBlocked = (p) => hiddenPath(p) && level() !== 'full';
 
   async function readFromDisk(path) {
     const root = deps.rootDir();
@@ -158,6 +169,7 @@ export function makeAgentExecutor(deps) {
       for (const tb of tabs) lines.push('  ' + deps.tabPath(tb) + (tb.id === deps.activeId() ? '  ← ' + tr(L, 'agent.filesActive') : ''));
     }
     const fi = deps.folderIndex() || {};
+    // 清单与读取同一口径：默认不把隐藏路径报给模型，否则等于指着它让它去 read_file
     const disk = [
       ...((fi.texFiles || []).map(f => f.path)),
       ...((fi.bibFiles || []).map(f => f.path)),
@@ -165,7 +177,7 @@ export function makeAgentExecutor(deps) {
       // 图片清单存的是字符串路径（App 扫描时 push 的就是 path），旧写法取 f.path/f.name
       // 会得到一串 undefined，模型看不见图名只能瞎猜
       ...((fi.imageFiles || []).map(f => (typeof f === 'string' ? f : (f && (f.path || f.name))) || '').filter(Boolean)),
-    ];
+    ].filter(p => !hiddenBlocked(p));
     if (disk.length) {
       const opened = new Set(tabs.map(deps.tabPath));
       lines.push(tr(L, 'agent.filesFolder'));
@@ -178,6 +190,11 @@ export function makeAgentExecutor(deps) {
   async function toolReadFile(args) {
     const L = getLang();
     const path = String(args.path || '').trim();
+    // 默认不放开隐藏文件：用户选的目录可能很宽（家目录/文档），.env、.git/config
+    // 一旦被模型指名读到，就变成下一次请求里发给第三方渠道的素材。「完全访问」档由
+    // 用户明确放弃这层保护，才允许读隐藏路径。闸只管磁盘兜底是不够的——扫描会把点开头
+    // 目录里的 .tex/.md/.bib 整份存进 folderIndex，已打开的标签同样可能是隐藏路径
+    if (hiddenBlocked(path)) return fail(tr(L, 'agent.errHiddenPath', { path }), 'hidden_path');
     // 1) 打开的标签（拿编辑中的实时内容）
     const tab = (deps.tabs() || []).find(x => x && x.doc && deps.tabPath(x) === path);
     if (tab) return sliceLines(ok(tab.id === deps.activeId() ? (deps.cm() ? deps.cm().getValue() : tab.doc.getValue()) : tab.doc.getValue()), args);
@@ -187,10 +204,6 @@ export function makeAgentExecutor(deps) {
     if (entry && typeof entry.source === 'string') return sliceLines(ok(entry.source), args);
     // 3) 直读磁盘（未进索引的文件类型）；区分「不存在」与「读取失败」——
     //    权限/超大/非法路径等原因如实回传，避免模型误以为文件不存在而反复重读或盲目重建
-    //    磁盘兜底默认不放开隐藏文件：用户选的目录可能很宽（家目录/文档），.env、.git/config
-    //    一旦被模型指名读到，就变成下一次请求里发给第三方渠道的素材。「完全访问」档由
-    //    用户明确放弃这层保护，才允许读隐藏路径
-    if (hiddenPath(path) && level() !== 'full') return fail(tr(L, 'agent.errHiddenPath', { path }), 'hidden_path');
     try {
       const text = await readFromDisk(path);
       if (text != null) return sliceLines(ok(text), args);
@@ -221,12 +234,13 @@ export function makeAgentExecutor(deps) {
     const L = getLang();
     // query 的必填与长度上限在注册表里，这里只留「跑起来才知道」的语义检查
     const query = String(args.query || '');
-    if (args.regex === true && NESTED_QUANT.test(query)) return fail(tr(L, 'agent.errRegexUnsafe'), 'regex_unsafe');
+    if (args.regex === true && (NESTED_QUANT.test(query) || ALT_QUANT.test(query))) return fail(tr(L, 'agent.errRegexUnsafe'), 'regex_unsafe');
     const r = searchInFiles(searchFiles(), {
       query,
       regex: args.regex === true,
       matchCase: args.match_case === true || args.matchCase === true,
       wholeWord: args.whole_word === true || args.wholeWord === true,
+      timeBudgetMs: SEARCH_TIME_BUDGET_MS,
     });
     if (!r.ok) return fail(tr(L, 'agent.errBadRegex'), 'bad_regex');
     if (!r.matches.length) return ok(tr(L, 'agent.searchNoHit', { query }));

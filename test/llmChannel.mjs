@@ -20,7 +20,7 @@ for (const bad of ['api.openai.com/v1', '//evil.test/v1', 'javascript:alert(1)',
 
 // ---- 每个请求都不许跟重定向：跨源 302 只剥 Authorization，x-api-key 是原样转发的 ----
 globalThis.fetch = async (u, opts) => {
-  seen.push({ u, redirect: opts.redirect, headers: opts.headers });
+  seen.push({ u, redirect: opts.redirect, headers: opts.headers, signal: opts.signal });
   return okJson({ choices: [{ message: { content: 'ok', reasoning_content: '' } }], usage: null });
 };
 const openaiCh = { protocol: 'openai', baseUrl: 'https://x.test/v1', chatModel: 'm', apiKey: 'k' };
@@ -34,6 +34,17 @@ assert.equal(seen[1].redirect, 'error', 'Anthropic 路径同样不跟重定向')
 assert.equal(seen[1].headers['x-api-key'], 'k');
 await fetchModels(openaiCh);
 assert.equal(seen[2].redirect, 'error', '拉模型列表也不跟重定向');
+assert.ok(seen[2].signal, '拉模型列表要带超时 signal，否则挂起的端点把「测试连接」永久钉在转圈上');
+
+// 明文 http 只放行本机回环：远程主机走 http 时 Key 与整篇文稿都是过网裸奔
+assert.equal(baseUrlProblem('http://127.0.0.1:1234/v1'), '', 'LM Studio 这类本机明文要放行');
+assert.equal(baseUrlProblem('http://[::1]:11434/v1'), '', 'IPv6 回环同样放行');
+for (const bad of ['http://evil.example.com/v1', 'http://10.0.0.5:8000/v1']) {
+  assert.notEqual(baseUrlProblem(bad), '', '远程明文应拒绝：' + bad);
+}
+seen = [];
+await assert.rejects(chat({ ...openaiCh, baseUrl: 'http://evil.example.com/v1' }, [{ role: 'user', content: 'hi' }], { stream: false }));
+assert.equal(seen.length, 0, '远程明文渠道一个字节都不该发出去');
 
 // URL 不合法时一个字节都不该发出去
 seen = [];
@@ -150,6 +161,31 @@ globalThis.fetch = realFetch;
   assert.equal(loadChannels()[0].cot, false, '迁移只发生一次：用户手动关掉后不会再被启动翻回来');
   assert.equal(newChannel().cot, true, '新建渠道默认开启深度思考');
   delete globalThis.localStorage;
+}
+
+// ---- 非流式响应体也要「边读边限」：先 await r.text() 再比长度等于已经整块缓冲完才拒 ----
+{
+  let cancelled = false;
+  const big = new Uint8Array(9 * 1024 * 1024);
+  globalThis.fetch = async () => ({
+    ok: true, status: 200, headers: new Map(),
+    body: { getReader: () => {
+      let sent = 0;
+      return { read: async () => (sent++ ? { done: true } : { done: false, value: big }), cancel: async () => { cancelled = true; } };
+    } },
+  });
+  await assert.rejects(chat(openaiCh, [{ role: 'user', content: 'hi' }], { stream: false }), /过大|too large/);
+  assert.equal(cancelled, true, '超限路径关掉读流');
+  // 错误体同样受限：坏网关可以用一整页 HTML 把标签页撑满
+  globalThis.fetch = async () => ({
+    ok: false, status: 500, headers: new Map(),
+    body: { getReader: () => {
+      let sent = 0;
+      return { read: async () => (sent++ ? { done: true } : { done: false, value: big }), cancel: async () => {} };
+    } },
+  });
+  await assert.rejects(chat(openaiCh, [{ role: 'user', content: 'hi' }], { stream: false }));
+  globalThis.fetch = realFetch;
 }
 
 console.log('LLM channel: base URL validation, redirect policy on every path, SSE cancel-on-error and delta parsing passed.');

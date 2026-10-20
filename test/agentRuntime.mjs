@@ -11,10 +11,12 @@ import { setLang } from '../src/i18n.js';
 
 setLang('zh');
 
-// 极简 OpenAI SSE 响应：把 content 一次性吐成一个 delta，之后再 EOF
-function sseResponse(content) {
+// 极简 OpenAI SSE 响应：把 content 一次性吐成一个 delta，之后再 EOF。
+// usage 走 include_usage 的末尾空 choices 块，与真实网关同形状
+function sseResponse(content, usage) {
   const payload = JSON.stringify({ choices: [{ delta: { content } }] });
-  const body = 'data: ' + payload + '\n\ndata: [DONE]\n\n';
+  const tail = usage ? 'data: ' + JSON.stringify({ choices: [], usage }) + '\n\n' : '';
+  const body = 'data: ' + payload + '\n\n' + tail + 'data: [DONE]\n\n';
   const chunk = new TextEncoder().encode(body);
   let sent = false;
   return {
@@ -44,10 +46,13 @@ globalThis.fetch = async (u, opts) => {
   const content = hasToolResult
     ? '已经读取完毕，这是最终回答。'
     : '我先读一下文件：\n```tool\n{"tool":"read_file","args":{"path":"main.tex"}}\n```';
-  return sseResponse(content);
+  return sseResponse(content, {
+    prompt_tokens: step * 100, completion_tokens: step * 10,
+    prompt_tokens_details: { cached_tokens: step === 1 ? 5 : 0 },
+  });
 };
 
-const channel = { protocol: 'openai', baseUrl: 'http://mock.test/v1', chatModel: 'mock-model', apiKey: '' };
+const channel = { protocol: 'openai', baseUrl: "http://127.0.0.1:8788/v1", chatModel: 'mock-model', apiKey: '' };
 const updates = [];
 const { usage } = await runAgentLoop({
   channel,
@@ -64,6 +69,8 @@ const { usage } = await runAgentLoop({
 globalThis.fetch = realFetch;
 
 assert.equal(executed.length, 1, '工具必须恰好执行一次');
+assert.deepEqual(usage, { input: 300, output: 30, cached: 5 },
+  '整轮用量按步累加（100+200 / 10+20 / 5+0），覆盖成最后一步等于把整轮成本说成一步');
 assert.equal(executed[0].name, 'read_file');
 assert.equal(executed[0].args.path, 'main.tex');
 assert.equal(step, 2, '两步：工具调用 + 终答');

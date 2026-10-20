@@ -35,13 +35,21 @@ export function collectSearchFiles(tabs, disk) {
  * @returns {ok, error?, matches: [{path, line, text, from, to}], fileCount, truncated}
  *   line 为 0 起；from/to 是行内命中区间（高亮用）。超过 maxTotal 截断。
  */
-export function searchInFiles(files, { query, regex = false, matchCase = false, wholeWord = false, maxPerFile = 50, maxTotal = 500 }) {
+/**
+ * 在文件清单里搜索。
+ * @param timeBudgetMs 墙钟预算（默认 0=不限）：正则由模型写，逐行同步 exec，
+ *   一条病态模式就能冻住标签页。守卫只管得住认得出的形态，这条兜住其余全部形态。
+ *   默认关闭是为了让编辑器的用户搜索与单测保持确定性，只由不可信调用方传入。
+ */
+export function searchInFiles(files, { query, regex = false, matchCase = false, wholeWord = false, maxPerFile = 50, maxTotal = 500, timeBudgetMs = 0 }) {
   const q = String(query || '');
   if (!q) return { ok: true, matches: [], fileCount: 0, truncated: false };
   const built = buildPattern(q, { regex, wholeWord, matchCase });
   if (!built.pattern) return { ok: false, error: 'invalid', matches: [], fileCount: 0, truncated: false };
   const re = new RegExp(built.pattern.source, built.pattern.flags.includes('g') ? built.pattern.flags : built.pattern.flags + 'g');
 
+  const deadline = timeBudgetMs > 0 ? Date.now() + timeBudgetMs : 0;
+  let timedOut = false;
   const matches = [];
   let truncated = false;
   const filesWithHit = new Set();
@@ -51,6 +59,8 @@ export function searchInFiles(files, { query, regex = false, matchCase = false, 
     const lines = text.split('\n');
     let hits = 0;
     for (let li = 0; li < lines.length; li++) {
+      // 每 32 行看一次表：Date.now 不必逐行调。超时就把已找到的交出去，truncated 让调用方说明
+      if (deadline && (li & 31) === 0 && Date.now() > deadline) { timedOut = true; break; }
       const line = lines[li];
       re.lastIndex = 0;
       let m;
@@ -72,7 +82,8 @@ export function searchInFiles(files, { query, regex = false, matchCase = false, 
       }
       if (hits >= maxPerFile || matches.length >= maxTotal) break;
     }
+    if (timedOut) break;
     if (matches.length >= maxTotal) { truncated = true; break; }
   }
-  return { ok: true, matches, fileCount: filesWithHit.size, truncated };
+  return { ok: true, matches, fileCount: filesWithHit.size, truncated: truncated || timedOut };
 }

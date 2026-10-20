@@ -70,7 +70,7 @@ const task = () => {
 
 /* ---------- 一次独立请求 ---------- */
 {
-  const channel = { protocol: 'openai', baseUrl: 'http://mock.test/v1', chatModel: 'mock-model', apiKey: '' };
+  const channel = { protocol: 'openai', baseUrl: "http://127.0.0.1:8788/v1", chatModel: 'mock-model', apiKey: '' };
   let body = null;
   globalThis.fetch = async (u, opts) => {
     body = JSON.parse(opts.body);

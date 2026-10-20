@@ -52,6 +52,18 @@ function clampInt(v, min, max, dflt) {
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
 }
 
+// 逐轮用量累加：一轮 Agent 几十步，覆盖成最后一步等于把整轮成本说成一步
+// （界面按 input+output 显示实测 token，cached 也要按步并起来）
+function addUsage(a, b) {
+  if (!b) return a;
+  if (!a) return { input: 0, output: 0, cached: 0, ...b };
+  return {
+    input: (a.input || 0) + (b.input || 0),
+    output: (a.output || 0) + (b.output || 0),
+    cached: (a.cached || 0) + (b.cached || 0),
+  };
+}
+
 // 布尔项只认明确的真假：undefined/损坏数据回默认值，别把「没写过」读成 false
 function boolOf(v, dflt) {
   if (v === undefined || v === null) return dflt;
@@ -129,7 +141,7 @@ function briefArgs(a) {
  *   activePath?: () => string,  // 活动文档路径：省略 path 的改动手要靠它判断落点
  *   onTask?: (view) => void,    // 任务状态发布给界面（计划卡与回滚入口）
  * }}
- * @returns {Promise<{usage: any|null, task: object}>}  最后一步的 usage 与任务小结
+ * @returns {Promise<{usage: any|null, task: object}>}  整轮累加的 usage 与任务小结
  */
 export async function runAgentLoop(opts) {
   const {
@@ -236,7 +248,7 @@ export async function runAgentLoop(opts) {
       }
       throw e;
     }
-    usage = res.usage || usage;
+    usage = addUsage(usage, res.usage);
 
     const { calls, bad } = parseToolCalls(res.content);
     const badErrs = bad.map(raw => ({

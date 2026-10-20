@@ -68,6 +68,25 @@ ok(r.matches.length === 3, 'CJK 默认子串命中：' + r.matches.length);
 r = searchInFiles(cjk, { query: '注意力', wholeWord: true });
 ok(r.matches.length === 1, '整词边界按 \\p{L} 判定：只有空格分隔的首行命中（「与注意力」「注意力度」排除）：' + r.matches.length);
 
+console.log('== 墙钟预算（模型写的病态正则会逐行同步 exec，冻住标签页）==');
+{
+  // 100 行，needle 在第 5 行与第 90 行：假时钟每次调用推进 400ms，
+  // deadline = 第一次调用(400) + 1000 = 1400 → li=0(800) 放行、li=32(1200) 放行、li=64(1600) 收口
+  const many = [{ path: 'big.tex', text: Array.from({ length: 100 }, (_, i) => (i === 5 || i === 90 ? 'zzz' : 'x')).join('\n') }];
+  const realNow = Date.now;
+  let clock = 0;
+  Date.now = () => (clock += 400);
+  try {
+    const timed = searchInFiles(many, { query: 'zzz', timeBudgetMs: 1000 });
+    ok(timed.truncated === true, '超预算要标 truncated，让调用方说明结果不全');
+    ok(timed.matches.length === 1 && timed.matches[0].line === 5,
+      '预算内的那部分照常交出，第 90 行的命中被丢掉：' + JSON.stringify(timed.matches.map(m => m.line)));
+  } finally { Date.now = realNow; }
+  // 默认不限：调用方不传预算时行为完全不变（编辑器的用户搜索与单测保持确定性）
+  const plain = searchInFiles(many, { query: 'zzz' });
+  ok(plain.matches.length === 2 && plain.truncated === false, '默认无预算：两条命中都交出');
+}
+
 console.log('== 新增文案双语完整 ==');
 for (const key of ['side.search', 'm.gSearch', 'gs.title', 'gs.placeholder', 'gs.go', 'gs.scope', 'gs.noFolder', 'gs.none', 'gs.count', 'gs.truncated']) {
   ok(typeof DICT.en[key] === 'string' && DICT.en[key].length > 0, '英文文案存在: ' + key);
