@@ -754,6 +754,9 @@ body,
 .pl-mobile #chatPanel .chat-msg-acts button { min-height: 32px; min-width: 32px; font-size: 14px; }
 .pl-mobile #chatPanel .cs-item { min-height: 44px; }
 .pl-mobile #chatPanel .cs-del { min-width: 40px; font-size: 15px; }
+/* 计划卡折叠钮：原生小箭头在触屏上只有 11px，给到可点的方形区域 */
+.pl-mobile #chatPanel .ap-fold { min-width: 34px; min-height: 34px; font-size: 16px; }
+.pl-mobile #chatPanel .agent-plan { max-height: 34%; }
 
 /* 用量条：轨道先占整行，百分比与「压缩」按钮再同行，避免三块挤成竖排 */
 .pl-mobile #chatPanel .ctx-bar {

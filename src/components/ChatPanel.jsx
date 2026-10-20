@@ -15,6 +15,7 @@ import { thinkingSwitch } from '../llm.js';
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 const NEAR_BOTTOM = 80;    // 距底部小于此像素才视为「贴着底部」，自动跟随只在这个范围内生效
+const PLAN_OPEN_KEY = 'paperlite.chat.planOpen.v1';   // 计划卡折叠偏好（跨会话保留）
 
 // scrollHeight 会随流式增长，所以这个值必须在滚动发生的那一刻读，不能缓存
 const gapToBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -37,6 +38,12 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const [note, setNote] = useState('');   // 状态栏短暂提示（压缩结果等）
   const [agentTask, setAgentTask] = useState(null);  // 本轮 Agent 的任务状态（计划卡与回滚入口）
   const [showSessions, setShowSessions] = useState(false);  // 会话列表浮层
+  // 计划卡默认展开，但可以折成一行——它压着对话区，长任务跑完更没必须一直摊开
+  const [planOpen, setPlanOpen] = useState(() => {
+    try { return localStorage.getItem(PLAN_OPEN_KEY) !== '0'; } catch (e) { return true; }
+  });
+  const planPhaseRef = useRef('');
+  const manualPlanRef = useRef(false);   // 本轮里用户手动折/展过 → 不再自动改它的状态
   const abortRef = useRef(null);
   const noteTimer = useRef(null);
   const listRef = useRef(null);
@@ -175,6 +182,16 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   // 对话与任务状态的落库在宿主侧（useChatSessions 是会话的唯一所有者）：
   // 面板只负责改 messages，不自己决定「存哪、存几份、什么时候淘汰」。
 
+  // 任务收口后自动折成一行：计划卡的价值在执行中（看进度、看哪步被拦），
+  // 跑完还摊着半屏就是挡对话区。用户在收口后手动展开过，就不再自动折。
+  useEffect(() => {
+    const phase = (agentTask && agentTask.phase) || '';
+    const prev = planPhaseRef.current;
+    planPhaseRef.current = phase;
+    if (!phase || phase === prev) return;
+    if ((phase === 'completed' || phase === 'tripped') && !manualPlanRef.current) setPlanOpen(false);
+  }, [agentTask]);
+
   if (!open) return null;
 
   // 拖拽：按下标题栏（按钮除外）浮窗化并跟随指针，双击标题回停靠（同图样式面板）
@@ -285,6 +302,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     setReqUsage(null);
     setRealUsage(null);
     setAgentTask(null);
+    manualPlanRef.current = false;   // 新一轮开始时，收口自动折叠的许可重新生效
     setBusy(true); busyRef.current = true;
     const ac = new AbortController();
     abortRef.current = ac;
@@ -502,6 +520,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     await onDeleteSession(s.id);
   };
   const when = (ts) => (ts ? new Date(ts).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
+  // 折叠偏好跨会话保留：这是界面习惯，不是本轮任务状态
+  const foldPlan = (v) => { setPlanOpen(v); manualPlanRef.current = true; try { localStorage.setItem(PLAN_OPEN_KEY, v ? '1' : '0'); } catch (e) { /* 存不下只是下次回到默认 */ } };
 
   // 正文里的 ```tool 块渲染为「工具调用」卡片（执行状态看紧随的 tool-result 卡片）；
   // 先统一 strip：流式中未闭合的 tool 块也不会把半截 JSON 露到正文
@@ -612,39 +632,46 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       {/* 任务状态面板：计划、每步的交付物与完成判定、快照回滚入口。
           它是框架持有的状态，不是模型自述——所以模型说「我做完了」不算，标记要落在计划上。 */}
       {mode === 'agent' && agentTask && agentTask.steps && agentTask.steps.length ? (
-        <div className="agent-plan">
+        <div className={'agent-plan' + (planOpen ? '' : ' folded')}>
           <div className="ap-head">
+            <button className="ap-fold" aria-expanded={planOpen ? 'true' : 'false'}
+              title={t(planOpen ? 'agent.planFold' : 'agent.planExpand')}
+              onClick={() => foldPlan(!planOpen)}>{planOpen ? '▾' : '▸'}</button>
             <b>{t('agent.planCard')}</b>
-            <span className="ap-phase">{t('agent.planPhase', { phase: t('agent.phase.' + agentTask.phase) })}</span>
             <span className="ap-count">{agentTask.steps.filter(s => s.status === 'done').length}/{agentTask.steps.length}</span>
+            <span className="ap-phase">{t('agent.planPhase', { phase: t('agent.phase.' + agentTask.phase) })}</span>
             <span className="ap-quota" title={t('agent.planQuotaTip')}>
               {t('agent.planCalls')} {agentTask.counters.calls} · {t('agent.planWrites')} {agentTask.counters.writes} · {t('agent.planBlocked')} {agentTask.counters.blocked}
             </span>
           </div>
-          <ol className="ap-steps">
-            {agentTask.steps.map(s => (
-              <li key={s.n} className={'ap-step ' + s.status + (s.n === agentTask.currentStep ? ' cur' : '')}>
-                <span className="ap-mark">{({ done: '✓', doing: '▶', blocked: '!', skipped: '–' })[s.status] || '○'}</span>
-                <span className="ap-title">{s.n}. {s.title}</span>
-                <span className="ap-st">{t('agent.plan' + s.status[0].toUpperCase() + s.status.slice(1))}</span>
-                <div className="ap-meta">
-                  {s.deliverable}｜{s.doneWhen}
-                  {s.deps && s.deps.length ? ' ← ' + s.deps.join(', ') : ''}
-                  {s.note ? ' · ' + s.note : ''}
+          {planOpen && (
+            <>
+              <ol className="ap-steps">
+                {agentTask.steps.map(s => (
+                  <li key={s.n} className={'ap-step ' + s.status + (s.n === agentTask.currentStep ? ' cur' : '')}>
+                    <span className="ap-mark">{({ done: '✓', doing: '▶', blocked: '!', skipped: '–' })[s.status] || '○'}</span>
+                    <span className="ap-title">{s.n}. {s.title}</span>
+                    <span className="ap-st">{t('agent.plan' + s.status[0].toUpperCase() + s.status.slice(1))}</span>
+                    <div className="ap-meta">
+                      {s.deliverable}｜{s.doneWhen}
+                      {s.deps && s.deps.length ? ' ← ' + s.deps.join(', ') : ''}
+                      {s.note ? ' · ' + s.note : ''}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              {agentTask.snapshots && agentTask.snapshots.length ? (
+                <div className="ap-rolls">
+                  {agentTask.snapshots.map((sn, si) => (
+                    <button key={si} className="btn sm" disabled={busy || !agentEnv.restore}
+                      title={t('agent.rollbackTip')} onClick={() => rollbackTo(sn)}>
+                      ⟲ {t('agent.rollbackTo', { n: sn.step })}
+                    </button>
+                  ))}
                 </div>
-              </li>
-            ))}
-          </ol>
-          {agentTask.snapshots && agentTask.snapshots.length ? (
-            <div className="ap-rolls">
-              {agentTask.snapshots.map((sn, si) => (
-                <button key={si} className="btn sm" disabled={busy || !agentEnv.restore}
-                  title={t('agent.rollbackTip')} onClick={() => rollbackTo(sn)}>
-                  ⟲ {t('agent.rollbackTo', { n: sn.step })}
-                </button>
-              ))}
-            </div>
-          ) : null}
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
 
