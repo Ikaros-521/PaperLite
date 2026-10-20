@@ -90,6 +90,13 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     if (stickRef.current && !holdRef.current) followBottom(el);
   }, [messages]);
 
+  // 默认走 Agent 模式：桌面挂上 agentEnv 就以工具代理为先（能读项目、能改文档），
+  // 用户手动切过钮之后就不再自动改它。移动端不传 agentEnv，自然留在普通对话。
+  const touchedModeRef = useRef(false);
+  useEffect(() => {
+    if (agentEnv && !touchedModeRef.current) setMode('agent');
+  }, [agentEnv]);
+
   // 内层的代码块 / 思维链 / 工具结果都是自己的滚动区，且都在列表内部，所以监听挂在捕获
   // 阶段；处理函数只读列表自身的位置，内层那些滚动事件因此等同于没发生。
   useEffect(() => {
@@ -857,7 +864,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           {agentEnv && (
             <button className={'ct-chip' + (mode === 'agent' ? ' on' : '')}
               disabled={busy || externalBusy || compacting}
-              onClick={() => setMode(m => (m === 'agent' ? 'chat' : 'agent'))}
+              onClick={() => { touchedModeRef.current = true; setMode(m => (m === 'agent' ? 'chat' : 'agent')); }}
               title={t('agent.toggleTip')}>
               🤖 {t('agent.toggle')}
             </button>
