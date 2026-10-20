@@ -12,6 +12,10 @@ import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS } from '../workspace/a
  * 载荷装配与 token 口径统一在 context.js，agent 工具调用共用同一预算。 */
 const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
+const NEAR_BOTTOM = 80;    // 距底部小于此像素才视为「贴着底部」，自动跟随只在这个范围内生效
+
+// scrollHeight 会随流式增长，所以这个值必须在滚动发生的那一刻读，不能缓存
+const gapToBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight;
 
 export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null }) {
   const t = useT();
@@ -32,6 +36,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const abortRef = useRef(null);
   const noteTimer = useRef(null);
   const listRef = useRef(null);
+  const stickRef = useRef(true);   // 是否跟随到底部（用户上滚超出阈值即关闭）
+  const holdRef = useRef(false);   // 指针按住中：拖滚动条 / 选文本时不抢滚动
+  const lastStRef = useRef(0);     // 最后一次「我们或用户」放下的滚动位置
   const taRef = useRef(null);
   const panelRef = useRef(null);
   const busyRef = useRef(false);          // inject 自动发送时读最新 busy，不依赖 state 时机
@@ -46,9 +53,63 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     [channels, activeChannelId]
   );
 
+  // 用户把视图往上推走 = 想回看，关掉跟随；推回来落在阈值内 = 想跟上，重新跟随。
+  // 参照物是 lastStRef（我们上次放下的位置）而不是「上一个滚动事件的值」：滚动事件是异步
+  // 派发的，流式跳底会先一步把用户那次上滚盖掉，等事件真的到了，位置已经是我们写回去的底部，
+  // 只看事件流会漏判（触屏惯性、键盘、无按压的拖动都是这条路径）。
+  const syncStick = (el) => {
+    const st = el.scrollTop;
+    const near = gapToBottom(el) <= NEAR_BOTTOM;
+    if (st < lastStRef.current - 2) { if (!near) stickRef.current = false; }
+    else if (st > lastStRef.current + 2 && near) stickRef.current = true;
+    lastStRef.current = st;
+  };
+
+  const followBottom = (el) => {
+    el.scrollTop = el.scrollHeight;
+    lastStRef.current = el.scrollTop;
+  };
+
+  // 流式回复每个增量都会换一次 messages 引用，无条件跳底会把上滚回看的用户一直拽回底部。
+  // 先吸收掉两次渲染之间用户可能做过的滚动，再决定要不要跟随；按住指针时一律不跳。
   useEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+    const el = listRef.current;
+    if (!el) return;
+    syncStick(el);
+    if (stickRef.current && !holdRef.current) followBottom(el);
   }, [messages]);
+
+  // 内层的代码块 / 思维链 / 工具结果都是自己的滚动区，且都在列表内部，所以监听挂在捕获
+  // 阶段；处理函数只读列表自身的位置，内层那些滚动事件因此等同于没发生。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return undefined;
+    const onScroll = () => syncStick(el);
+    lastStRef.current = el.scrollTop;
+    el.addEventListener('scroll', onScroll, true);
+    return () => el.removeEventListener('scroll', onScroll, true);
+  }, [open]);
+
+  // 指针离开列表（在列表外松开、或浏览器丢事件）也要解除按住，否则跟随会永久关掉。
+  // onPointerUp 挂在列表上收不到列表外的松开事件，所以用窗口级监听兜底。
+  useEffect(() => {
+    const release = () => {
+      if (!holdRef.current) return;
+      holdRef.current = false;
+      const el = listRef.current;
+      // 松手只看「跟随」这个意图，不按实时 gap 重算：按住不动时流式高度照样会把 gap 顶过
+      // 阈值，那是内容长出来的，不是用户离开了底部（真滚动已经由 syncStick 关掉跟随了）
+      if (el && stickRef.current) followBottom(el);
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      window.removeEventListener('blur', release);
+    };
+  }, []);
 
   // 外部注入提示词：诊断红点预填并聚焦；划词翻译/润色自动发送（auto 为完整问题文本）。
   // scope/mode 顺带切换（如划词动作强制 selection/chat）——注意 setScope/setMode 是
@@ -258,6 +319,8 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
     setInput('');
     setNote('');
+    // 发送是用户主动动作：无条件回到底部并恢复跟随（上滚关掉的跟随在这里重新打开）
+    stickRef.current = true; holdRef.current = false;
     // 自动发送的注入会带 scope/mode 覆盖（setScope/setMode 要下一拍才生效，不能吃旧闭包值）
     const useMode = (opts && opts.mode) || mode;
     if (useMode === 'agent' && agentEnv) return runAgent(q);
@@ -452,7 +515,12 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         {channel && channel.cot && <span className="cot-badge" title={t('chat.cotTip')}>{t('chat.cot')}</span>}
       </div>
 
-      <div className="chat-list" ref={listRef}>
+      <div
+        className="chat-list"
+        ref={listRef}
+        onWheel={e => { if (e.deltaY < 0) stickRef.current = false; }}
+        onPointerDown={() => { holdRef.current = true; }}
+      >
         {!messages.length && (
           channel ? (
             <div className="chat-empty">
