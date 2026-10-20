@@ -4,6 +4,7 @@ import * as ctx from '../context.js';
 import { showAlert as alert, showConfirm } from '../dialogs.js';
 import { stripToolBlocks, parseToolCalls } from '../workspace/agentTools.js';
 import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS } from '../workspace/agentRuntime.js';
+import { thinkingSwitch } from '../llm.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
  * 代码块操作（复制 / 替换选区 / 插入光标 / 替换全文）、外部提示词注入（诊断点一键修复、
@@ -17,7 +18,7 @@ const NEAR_BOTTOM = 80;    // 距底部小于此像素才视为「贴着底部�
 // scrollHeight 会随流式增长，所以这个值必须在滚动发生的那一刻读，不能缓存
 const gapToBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight;
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -384,6 +385,15 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     else if (!r.restored) flashNote(t('agent.rollbackFail'));
   };
 
+  // 思维链就地开关：改的是「这个渠道」的配置（与设置弹窗同一份存储），
+  // 关掉时对支持的渠道还会发显式关闭字段（见 llm.js 的 disableThinking）。
+  // 切换后清掉用量：cot 影响输出预留比例，旧数字对新口径没有意义。
+  const toggleCot = () => {
+    if (!channel || !setChannels) return;
+    setChannels(cs => (cs || []).map(c => (c.id === channel.id ? { ...c, cot: !c.cot } : c)));
+    setReqUsage(null); setRealUsage(null);
+  };
+
   const send = async (preset, opts) => {
     // preset 只接受字符串：onClick={send} 会把事件对象传进来，绝不能当成提问文本
     const q = (typeof preset === 'string' ? preset : input).trim();
@@ -548,47 +558,6 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         </span>
       </div>
 
-      <div className="chat-config">
-        <select value={channel ? channel.id : ''} onChange={e => {
-          setActiveChannelId(e.target.value);
-          // 换渠道就换口径：旧渠道的实测/装配用量对新渠道的窗口没有意义，清掉防误导
-          setReqUsage(null); setRealUsage(null);
-        }}>
-          {!channels.length && <option value="">{t('chat.noChannelOpt')}</option>}
-          {channels.map(c => <option key={c.id} value={c.id}>{c.name} · {c.chatModel || t('chat.noModel')}</option>)}
-        </select>
-        {agentEnv && (
-          <button className={'agent-toggle' + (mode === 'agent' ? ' on' : '')}
-            disabled={busy || externalBusy || compacting}
-            onClick={() => setMode(m => (m === 'agent' ? 'chat' : 'agent'))}
-            title={t('agent.toggleTip')}>
-            🤖 {t('agent.toggle')}
-          </button>
-        )}
-        {mode === 'agent' && agentEnv ? (
-          // 权限档位就地可切：跑一轮 Agent 时才发现「每次审核」在设置弹窗里，
-          // 等于要么打断工作去开设置、要么整轮免确认
-          <span className="agent-row">
-            <span className="agent-badge" title={t('agent.badgeTip')}>{t('agent.badge')}</span>
-            {onAgentApproval && (
-              <select className="agent-lv" value={(agentCfg && agentCfg.approval) || 'auto'}
-                onChange={e => onAgentApproval(e.target.value)}
-                title={t('agent.lvTip')} disabled={busy}>
-                {AGENT_APPROVALS.map(lv => <option key={lv} value={lv}>{t('agent.lv' + lv[0].toUpperCase() + lv.slice(1))}</option>)}
-              </select>
-            )}
-          </span>
-        ) : (
-          <select value={scope} onChange={e => setScope(e.target.value)} title={t('chat.scopeTip')}>
-            <option value="selection">{t('chat.scopeSel')}</option>
-            <option value="paragraph">{t('chat.scopePara')}</option>
-            <option value="full">{t('chat.scopeFull')}</option>
-            <option value="retrieve">{t('chat.scopeRag')}</option>
-          </select>
-        )}
-        {channel && channel.cot && <span className="cot-badge" title={t('chat.cotTip')}>{t('chat.cot')}</span>}
-      </div>
-
       {/* 任务状态面板：计划、每步的交付物与完成判定、快照回滚入口。
           它是框架持有的状态，不是模型自述——所以模型说「我做完了」不算，标记要落在计划上。 */}
       {mode === 'agent' && agentTask && agentTask.steps && agentTask.steps.length ? (
@@ -704,19 +673,30 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           <div key={i} className={'chat-msg ' + m.role}>
             {m.role === 'user' && m.ctxNote && <div className="chat-ctx">{m.ctxNote}</div>}
             {m.role === 'assistant' && m.reasoning ? (
-              (() => {
-                // 折叠态按内容片段记忆而不是消息下标：压缩/清空会让下标漂移，
-                // 展开态会串到别的消息上
-                const rk = (m.reasoning || '').slice(0, 40);
-                return (
-                  <div className="chat-cot">
-                    <button className="cot-toggle" onClick={() => setShowReasoning(s => ({ ...s, [rk]: !s[rk] }))}>
-                      {t('chat.cotToggle')} {showReasoning[rk] ? '▾' : '▸'}
-                    </button>
-                    {showReasoning[rk] && <div className="cot-body">{m.reasoning}</div>}
-                  </div>
-                );
-              })()
+              channel && channel.cot ? (
+                (() => {
+                  // 折叠态按内容片段记忆而不是消息下标：压缩/清空会让下标漂移，
+                  // 展开态会串到别的消息上
+                  const rk = (m.reasoning || '').slice(0, 40);
+                  return (
+                    <div className="chat-cot">
+                      <button className="cot-toggle" onClick={() => setShowReasoning(s => ({ ...s, [rk]: !s[rk] }))}>
+                        {t('chat.cotToggle')} {showReasoning[rk] ? '▾' : '▸'}
+                      </button>
+                      {showReasoning[rk] && <div className="cot-body">{m.reasoning}</div>}
+                    </div>
+                  );
+                })()
+              ) : (
+                // 开关关着就不画思维链块，但要说清「为什么这条消息还有推理内容」：
+                // 有些模型（GLM-4.5/Qwen3 默认思考、R1 只会思考）不是提示词能关掉的，
+                // 不说清就等于把「状态不同步」从界面挪进了用户脑子里
+                <div className="chat-cot-off" title={t('chat.cotOffWhy')}>
+                  💭 {thinkingSwitch(channel && channel.chatModel)
+                    ? t('chat.cotOffSwitchable', { n: m.reasoning.length })
+                    : t('chat.cotOffAlways', { n: m.reasoning.length })}
+                </div>
+              )
             ) : null}
             {m.content ? renderWithTools(m.content, i) : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
           </div>
@@ -755,7 +735,50 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
           }}
         />
-        <div className="chat-input-acts">
+        {/* 输入框下方的快捷开关条（DeepSeek 那种排布）：发这一句之前要确认的事，
+            都放在视线已经停着的地方，而不是面板顶上 */}
+        <div className="chat-tools">
+          <select className="ct-chip" value={channel ? channel.id : ''} onChange={e => {
+            setActiveChannelId(e.target.value);
+            // 换渠道就换口径：旧渠道的实测/装配用量对新渠道的窗口没有意义，清掉防误导
+            setReqUsage(null); setRealUsage(null);
+          }} title={t('chat.chanTip')}>
+            {!channels.length && <option value="">{t('chat.noChannelOpt')}</option>}
+            {channels.map(c => <option key={c.id} value={c.id}>{c.name} · {c.chatModel || t('chat.noModel')}</option>)}
+          </select>
+          {mode === 'agent' && agentEnv ? (
+            // 权限档位就地可切：跑一轮 Agent 时才发现「每次审核」在设置弹窗里，
+            // 等于要么打断工作去开设置、要么整轮免确认
+            onAgentApproval && (
+              <select className="ct-chip" value={(agentCfg && agentCfg.approval) || 'auto'}
+                onChange={e => onAgentApproval(e.target.value)}
+                title={t('agent.lvTip')} disabled={busy}>
+                {AGENT_APPROVALS.map(lv => <option key={lv} value={lv}>{t('agent.lv' + lv[0].toUpperCase() + lv.slice(1))}</option>)}
+              </select>
+            )
+          ) : (
+            <select className="ct-chip" value={scope} onChange={e => setScope(e.target.value)} title={t('chat.scopeTip')}>
+              <option value="selection">{t('chat.scopeSel')}</option>
+              <option value="paragraph">{t('chat.scopePara')}</option>
+              <option value="full">{t('chat.scopeFull')}</option>
+              <option value="retrieve">{t('chat.scopeRag')}</option>
+            </select>
+          )}
+          {agentEnv && (
+            <button className={'ct-chip' + (mode === 'agent' ? ' on' : '')}
+              disabled={busy || externalBusy || compacting}
+              onClick={() => setMode(m => (m === 'agent' ? 'chat' : 'agent'))}
+              title={t('agent.toggleTip')}>
+              🤖 {t('agent.toggle')}
+            </button>
+          )}
+          <button className={'ct-chip' + (channel && channel.cot ? ' on' : '')}
+            disabled={!channel || !setChannels || busy}
+            onClick={toggleCot}
+            title={channel && channel.cot ? t('chat.cotOnTip') : t('chat.cotTip')}>
+            ◈ {t('chat.cotChip')}
+          </button>
+          <span className="ct-grow" />
           {busy
             ? <button className="btn sm" onClick={() => abortRef.current && abortRef.current.abort()}>{t('chat.stop')}</button>
             : <button className="btn sm primary" onClick={() => send()} disabled={!channel || externalBusy}>{t('chat.send')}</button>}

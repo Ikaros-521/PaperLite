@@ -1598,6 +1598,7 @@ export default function App() {
         open={chatOpen}
         onClose={() => setChatOpen(false)}
         inject={chatInject}
+        setChannels={setChannels}
         channels={channels}
         activeChannelId={activeChannelId}
         setActiveChannelId={setActiveChannelId}

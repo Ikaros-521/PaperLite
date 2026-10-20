@@ -292,23 +292,33 @@ body.cp-dragging::before {
   border: 0; background: none; cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; color: var(--ink-soft);
 }
 .cp-head-acts button:hover, .ch-acts button:hover { background: rgba(var(--accent-rgb), .08); color: var(--accent-deep); }
-.chat-config {
-  display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; align-items: center;
+/* 输入框下方的快捷工具条（照 DeepSeek 那种「输入框底下一排胶囊开关」的排布）：
+   渠道 / 上下文范围或审核档 / Agent / 思维链 / 发送。放这里而不是面板顶部，是因为
+   这些是「发这一句之前要确认的事」，视线本来就在输入框上；顶部那行留给标题与设置。 */
+.chat-tools { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; min-width: 0; }
+.ct-chip {
+  display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 10px; background: var(--paper); color: var(--ink-soft);
+  font-size: 11.5px; cursor: pointer; white-space: nowrap;
+  transition: border-color .12s, color .12s, background .12s;
 }
-.chat-config select {
-  border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; background: var(--paper); font-size: 12px; max-width: 150px; color: var(--ink);
+.ct-chip:hover:not(:disabled):not(.on) { border-color: var(--accent); color: var(--accent-deep); }
+.ct-chip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.ct-chip:disabled { opacity: .5; cursor: default; }
+/* 下拉做成胶囊：appearance:none 后自绘一个双三角，省掉各浏览器原样箭头的宽窄差 */
+select.ct-chip {
+  appearance: none; -webkit-appearance: none; max-width: 150px;
+  padding: 3px 18px 3px 10px; text-overflow: ellipsis; overflow: hidden;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-faint) 50%),
+    linear-gradient(135deg, var(--ink-faint) 50%, transparent 50%);
+  background-position: calc(100% - 9px) 51%, calc(100% - 6px) 51%;
+  background-size: 3px 3px, 3px 3px; background-repeat: no-repeat;
 }
-.cot-badge { font-size: 11px; color: var(--accent-deep); background: var(--badge-bg); border-radius: 4px; padding: 1px 6px; }
-/* Agent 模式开关与状态徽标 */
-.agent-toggle {
-  border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; background: var(--paper);
-  font-size: 12px; color: var(--ink-soft); cursor: pointer; transition: all .12s;
-}
-.agent-toggle:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-deep); }
-.agent-toggle.on {
-  background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600;
-}
-.agent-toggle:disabled { opacity: .5; cursor: default; }
+select.ct-chip.on { background-image:
+  linear-gradient(45deg, transparent 50%, var(--on-accent) 50%),
+  linear-gradient(135deg, var(--on-accent) 50%, transparent 50%); }
+.ct-grow { flex: 1 1 auto; min-width: 4px; }
 /* 验收评审卡片：另一个会话给出的结论，与执行内容视觉上分开（灰底 + 三条结论） */
 .chat-review {
   align-self: stretch; border: 1px solid var(--line); border-left: 3px solid var(--edge);
@@ -325,17 +335,6 @@ body.cp-dragging::before {
 .chat-review .cr-list .good::before { content: '· '; color: var(--ok); }
 .chat-review .cr-list .bad::before { content: '· '; color: var(--seal); }
 .chat-review .cr-body { margin-top: 4px; color: var(--ink-faint); white-space: pre-wrap; }
-.agent-badge {
-  font-size: 11px; color: var(--accent-deep); background: var(--badge-bg);
-  border-radius: 4px; padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
-}
-/* Agent 模式行：徽章 + 权限档位下拉（档位就地可切，不必去设置弹窗） */
-.agent-row { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.agent-lv {
-  font-size: 11px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px;
-  background: var(--paper); color: var(--ink-soft); max-width: 108px;
-}
-.agent-lv:disabled { opacity: .5; }
 /* Agent 工具调用 / 结果卡片 */
 .chat-tool-call {
   display: flex; align-items: center; gap: 6px; margin: 4px 0;
@@ -405,6 +404,11 @@ body.cp-dragging::before {
 .chat-msg.assistant { background: var(--hover); align-self: flex-start; max-width: 96%; }
 .chat-ctx { font-size: 11px; color: var(--ink-soft); margin-bottom: 4px; }
 .chat-cot { margin-bottom: 6px; }
+/* 思维链开关关着、但渠道仍吐推理时的一行说明：不展示内容，只交代为什么 */
+.chat-cot-off {
+  font-size: 11px; color: var(--ink-faint); background: var(--chrome);
+  border: 1px dotted var(--edge); border-radius: 6px; padding: 3px 8px; margin-bottom: 6px; cursor: help;
+}
 .cot-toggle {
   border: 0; background: none; color: var(--accent); font-size: 11.5px; cursor: pointer; padding: 0;
 }
@@ -430,7 +434,6 @@ body.cp-dragging::before {
   padding: 7px 9px; font-size: 12.8px; font-family: inherit; outline: none; background: var(--paper); color: var(--ink);
 }
 .chat-input textarea:focus { border-color: var(--accent); }
-.chat-input-acts { display: flex; justify-content: flex-end; margin-top: 5px; }
 
 /* ---------- 上下文用量状态栏 ---------- */
 .ctx-bar {

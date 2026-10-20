@@ -124,6 +124,7 @@ function ChatTab() {
           channels={ws.channels as never}
           activeChannelId={ws.activeChannelId}
           setActiveChannelId={ws.setActiveChannelId as never}
+          setChannels={ws.setChannels as never}
           onOpenSettings={ws.openSettings}
           buildContext={ws.buildContext}
           messages={ws.chatMessages as never}

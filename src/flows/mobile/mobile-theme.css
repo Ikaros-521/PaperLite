@@ -726,17 +726,27 @@ body,
   font-size: 15px;
 }
 
-/* 两个下拉并排在 390px 里会把模型名挤没，改为各占一行 */
-.pl-mobile #chatPanel .chat-config {
+/* 输入框下方的快捷开关条：窄屏里胶囊给到 44px 触控高度，
+   模型那一格单独占一行（并排会把模型名挤没），其余开关同行换行 */
+.pl-mobile #chatPanel .chat-tools {
   gap: 8px;
-  padding: 10px 12px;
+  margin-top: 8px;
 }
 
-.pl-mobile #chatPanel .chat-config select {
-  flex: 1 1 100%;
-  max-width: none;
+.pl-mobile #chatPanel .ct-chip {
   min-height: 44px;
-  font-size: 14px;
+  padding: 6px 14px;
+  font-size: 13.5px;
+  border-radius: 12px;
+}
+
+.pl-mobile #chatPanel .chat-tools select.ct-chip {
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+.pl-mobile #chatPanel .chat-tools select.ct-chip:first-child {
+  flex: 1 1 100%;
 }
 
 /* 用量条：轨道先占整行，百分比与「压缩」按钮再同行，避免三块挤成竖排 */
