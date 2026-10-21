@@ -63,6 +63,9 @@ const SIDEBAR_MIN = 150, SIDEBAR_MAX = 520, SIDEBAR_DEFAULT = 232;
 const SPLIT_MIN = 15, SPLIT_MAX = 85, SPLIT_DEFAULT = 52;
 // 侧栏拖到最宽时，仍要给编辑区 + 预览区留出的最小空间
 const PANES_KEEP = 350;
+// 「本标签没有已忽略问题」的稳定空数组：写成 [] 字面量每次 render 都是新引用，
+// 会把依赖它的 memo 全部作废（诊断标记因此每键重建）
+const NO_FPS = [];
 const clampNum = (v, lo, hi, dflt) => (Number.isFinite(v) && v > 0 ? Math.min(hi, Math.max(lo, v)) : dflt);
 let lastRenderMs = 0;
 
@@ -840,17 +843,20 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [deferred]);
   const diagnostics = useMemo(() => (isTexLike ? lintLaTeX(lintValue) : []), [lintValue, isTexLike, lang]);
-  const allIssues = collectIssues(
+  const compileIssues = useMemo(() => currentCompileErrors(compileResult, activeTab?.id), [compileResult, activeTab?.id]);
+  const allIssues = useMemo(() => collectIssues(
     diagnostics,
     deferred === activeValue ? (latexResult?.warnings || []) : [],
-    currentCompileErrors(compileResult, activeTab?.id)
-  );
+    compileIssues
+  ), [diagnostics, deferred, activeValue, latexResult, compileIssues]);
   // 忽略按「问题说了什么 + 那一行的内容」记忆：改别处不该让刚清空的噪音整批复活
   const fpOf = useCallback(d => issueFingerprint(d, line => {
     try { return activeTab?.doc?.getLine(line) || ''; } catch (e) { return ''; }
   }), [activeTab?.doc]);
-  const dismissed = dismissedIssues?.tabId === activeTab?.id ? dismissedIssues.fps : [];
-  const visibleIssues = allIssues.filter(d => !dismissed.includes(fpOf(d)));
+  const dismissed = dismissedIssues?.tabId === activeTab?.id ? dismissedIssues.fps : NO_FPS;
+  // visibleIssues 会当 EditorPane 的 effect 依赖（[diagnostics, doc]）用：每次 render 给新数组
+  // 等于每敲一键就把全部诊断标记拆掉重建（一条一个 createElement + setGutterMarker + markText）
+  const visibleIssues = useMemo(() => allIssues.filter(d => !dismissed.includes(fpOf(d))), [allIssues, dismissed, fpOf]);
   const issuesRef = useRef(visibleIssues); issuesRef.current = visibleIssues;
   const dismissIssues = ids => setDismissedIssues({
     tabId: activeTab?.id,
