@@ -160,13 +160,13 @@ globalThis.localStorage = {
   setItem: (k, v) => { memStore[k] = String(v); },
 };
 saveAgentSettings({ maxSteps: 999, keepResults: 0 });
-assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1, approval: 'auto', plan: true, review: false, persist: true }, '越界值要钳制到合法区间');
+assert.deepEqual(loadAgentSettings(), { maxSteps: 50, keepResults: 1, approval: 'ask', plan: true, review: false, persist: true }, '越界值要钳制到合法区间');
 saveAgentSettings({ maxSteps: 12, keepResults: 4, approval: 'ask', plan: false });
 assert.deepEqual(loadAgentSettings(), { maxSteps: 12, keepResults: 4, approval: 'ask', plan: false, review: false, persist: true }, '合法值要原样读回');
 saveAgentSettings({ approval: 'yolo-full-access' });
-assert.equal(loadAgentSettings().approval, 'auto', '野档位回默认档，不能因为拼错就变成完全访问');
+assert.equal(loadAgentSettings().approval, 'ask', '野档位回默认档，不能因为拼错就变成免确认或完全访问');
 memStore['paperlite.agentSettings.v1'] = '{oops';
-assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5, approval: 'auto', plan: true, review: false, persist: true }, '损坏数据回退默认值');
+assert.deepEqual(loadAgentSettings(), { maxSteps: 15, keepResults: 5, approval: 'ask', plan: true, review: false, persist: true }, '损坏数据回退默认值');
 delete globalThis.localStorage;
 
 // 单步工具数与整轮改盘次数：畸形或自我循环的输出不该一口气改几十处，
@@ -236,6 +236,28 @@ delete globalThis.localStorage;
   assert.equal(capped.ran, AGENT_WRITES_PER_RUN, '默认档整轮改盘封顶');
   const wide = await run({ approval: 'full', approve: true, steps: 3, perStep: 10 });
   assert.equal(wide.ran, AGENT_TOOLS_PER_STEP * 3, '「完全访问」不受改盘次数限制');
+}
+
+/* create_file 成功回执要落进任务状态。这一条原本是漏的：agentRuntime 调了 noteCreate
+   却没 import，于是「模型成功建了文件」变成 ReferenceError → 整轮 phase=failed，
+   而文件其实已经写进用户目录。上面所有用例的执行器都只返回 ok 给 edit_file/read_file，
+   所以这条分支从来没被跑过。 */
+{
+  const views = [];
+  globalThis.fetch = async () => sseResponse('```tool\n{"tool":"create_file","args":{"path":"new/sec.tex","content":"x"}}\n```');
+  const ran = await runAgentLoop({
+    channel, messages: [{ role: 'user', content: 'go' }], system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum',
+    budget: 6000, maxSteps: 2, keepResults: 9, approval: 'auto',
+    onTask: v => views.push(v),
+    execute: async (name) => ({ ok: true, result: '已创建', file: name === 'create_file' ? 'new/sec.tex' : '', versionId: '' }),
+    onUpdate: () => {},
+  });
+  globalThis.fetch = realFetch;
+  const last = views[views.length - 1] || {};
+  assert.ok(Array.isArray(last.touched) && last.touched.includes('new/sec.tex'),
+    'create_file 成功后新建文件要记进 touched（回滚入口靠它）');
+  assert.notEqual(last.phase, 'failed', 'create_file 成功轮不该把任务判成失败');
+  assert.ok(ran, 'runAgentLoop 正常返回');
 }
 
 /* ---------- 框架侧拦截：非法参数不进执行器、同内容重读瘦身、重复失败关掉死路 ---------- */
