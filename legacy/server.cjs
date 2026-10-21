@@ -12,10 +12,15 @@ const MIME = {
 };
 
 http.createServer(function (req, res) {
-  var url = decodeURIComponent((req.url || '/').split('?')[0]);
+  // decodeURIComponent 对坏百分号编码（GET /%）抛 URIError：这个进程没有
+  // uncaughtException 兜底，一个坏请求就能把它带走
+  var url;
+  try { url = decodeURIComponent((req.url || '/').split('?')[0]); }
+  catch (e) { res.writeHead(400); return res.end('Bad request'); }
   if (url === '/') url = '/index.html';
   var file = path.normalize(path.join(ROOT, url));
-  if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
+  // 前缀要对齐到目录边界：只 startsWith(ROOT) 时，同级的 legacy_backup 也能钻进来
+  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, function (err, data) {
     if (err) { res.writeHead(404); return res.end('Not Found'); }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream' });

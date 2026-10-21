@@ -67,6 +67,9 @@ function availableEngines() {
 const MAX_CAPTURE = 2 * 1024 * 1024;
 const MAX_LOG = 1024 * 1024;
 const MAX_PDF = 50 * 1024 * 1024;
+// Mock 嵌入端点：一条输入产 64 维向量（JSON 约 1KB），不限条数就是 20MB 请求放大成
+// GB 级响应、顺带把事件循环堵住几分钟；单条也按字符封顶，Mock 只做词频哈希，砍掉不亏
+const MAX_EMBED_INPUTS = 64, MAX_EMBED_CHARS = 200000;
 
 function killTree(p) {
   if (process.platform === 'win32') {
@@ -151,18 +154,31 @@ function parseLog(log) {
 // 这里把「明写的越界路径」挡掉。挡不住的用宏拼出来的文件名，也挡不住 plain TeX 的
 // \openin15=…\relax 这类不带花括号的原语——真正的边界仍然是只监听 127.0.0.1 加
 // Origin 白名单（外部页面读不走响应），这条只是把本机文件内容进日志这扇门关上。
-const FILE_ARG_RE = /\\(?:input|include|subfile|subfileinclude|import|subimport|bibliography|addbibresource|includegraphics|VerbatimInput|verbatiminput|lstinputlisting|includepdf)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+const FILE_ARG_RE = /\\(?:input|include|subfile|subfileinclude|import|subimport|bibliography|addbibresource|includegraphics|VerbatimInput|verbatiminput|lstinputlisting|includepdf|InputIfFileExists)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+// 花括号白名单漏掉两类写法：不带花括号的读文件（\input C:/win.ini、
+// \openin15=/etc/passwd\relax），以及把 @ 改成字母再用 \@@input 拼绕过的动作。
+// 相对路径的 \input main.tex 是合法常见用法，只有路径越界才拒
+const BARE_ARG_RES = [/\\input\s+([^\s{}]+)/g, /\\openin\s*\d+\s*=\s*([^\s{}]+)/g];
+const BANNED_RES = [[/\\@@input\b/, '\\@@input'], [/\\catcode\s*`?\\?@/, '\\catcode...@']];
 function escapingPath(a) {
   const s = String(a || '').trim();
   return s.includes('..') || /^[/\\]/.test(s) || /^[A-Za-z]:[\\/]/.test(s) || s.startsWith('~');
 }
 function findEscapingArgs(source) {
+  const text = String(source || '');
   const hits = [];
   FILE_ARG_RE.lastIndex = 0;
   let m;
-  while ((m = FILE_ARG_RE.exec(String(source || ''))) && hits.length < 3) {
+  while ((m = FILE_ARG_RE.exec(text)) && hits.length < 3) {
     if (escapingPath(m[1])) hits.push(m[1].slice(0, 40));
   }
+  for (const re of BARE_ARG_RES) {
+    re.lastIndex = 0;
+    while ((m = re.exec(text)) && hits.length < 3) {
+      if (escapingPath(m[1])) hits.push(m[1].slice(0, 40));
+    }
+  }
+  for (const [re, label] of BANNED_RES) if (re.test(text) && hits.length < 3) hits.push(label);
   return hits;
 }
 
@@ -178,7 +194,7 @@ async function compile(body) {
 
   const escaping = findEscapingArgs(source);
   if (escaping.length) {
-    return { ok: false, error: '本机编译只交一个 main.tex，已拒绝越出临时目录的文件引用：' + escaping.join('、') + '；子文件请并入主文档，或改用「内置引擎」。' };
+    return { ok: false, error: '本机编译只交一个 main.tex，已拒绝越出临时目录的文件引用或读文件原语：' + escaping.join('、') + '；子文件请并入主文档，或改用「内置引擎」。' };
   }
 
   const dir = path.join(os.tmpdir(), 'paperlite-' + crypto.randomBytes(6).toString('hex'));
@@ -266,8 +282,18 @@ function forbiddenOrigin(req) {
 }
 
 function json(res, code, obj, extra) {
+  // 先序列化再写头：反过来一旦 JSON.stringify 抛（超出 V8 字符串上限就是 RangeError），
+  // 头已经发出去了，调用方只拿到一个 200 空 body，比 500 难查得多
+  let body;
+  try { body = JSON.stringify(obj); }
+  catch (e) { code = 500; body = JSON.stringify({ ok: false, error: '响应序列化失败' }); }
   res.writeHead(code, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', ...(extra || {}) });
-  res.end(JSON.stringify(obj));
+  res.end(body);
+}
+// 静态分支的纯文本回执同样要带安全头：漏一处就等于那条响应可以被 iframe 套走
+function plain(res, code, text) {
+  res.writeHead(code, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(text || '');
 }
 // 统一成 { ok, value } / { ok:false, code, error }：解析失败与超限要分开回 400 / 413，
 // 把坏 JSON 当空对象交给 compile 只会得到一句莫名其妙的编译错误
@@ -368,7 +394,7 @@ async function route(req, res) {
     const b = await readBody(req, res, cors);
     if (!b.ok) { if (!b.sent) json(res, b.code, { ok: false, error: b.error }, cors); return; }
     if (compiling >= MAX_COMPILE) {
-      res.writeHead(429, { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '2' });
+      res.writeHead(429, { ...SECURITY_HEADERS, ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '2' });
       return res.end(JSON.stringify({ ok: false, error: '本机编译队列已满，请稍候再试' }));
     }
     compiling++;
@@ -478,9 +504,12 @@ async function route(req, res) {
     if (!b.ok) { if (!b.sent) json(res, b.code, { ok: false, error: b.error }, cors); return; }
     const body = b.value;
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
+    if (!inputs.length || inputs.length > MAX_EMBED_INPUTS) {
+      return json(res, 400, { ok: false, error: 'input 条数需在 1–' + MAX_EMBED_INPUTS + ' 之间' }, cors);
+    }
     const data = inputs.map((t, i) => ({
       index: i,
-      embedding: simpleVec(String(t))
+      embedding: simpleVec(String(t == null ? '' : t).slice(0, MAX_EMBED_CHARS))
     }));
     return json(res, 200, { object: 'list', data }, cors);
   }
@@ -489,17 +518,17 @@ async function route(req, res) {
   // 非法 % 序列（GET /%）会抛 URIError：在 async 处理器里就是 unhandledRejection，
   // Node 15+ 默认直接结束进程 —— 一个 <img src="http://127.0.0.1:8788/%"> 就能打死本机服务
   let decoded;
-  try { decoded = decodeURIComponent(url); } catch (e) { res.writeHead(400); return res.end('Bad request'); }
-  if (decoded.includes('\0')) { res.writeHead(400); return res.end('Bad request'); }
+  try { decoded = decodeURIComponent(url); } catch (e) { return plain(res, 400, 'Bad request'); }
+  if (decoded.includes('\0')) return plain(res, 400, 'Bad request');
   let file = decoded === '/' ? '/index.html' : decoded;
   file = path.normalize(path.join(ROOT, file));
   // 前缀必须对齐目录边界：startsWith(ROOT) 会让 normalize 出的 /dist-x 同级目录钻空子
-  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end(); }
+  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) return plain(res, 403, '');
   fs.readFile(file, (err, data) => {
     if (err) {
       // SPA 兜底
       fs.readFile(path.join(ROOT, 'index.html'), (e2, d2) => {
-        if (e2) { res.writeHead(404); return res.end('Not Found（请先 npm run build）'); }
+        if (e2) return plain(res, 404, 'Not Found（请先 npm run build）');
         res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'text/html; charset=utf-8' });
         res.end(d2);
       });
