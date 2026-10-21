@@ -23,7 +23,7 @@ import TourGuide from './components/TourGuide.jsx';
 import { tourStepsFor, shouldWelcome, dismissWelcome, markTourDone } from './tour.js';
 import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
-import { RENDER_MAX_SRC, countOf, fmtSize, tooLargeResult } from './previewBudget.js';
+import { RENDER_MAX_SRC, RENDER_MAX_HTML, countOf, fmtSize, tooLargeResult, tooLargeHtmlResult, capHtmlResult, isHtmlBudgetTrip } from './previewBudget.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
 import { collectLabels, collectBibKeys } from './projectIndex.js';
@@ -196,6 +196,19 @@ export default function App() {
   // 两边同时起跑就是双份 token 加互相覆盖的消息数组
   const chatBusyRef = useRef(false);
   const onChatBusy = useCallback((v) => { chatBusyRef.current = !!v; }, []);
+
+  // 正在跑的会话/Agent 不许换项目：执行器读的是活引用 rootDirRef，半途换根等于把
+  // 剩下的 create_file 写进另一个文件夹、让 read_file 的磁盘兜底把新项目的正文发给渠道、
+  // 并把本轮记录按 projectKey: 新项目 落库挤掉对方已有的会话行。入口先挡住
+  // （ChatPanel 里还有一道 scopeKey 变化即中止的兜底，覆盖恢复提示那条不换入口的路径）。
+  const canSwitchProject = useCallback(() => {
+    if (chatBusyRef.current) { flash(tr(getLang(), 'app.chatBusySwitch')); return false; }
+    return true;
+  }, [flash]);
+  const guardSwitch = useCallback((action) => (...args) => (canSwitchProject() ? action(...args) : undefined), [canSwitchProject]);
+  const openFolderGuarded = useCallback(guardSwitch(openFolder), [guardSwitch, openFolder]);
+  const closeFolderGuarded = useCallback(guardSwitch(closeFolder), [guardSwitch, closeFolder]);
+  const restoreFolderGuarded = useCallback(guardSwitch(restoreFolder), [guardSwitch, restoreFolder]);
 
   const cmRef = useRef(null);
   const ratioRef = useRef({ edit: 0, preview: 0 });
@@ -830,8 +843,14 @@ export default function App() {
     if (deferred.length > RENDER_MAX_SRC) return tooLargeResult(deferred);
     const t0 = performance.now();
     let r;
-    try { r = renderLatex(deferred, {}); }
-    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + escHtml(String(e && e.message || e)) + '</div>', meta: {}, warnings: [{ msg: String(e && e.message || e), line: null }], diagrams: [], stats: countOf(deferred), headings: [] }; }
+    try { r = capHtmlResult(renderLatex(deferred, {}), deferred); }
+    catch (e) {
+      // 产物超预算是「太长」不是「坏了」：给能照着改的降级预览，别只留一条异常横幅。
+      // 两种降级对象的形状都由 previewBudget 统一产出——少一个 tables 就是写回面板抛错
+      r = isHtmlBudgetTrip(e)
+        ? tooLargeHtmlResult(deferred, e.bytes || RENDER_MAX_HTML)
+        : { html: '<div class="render-error">' + tr(getLang(), 'app.renderErr') + escHtml(String(e && e.message || e)) + '</div>', meta: {}, warnings: [{ msg: String(e && e.message || e), line: null }], diagrams: [], tables: [], stats: countOf(deferred), headings: [] };
+    }
     lastRenderMs = performance.now() - t0;
     // 附带渲染所基于的源码：表格/样式面板写回前校验「区间仍对得上当前源码」，
     // 编辑后未重渲完成的窗口期内写回会落在错位偏移上
@@ -845,8 +864,11 @@ export default function App() {
     if (deferred.length > RENDER_MAX_SRC) return tooLargeResult(deferred);
     const t0 = performance.now();
     let r;
-    try { r = renderMarkdownFull(deferred); }
-    catch (e) { r = { html: '<div class="render-error">' + tr(getLang(), 'app.mdRenderErr') + escHtml(String(e && e.message || e)) + '</div>', headings: [] }; }
+    try { r = capHtmlResult(renderMarkdownFull(deferred), deferred); }
+    catch (e) {
+      r = isHtmlBudgetTrip(e) ? tooLargeHtmlResult(deferred, e.bytes || RENDER_MAX_HTML)
+        : { html: '<div class="render-error">' + tr(getLang(), 'app.mdRenderErr') + escHtml(String(e && e.message || e)) + '</div>', headings: [] };
+    }
     lastRenderMs = performance.now() - t0;
     r.src = deferred;   // 供表格/样式面板写回前校验区间与当前源码一致
     return r;
@@ -1319,7 +1341,7 @@ export default function App() {
           submit: () => setFileDialog('submit'), settings: () => setFileDialog('settings'),
           sourceZip: exportProject, packaging, pdfAvailable: isTexLike || isMd,
           exportSource: () => downloadFile(activeTab.name, activeTab.doc.getValue(), 'text/plain;charset=utf-8'),
-          newFile, loadTemplate, openFile: openSingleFile, openFolder, save: saveActiveAuto,
+          newFile, loadTemplate, openFile: openSingleFile, openFolder: openFolderGuarded, save: saveActiveAuto,
           gSearch: () => { setSideTab('search'); setSidebarOpen(true); },
           exportTex: () => {
             if (isTexLike) exportTexFile(activeValue, ((activeTab.name || 'paper').replace(/\.(tex|md)$/i, '')) + '.tex');
@@ -1402,7 +1424,7 @@ export default function App() {
           </div>
           <div className="side-body">
             {sideTab === 'files' && (rootDir ? (
-              <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolder} refreshKey={treeKey}
+              <FileTree root={rootDir} onOpenFile={openFileTab} onCloseFolder={closeFolderGuarded} refreshKey={treeKey}
                 onRenamed={(oldPath, handle, name) => { renameTabPath(oldPath, handle, name); setTreeKey(n => n + 1); }}
                 onDeleted={(path, isDir) => {
                   const r = dropDeletedTabs(path, isDir);
@@ -1411,8 +1433,8 @@ export default function App() {
                 }} />
             ) : (
               <div className="side-pad side-empty">
-                {restorePrompt && <button className="btn sm" onClick={restoreFolder}>{t('side.restore', { name: restorePrompt.name })}</button>}
-                <button className="btn primary sm" onClick={openFolder}>{t('side.openFolder')}</button>
+                {restorePrompt && <button className="btn sm" onClick={() => restoreFolderGuarded()}>{t('side.restore', { name: restorePrompt.name })}</button>}
+                <button className="btn primary sm" onClick={() => openFolderGuarded()}>{t('side.openFolder')}</button>
                 <button className="btn sm" onClick={newFile}>{t('side.newDraft')}</button>
                 <p className="hint">{t('side.noFolder1')}</p>
                 <p className="hint">{t('side.noFolder2')}</p>
@@ -1625,6 +1647,7 @@ export default function App() {
         setMessages={setChatMessages}
         externalBusy={aiBusy}
         onBusyChange={onChatBusy}
+        scopeKey={chatKey}
         agentEnv={agentEnv}
         agentCfg={agentCfg}
         onAgentApproval={lv => setAgentCfg(s => ({ ...s, approval: lv }))}
@@ -1778,7 +1801,7 @@ export default function App() {
             setTabs(ts => ts.concat(tab)); setActiveId(tab.id); setActiveValue(text);
             dismissWelcome(true); setTourStage(null); setViewMode(compact ? 'edit' : 'split');
           }}
-          onOpenFolder={() => { dismissWelcome(true); setTourStage(null); openFolder(); }}
+          onOpenFolder={() => { if (!canSwitchProject()) return; dismissWelcome(true); setTourStage(null); openFolder(); }}
           onClose={noAuto => { dismissWelcome(noAuto); setTourStage(null); }}
         />
       )}

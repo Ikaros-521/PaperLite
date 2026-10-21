@@ -43,7 +43,7 @@ const readPanelRect = () => {
   } catch (e) { return null; }
 };
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null, sessions = null, activeSessionId = '', persistFailed = false, onNewSession = null, onSwitchSession = null, onDeleteSession = null, onForkSession = null }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null, scopeKey = '', sessions = null, activeSessionId = '', persistFailed = false, onNewSession = null, onSwitchSession = null, onDeleteSession = null, onForkSession = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -253,6 +253,22 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     if (!phase || phase === prev) return;
     if ((phase === 'completed' || phase === 'tripped') && !manualPlanRef.current) setPlanOpen(false);
   }, [agentTask]);
+
+  // 本轮的读写都按「开跑时的项目根目录」计划。宿主换了项目（恢复提示那条路径不经过侧栏
+  // 入口那道闸），剩下的工具调用就会往另一个文件夹写盘、把新项目的正文发给渠道、并按
+  // 新项目把本轮落库、挤掉对方已有的会话行 —— 只能就地中止这一轮。
+  // 两条硬约束：① 必须声明在下面的 `if (!open) return null` 之前（hook 数量随开合变化
+  // 就是 React #310）；② 不能调 flashNote——它在早退之后才定义，面板关着时读它是 TDZ。
+  const scopeRef = useRef(scopeKey);
+  useEffect(() => {
+    if (scopeRef.current === scopeKey) return;
+    scopeRef.current = scopeKey;
+    if (!abortRef.current) return;
+    abortRef.current.abort();
+    setNote(t('chat.scopeSwitched'));
+    clearTimeout(noteTimer.current);
+    noteTimer.current = setTimeout(() => setNote(''), 5000);
+  }, [scopeKey, t]);
 
   if (!open) return null;
 
