@@ -280,8 +280,13 @@ export function makeAgentExecutor(deps) {
       const c = deps.cm();
       if (!c) return { err: tr(L, 'agent.errNoEditor'), code: 'no_editor' };
       const active = tabs.find(x => x && x.id === deps.activeId());
-      return { doc: c, tab: null, label: active ? deps.tabPath(active) : '' };
+      const activePath = active ? deps.tabPath(active) : '';
+      // 读闸不能只盖 read_file：活动标签本身可能就是一个隐藏路径文件，
+      // 不在这里拦，省略 path 的 edit_file 照样能改它
+      if (hiddenBlocked(activePath)) return { err: tr(L, 'agent.errHiddenPath', { path: activePath }), code: 'hidden_path' };
+      return { doc: c, tab: null, label: activePath };
     }
+    if (hiddenBlocked(path)) return { err: tr(L, 'agent.errHiddenPath', { path }), code: 'hidden_path' };
     const tab = tabs.find(x => x && x.doc && deps.tabPath(x) === path);
     if (tab) return { doc: tab.doc, tab, label: path };
     return { err: tr(L, 'agent.errNotOpen', { path }), code: 'not_open' };
@@ -325,6 +330,7 @@ export function makeAgentExecutor(deps) {
     const text = String(args.text == null ? '' : args.text);
     const path = String(args.path || '').trim();
     const activePathNow = activePath();
+    if (hiddenBlocked(activePathNow)) return fail(tr(L, 'agent.errHiddenPath', { path: activePathNow }), 'hidden_path');
     // 插入点定义就是「用户眼前的光标」：跨文档插入没有语义，宁可拒绝也不写进别的文件
     if (path && path !== activePathNow) return fail(tr(L, 'agent.errInsertActiveOnly', { path, active: labelOf(activePathNow) }), 'insert_active_only');
     const versionId = deps.beforeEdit ? deps.beforeEdit(null) : null;
@@ -386,8 +392,11 @@ export function makeAgentExecutor(deps) {
             : fail((r && r.msg) || tr(getLang(), 'agent.errCreateFailed'), (r && r.code) || 'create_failed');
         }
         case 'open_file': {
-          const r = await deps.openByPath(String(a.path || ''));
-          return r && r.ok ? ok(r.msg || 'ok') : fail(r && r.msg || tr(getLang(), 'agent.errFileNotFound', { path: String(a.path || '') }), (r && r.code) || 'file_not_found');
+          const p = String(a.path || '').trim();
+          // 打开也是读文件的入口：默认档不让模型借「先打开、再省略 path 修改」绕过读闸
+          if (hiddenBlocked(p)) return fail(tr(getLang(), 'agent.errHiddenPath', { path: p }), 'hidden_path');
+          const r = await deps.openByPath(p);
+          return r && r.ok ? ok(r.msg || 'ok') : fail(r && r.msg || tr(getLang(), 'agent.errFileNotFound', { path: p }), (r && r.code) || 'file_not_found');
         }
         default: return fail(tr(getLang(), 'agent.errUnknownTool', { name: String(name) }), 'unknown_tool');
       }

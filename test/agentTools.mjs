@@ -379,4 +379,29 @@ assert.equal(stripToolBlocks('正文\n```tool\n{"tool":"a"'), '正文');
     '「完全访问」档仍然照旧放开');
 }
 
+// ---------- 隐藏路径的写闸：读不到也不能借已打开标签 / 活动文档改 ----------
+{
+  const hiddenTab = fakeTab('.notes/private.tex', 'SECRET');
+  const main = fakeTab('main.tex', 'AAA');
+  const { executor } = makeDeps({ cmText: 'AAA', tabs: [main, hiddenTab], activeId: 'main.tex' });
+  const e = await executor('edit_file', { path: '.notes/private.tex', old_text: 'SECRET', new_text: 'LEAK' });
+  assert.ok(!e.ok && e.code === 'hidden_path', '隐藏标签不能按路径编辑');
+  assert.equal(hiddenTab.doc.getValue(), 'SECRET', '被拒绝的编辑不能落盘');
+  const i = await executor('insert_text', { text: 'X', path: '.notes/private.tex' });
+  assert.ok(!i.ok, '隐藏标签不能插入');
+  assert.equal(hiddenTab.doc.getValue(), 'SECRET', '被拒绝的插入不能落盘');
+  const o = await executor('open_file', { path: '.notes/private.tex' });
+  assert.ok(!o.ok && o.code === 'hidden_path', 'open_file 也不能把隐藏文件带进来');
+}
+{
+  const hiddenTab = fakeTab('.hidden.tex', 'SECRET');
+  const { executor } = makeDeps({ cmText: 'SECRET', tabs: [hiddenTab], activeId: '.hidden.tex' });
+  const e = await executor('edit_file', { old_text: 'SECRET', new_text: 'LEAK' });
+  assert.ok(!e.ok && e.code === 'hidden_path', '省略 path 时按活动标签路径拦');
+  const i = await executor('insert_text', { text: 'X' });
+  assert.ok(!i.ok, '活动隐藏标签同样不能插入');
+  const wide = makeDeps({ cmText: 'SECRET', tabs: [hiddenTab], activeId: '.hidden.tex', approval: 'full' });
+  assert.ok((await wide.executor('insert_text', { text: 'X' })).ok, '「完全访问」档放行');
+}
+
 console.log('agentTools: all tests passed');
