@@ -4,6 +4,7 @@
  */
 import { t } from '../i18n.js';
 import { resolveLayout } from './classLayout.js';
+import { forEachEnv } from '../texScan.js';
 
 // 未闭合环境栈的天花板：真论文几十层就已是异常文档，而栈深直接决定每次 \end
 // 错配的扫描代价，也决定末尾「未闭合」诊断条数。超出后不再入栈，只保留已报的错。
@@ -66,26 +67,27 @@ export function lintLaTeX(src) {
     return lo;
   };
 
-  // 1) 环境配对
+  // 1) 环境配对。词法枚举交给 texScan：旧正则 /\\(begin|end)\s*\{([^}]+)\}/g 在缺右括号
+  // 的文档上会把 [^}]+ 从每个候选重扫到串尾（328KB 实测 5.7s，二次方），而它每 250ms
+  // 就在输入暂停后跑一遍——一份别人发的 .tex 就能把打字冻住。
   const stack = [];
-  const envRe = /\\(begin|end)\s*\{([^}]+)\}/g;
   let m;
-  while ((m = envRe.exec(clean))) {
-    const line = lineAt(m.index);
-    if (m[1] === 'begin') { if (stack.length < MAX_ENV_STACK) stack.push({ name: m[2], line }); }
+  forEachEnv(clean, (tk) => {
+    const line = lineAt(tk.start);
+    if (tk.kind === 'begin') { if (stack.length < MAX_ENV_STACK) stack.push({ name: tk.name, line }); }
     else {
       const top = stack[stack.length - 1];
-      if (!top) out.push({ line, msg: t('lint.envNoBegin', { name: m[2] }), severity: 'error', kind: 'env' });
-      else if (top.name !== m[2]) {
-        out.push({ line, msg: t('lint.envMismatch', { name: top.name, line: top.line + 1, end: m[2] }), severity: 'error', kind: 'env' });
+      if (!top) out.push({ line, msg: t('lint.envNoBegin', { name: tk.name }), severity: 'error', kind: 'env' });
+      else if (top.name !== tk.name) {
+        out.push({ line, msg: t('lint.envMismatch', { name: top.name, line: top.line + 1, end: tk.name }), severity: 'error', kind: 'env' });
         // 尝试从栈中找回匹配：原地倒序扫，别 [...stack].reverse().findIndex() ——
         // 名字找不到时栈不会缩短，成批错配（截断/损坏的文件）会退化成二次方
         let idx = -1;
-        for (let si = stack.length - 1; si >= 0; si--) if (stack[si].name === m[2]) { idx = si; break; }
+        for (let si = stack.length - 1; si >= 0; si--) if (stack[si].name === tk.name) { idx = si; break; }
         if (idx >= 0) stack.splice(idx, 1);
       } else stack.pop();
     }
-  }
+  });
   stack.forEach(s => out.push({ line: s.line, msg: t('lint.envUnclosed', { name: s.name }), severity: 'error', kind: 'env' }));
 
   // 2) 花括号配对（全文净深度；负值即报错行）
@@ -122,23 +124,54 @@ export function lintLaTeX(src) {
   }
 
   // 4) 未定义引用
+  // 下面 label/bibitem/ref/cite 四条都从「一条正则吃下整个语法」改成「正则只定位命令名，
+  // 参数边界用 indexOf + 水位线手扫」：[^}]+ / [^\]]* 在缺右界时会对每个候选把余文重扫一遍
+  // （\label{ ×48000 实测 5.7s，每翻倍 4 倍），而这一版跑在每次输入暂停 250ms 之后。
+  // 水位线记「此后已无 ] / }」，后续候选直接照结论跳过——cite 那条早就这么写了，补齐漏网的三条。
+  const skipWs = (s, i) => { while (i < s.length && /\s/.test(s.charAt(i))) i++; return i; };
   const labels = new Set();
   const bibs = new Set();
-  let labRe = /\\label\{([^}]+)\}/g;
-  while ((m = labRe.exec(clean))) labels.add(m[1].trim());
-  let bibRe = /\\bibitem\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g;
-  while ((m = bibRe.exec(clean))) bibs.add(m[1].trim());
+  let labRe = /\\label\{/g, noLab = -1;
+  while ((m = labRe.exec(clean))) {
+    const open = m.index + m[0].length;
+    if (noLab >= 0 && open >= noLab) continue;
+    const close = clean.indexOf('}', open);
+    if (close < 0) { noLab = open; continue; }
+    if (close > open) labels.add(clean.slice(open, close).trim());
+    labRe.lastIndex = close + 1;
+  }
+  let bibRe = /\\bibitem(?![A-Za-z])/g, noBibOpt = -1, noBibArg = -1;
+  while ((m = bibRe.exec(clean))) {
+    let p = skipWs(clean, m.index + m[0].length);
+    if (clean.charAt(p) === '[') {
+      if (noBibOpt >= 0 && p >= noBibOpt) continue;
+      const ce = clean.indexOf(']', p + 1);
+      if (ce < 0) { noBibOpt = p; continue; }
+      p = skipWs(clean, ce + 1);
+    }
+    if (clean.charAt(p) !== '{') continue;
+    p++;
+    if (noBibArg >= 0 && p >= noBibArg) continue;
+    const close = clean.indexOf('}', p);
+    if (close < 0) { noBibArg = p; continue; }
+    if (close > p) bibs.add(clean.slice(p, close).trim());
+  }
   // 文档确实引用了外部文件（\input 子文件、\bibliography/.bib）时，符号表不在这篇里，
   // 断言「引用不存在」只会把真问题淹掉；单文件文档照旧严格检查（走查 audit-15）
   const pullsExternal = /\\(?:input|include|subfile|subfileinclude|import|subimport|bibliography|addbibresource)\s*[{[]/.test(clean);
   const checkRef = !pullsExternal || labels.size > 0;
   const checkCite = !pullsExternal || bibs.size > 0;
-  let refRe = /\\(ref|eqref|autoref|cref|Cref)\{([^}]+)\}/g;
+  // 名字与 { 之间不吞空白：旧正则 \\(ref|eqref|...)\{ 就是这个口径，\ref {x} 不算引用
+  let refRe = /\\(?:eqref|autoref|Cref|cref|ref)\{/g, noRef = -1;
   while ((m = refRe.exec(clean))) {
-    const key = m[2].trim();
+    const open = m.index + m[0].length;
+    if (noRef >= 0 && open >= noRef) continue;
+    const close = clean.indexOf('}', open);
+    if (close < 0) { noRef = open; continue; }
+    const key = clean.slice(open, close).trim();
+    refRe.lastIndex = close + 1;
     if (checkRef && !labels.has(key)) {
-      const line = lineAt(m.index);
-      out.push({ line, msg: t('lint.badRef', { key }), severity: 'warn', kind: 'ref' });
+      out.push({ line: lineAt(m.index), msg: t('lint.badRef', { key }), severity: 'warn', kind: 'ref' });
     }
   }
   // \cite[..]{..} 手扫代替 (?:\[[^\]]*\])?\s*\{([^}]*)\}：缺右界时 [^\]]* 与 [^}]*
@@ -146,7 +179,6 @@ export function lintLaTeX(src) {
   // 后续候选直接照结论跳过，整轮回到线性。
   let citeRe = /\\cite[pt]?(?![A-Za-z])/g;
   let noOpt = -1, noArg = -1;
-  const skipWs = (s, i) => { while (i < s.length && /\s/.test(s.charAt(i))) i++; return i; };
   while ((m = citeRe.exec(clean))) {
     if (!checkCite) continue;
     let p = skipWs(clean, m.index + m[0].length);
@@ -178,9 +210,30 @@ export function lintLaTeX(src) {
   }
 
   // 6) 文档类与排版选项：\documentclass 只能有一个，互斥选项要指出
-  const clsRe = /\\documentclass\s*(?:\[[^\]]*\])?\s*\{[^{}]*\}/g;
+  // 手扫代替 /\\documentclass\s*(?:\[[^\]]*\])?\s*\{[^{}]*\}/g：[^\]]* 与 [^{}]* 在缺
+  // 右界时同样逐候选扫到串尾。跨度上限挡住「候选挤在同一段无括号间隙里」的残余二次方，
+  // 真类名与选项列表远不到 512 字符。命中对象保持 .index / [0] 两个字段，下游解析不变。
+  const CLS_SPAN_MAX = 512;
+  const clsRe = /\\documentclass(?![A-Za-z])/g;
   const clsHits = [];
-  while ((m = clsRe.exec(clean))) clsHits.push(m);
+  let noClsRb = -1;
+  while ((m = clsRe.exec(clean))) {
+    let p = skipWs(clean, m.index + m[0].length);
+    if (clean.charAt(p) === '[') {
+      if (noClsRb >= 0 && p >= noClsRb) continue;
+      const ce = clean.indexOf(']', p + 1);
+      if (ce < 0) { noClsRb = p; continue; }
+      if (ce - p > CLS_SPAN_MAX) continue;
+      p = skipWs(clean, ce + 1);
+    }
+    if (clean.charAt(p) !== '{') continue;
+    const open = p;
+    const stop = Math.min(clean.length, open + 1 + CLS_SPAN_MAX);
+    let i = open + 1;
+    while (i < stop && clean.charAt(i) !== '{' && clean.charAt(i) !== '}') i++;
+    if (clean.charAt(i) !== '}') continue;   // 参数里套了 { 或超出跨度：旧正则也不算命中
+    clsHits.push({ index: m.index, 0: clean.slice(m.index, i + 1) });
+  }
   clsHits.slice(1).forEach(cm => out.push({ line: lineAt(cm.index), msg: t('lint.dupDocumentclass'), severity: 'error', kind: 'class' }));
   if (clsHits.length) {
     const cm = clsHits[0];

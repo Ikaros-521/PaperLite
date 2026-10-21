@@ -52,7 +52,7 @@ export default function PreviewPane({
     }
     // 换一批资产：先释放上一轮的 blob 与 pdf 文档
     if (cache) { cache.urls.forEach(u => { if (u.startsWith('blob:')) URL.revokeObjectURL(u); }); cache.tasks.forEach(task => task.destroy()); }
-    const urls = new Map(), tasks = [], pending = [];
+    const urls = new Map(), tasks = [], pending = [], byName = new Map();
     imgCacheRef.current = { sig, urls, tasks, done: false };
     const resolve = async name => {
       const parts = name.replace(/\\/g, '/').replace(/^\.\//, '').split('/');
@@ -64,46 +64,51 @@ export default function PreviewPane({
       }
       return assetTabs.find(tab => tab.name === name)?.uploadedFile || null;
     };
+    // 一个「唯一文件名」一趟解析：旧写法按 <img> 逐个起活，N 个相同的
+    // \includegraphics{a.pdf} 就是 N 趟 pdf.js 解析 + N 次 toDataURL，
+    // 而它们要的本来就是同一张图
+    const build = original => (async () => {
+      let file;
+      const names = /\.[a-z\d]+$/i.test(original) ? [original]
+        : [original, ...['pdf', 'png', 'jpg', 'jpeg'].map(ext => original + '.' + ext)];
+      for (const name of names) {
+        try { file = await resolve(name); } catch { /* Try next graphics extension. */ }
+        if (file) break;
+      }
+      if (!file) return null;
+      if (/\.pdf$/i.test(file.name)) {
+        const lib = await loadPdfLibrary();
+        if (cancelled) return null;
+        const task = lib.getDocument(pdfOptions({ data: new Uint8Array(await file.arrayBuffer()) }));
+        // 本轮已被下一轮取代：这一份既不进 tasks（下一轮只会回收它自己那份），也没有
+        // 人再替它 destroy —— 就地拆掉，否则每键都漏一个 pdf.js worker
+        if (cancelled) { task.destroy(); return null; }
+        tasks.push(task);
+        const doc = await task.promise, page = await doc.getPage(1);
+        if (cancelled) return null;
+        const base = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: Math.min(2, 1400 / base.width) });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        return canvas.toDataURL('image/png');
+      }
+      const url = URL.createObjectURL(file);
+      // 同上：本轮已作废，urls 归属的缓存对象刚被下一轮回收过，再记进去就没人再 revoke
+      if (cancelled) { URL.revokeObjectURL(url); return null; }
+      return url;
+    })().then(u => { if (u && !cancelled) urls.set(original, u); return u; });
     for (const img of images) {
       const original = original_(img);
       if (!original) continue;
       img.setAttribute('data-graphics-source', original);
-      pending.push((async () => {
-        let file;
-        const names = /\.[a-z\d]+$/i.test(original) ? [original]
-          : [original, ...['pdf', 'png', 'jpg', 'jpeg'].map(ext => original + '.' + ext)];
-        for (const name of names) {
-          try { file = await resolve(name); } catch { /* Try next graphics extension. */ }
-          if (file) break;
-        }
-        if (!file) return;
-        if (/\.pdf$/i.test(file.name)) {
-          const lib = await loadPdfLibrary();
-          if (cancelled) return;
-          const task = lib.getDocument(pdfOptions({ data: new Uint8Array(await file.arrayBuffer()) }));
-          // 本轮已被下一轮取代：这一份既不进 tasks（下一轮只会回收它自己那份），也没有
-          // 人再替它 destroy —— 就地拆掉，否则每键都漏一个 pdf.js worker
-          if (cancelled) { task.destroy(); return; }
-          tasks.push(task);
-          const doc = await task.promise, page = await doc.getPage(1);
-          if (cancelled) return;
-          const base = page.getViewport({ scale: 1 });
-          const viewport = page.getViewport({ scale: Math.min(2, 1400 / base.width) });
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-          const data = canvas.toDataURL('image/png');
-          urls.set(original, data);
-          if (!cancelled) img.src = data;
-        } else {
-          const url = URL.createObjectURL(file);
-          // 同上：本轮已作废，urls 归属的缓存对象刚被下一轮回收过，再记进去就没人再 revoke
-          if (cancelled) { URL.revokeObjectURL(url); return; }
-          urls.set(original, url);
-          img.src = url;
-        }
-      })().catch(error => { if (!cancelled) img.title = original + ': ' + error.message; }));
+      let job = byName.get(original);
+      if (!job) { job = build(original); byName.set(original, job); }
+      // 失败信息仍按 <img> 挂：同名图片各留各的悬浮提示
+      job.then(u => { if (u && !cancelled) img.src = u; })
+        .catch(error => { if (!cancelled) img.title = original + ': ' + error.message; });
     }
+    byName.forEach(job => pending.push(job.catch(() => null)));
     // done 只看「本轮解析是否全部落定」，不受 cancelled 影响：打字重渲会先 cleanup
     // 旧轮（cancelled=true），若据此不置 done，下一轮同签名仍会重读磁盘——缓存失效。
     // 以 sig 匹配防止被更早一轮的迟到回执误标。

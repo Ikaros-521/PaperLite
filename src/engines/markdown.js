@@ -4,6 +4,7 @@
  */
 import MarkdownIt from 'markdown-it';
 import katex from 'katex';
+import { escHtml } from '../htmlEsc.js';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: true });
 // 聊天气泡另开一份：模型习惯一行一句（不空行），不认单换行会把整段糊成一行；
@@ -135,7 +136,9 @@ export function renderMarkdownFull(src) {
     const code = m.replace(/^<pre><code[^>]*>/, '').replace(/<\/code><\/pre>$/, '')
       // &amp; 必须最后解码：先解会把源码里字面的 &lt; 变成 <（实体被二次反转义）
       .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-    return '<div class="diagram mermaid-block" data-code="' + encodeURIComponent(code.trim()) + '"></div>';
+    // encodeURIComponent 恰好把 " < > 都转成了 %xx，所以今天没洞；但它不是转义器——
+    // 与 engines/latex.js:1258 同一口径再过一遍 escHtml，别把「碰巧安全」写成惯例
+    return '<div class="diagram mermaid-block" data-code="' + escHtml(encodeURIComponent(code.trim())) + '"></div>';
   });
   html = mathPass(html);
   // 回填数学

@@ -2,6 +2,7 @@ import katex from 'katex';
 import * as TIKZ from './tikz.js';
 import { t, getLang } from '../i18n.js';
 import { readDocumentclass, resolveLayout, FALLBACK } from './classLayout.js';
+import { forEachEnv } from '../texScan.js';
 
 /* PaperLite · LaTeX → HTML 渲染器（论文常用子集）
  *
@@ -148,7 +149,18 @@ function blankComments(src) {
 function skipWs(s, i) { while (i < s.length && /\s/.test(s.charAt(i))) i++; return i; }
 
 // s[i] 必须是 '{'；返回闭括号位置（处理 \{ 与嵌套）
+// 大串走配对表：braceEnd 单次是线性的，可渲染主循环「吞掉命令参数」那条路径会对同一个
+// 文档级长串问上千次，每次没闭合就扫到串尾——('\newcommand{\a}{' ×20000，300KB) 实测
+// 6.9s（每翻倍 4 倍）。按串身份缓存一张配对表后同输入一次遍历算完。
+// 只给 ≥64KB 的串建表：小片段本来扫得便宜，缓存它们只会让文档级长串的表被反复顶掉。
+const BE_TABLE_MIN = 64 * 1024;
+var _beSrc = null, _beTab = null;
 function braceEnd(s, i) {
+  if (s.length >= BE_TABLE_MIN) {
+    if (s !== _beSrc) { _beSrc = s; _beTab = braceCloseTable(s); }
+    var v = i < s.length ? _beTab[i] : -1;
+    return v === undefined || v === 0 ? -1 : v;
+  }
   var depth = 0;
   for (; i < s.length; i++) {
     var c = s.charAt(i);
@@ -157,6 +169,21 @@ function braceEnd(s, i) {
     else if (c === '}') { depth--; if (depth === 0) return i; }
   }
   return -1;
+}
+
+// 全文花括号配对表：closeOf[开括号下标] = 闭括号下标，未闭合为 0（下标 0 不可能是开括号
+// 的配对结果，用它当「未配对」哨兵比 fill(-1) 省一遍初始化）。语义与 braceEnd 的逐字扫描
+// 一致：同样跳过反斜杠转义的下一字符，同样只在深度回到 0 时配对。
+function braceCloseTable(s) {
+  var closeOf = new Int32Array(s.length);
+  var stack = [], depth = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (c === '\\') { i++; continue; }
+    if (c === '{') { stack[depth++] = i; }
+    else if (c === '}' && depth > 0) closeOf[stack[--depth]] = i;
+  }
+  return closeOf;
 }
 // 读 `{...}`，返回 { text, start, end }（start/end 指内容区间）；失败返回 null
 function readGroup(s, i) {
@@ -242,43 +269,80 @@ function labelsOf(s) {
 }
 
 // 环境配对：一次线性扫描把每个 \begin{name} 配到它的 \end{name}（只数同名，与旧
-// findEnv 语义一致），返回 begin 下标 → 环境信息。旧实现逐个 \begin 用正则扫到串尾，
-// 坏文件里 N 个未闭合就是 O(N·L)：240KB 的截断 .tex 实测锁死主线程 8s。
+// findEnv 语义一致），返回 begin 下标 → 环境信息。词法枚举走 texScan.forEachEnv，
+// 理由同 projectIndex.js 的 collectLabels：旧正则 /\\(begin|end)\s*\{([^}]+)\}/g 在
+// 缺右括号的文档上会把 [^}]+ 从每个候选重扫到串尾，328KB 实测 5.6s（二次方）。
 function matchEnvs(s) {
-  var re = /\\(begin|end)\s*\{([^}]+)\}/g, m, open = {}, pairs = new Map();
-  while ((m = re.exec(s))) {
-    var name = m[2];
-    if (m[1] === 'begin') {
-      if (!open[name]) open[name] = [];
-      open[name].push(m);
-      continue;
+  // 名字来自文档正文，必须用无原型字典：\begin{constructor} 让 open[name] 从原型链上
+  // 取到 Object 的成员，随后 .push() 抛 TypeError，整页预览只剩一条渲染错误横幅
+  var open = Object.create(null), pairs = new Map();
+  forEachEnv(s, function (tk) {
+    if (tk.kind === 'begin') {
+      if (!open[tk.name]) open[tk.name] = [];
+      open[tk.name].push(tk);
+      return;
     }
-    var stack = open[name];
-    if (!stack || !stack.length) continue;   // 多出来的 \end：不算任何环境的收尾
+    var stack = open[tk.name];
+    if (!stack || !stack.length) return;   // 多出来的 \end：不算任何环境的收尾
     var b = stack.pop();
-    var innerStart = b.index + b[0].length;
-    pairs.set(b.index, {
-      name: name,
-      inner: s.slice(innerStart, m.index),
-      innerStart: innerStart, innerEnd: m.index,
-      outerStart: b.index, outerEnd: m.index + m[0].length,
+    pairs.set(b.start, {
+      name: tk.name,
+      inner: s.slice(b.end, tk.start),
+      innerStart: b.end, innerEnd: tk.start,
+      outerStart: b.start, outerEnd: tk.end,
       opt: null
     });
-  }
+  });
   return pairs;
 }
 
 // ---------------- 宏展开 ----------------
+// 旧写法是一条正则在全文找定义：/\\(?:re)?newcommand\*?\s*\{?\s*(\\[A-Za-z]+)\s*\}?\s*
+// (?:\[(\d)\])?\s*(?:\[([^\]]*)\])?\s*\{/g。五个 \s* 挨着三个可选组，一段长空白可以被
+// 拆成 C(k+4,4) 种分配，而末尾的 \{ 一缺就要全部试穿——实测 ('\newcommand'+' '.repeat(50))
+// .repeat(200)（12KB）冻结主线程 5.4s，200KB 外推约 90s。改成「正则只定候选起点、
+// 剩下的确定性单遍解析」：每个 \s* 只能吃满后面那段空白（后随词元没有一个以空白开头），
+// 所以不存在可回退的分配，代价与扫描过的字符数同阶。
 function scanMacros(src) {
-  var macros = {};
-  var re = /\\(?:re)?newcommand\*?\s*\{?\s*(\\[A-Za-z]+)\s*\}?\s*(?:\[(\d)\])?\s*(?:\[([^\]]*)\])?\s*\{/g;
+  // 无原型字典：定义查不到时 ctx.macros[name] 会从原型链上取到 Function，
+  // 于是 \toString 被当成宏、mrec.body 是 undefined、渲染整页抛错
+  var macros = Object.create(null);
+  var re = /\\(?:re)?newcommand/g;
+  var noRb = -1;              // 水位线：此处之后已无 ']'，可选参数组不再扫串尾
   var m;
   while ((m = re.exec(src))) {
-    var name = m[1].slice(1);
-    var be = braceEnd(src, m.index + m[0].length - 1);
-    if (be < 0) continue;
-    var body = src.slice(m.index + m[0].length, be);
-    macros[name] = { argc: m[2] ? +m[2] : 0, opt: m[3], body: body };
+    var i = skipWs(src, m.index + m[0].length);
+    var ok = true;
+    if (src.charAt(i) === '*') { i = skipWs(src, i + 1); }
+    if (src.charAt(i) === '{') { i = skipWs(src, i + 1); }
+    if (src.charAt(i) !== '\\') { re.lastIndex = m.index + 1; continue; }
+    var nameStart = ++i;
+    while (i < src.length && /[A-Za-z]/.test(src.charAt(i))) i++;
+    if (i === nameStart) { re.lastIndex = m.index + 1; continue; }
+    var name = src.slice(nameStart, i);
+    i = skipWs(src, i);
+    if (src.charAt(i) === '}') i = skipWs(src, i + 1);
+    var argc = 0, opt = undefined;   // 必须每条候选都重置：var 是函数作用域，
+    // 只写 `var opt` 会让上一条定义的默认值残留到下一条（同名宏 \renewcommand 少一个
+    // 可选参数时会被错误地当成仍带默认值，\bx[蓝色]{…} 于是被展开成 #1=蓝色）
+    // [\d] 才算参数字数；[12] 这类多位数按旧正则的回退归入可选默认值
+    if (src.charAt(i) === '[' && /[0-9]/.test(src.charAt(i + 1)) && src.charAt(i + 2) === ']') {
+      argc = +src.charAt(i + 1);
+      i = skipWs(src, i + 3);
+    }
+    if (src.charAt(i) === '[') {
+      if (noRb >= 0 && i >= noRb) { re.lastIndex = m.index + 1; continue; }
+      var ce = src.indexOf(']', i + 1);
+      if (ce < 0) { noRb = i; re.lastIndex = m.index + 1; continue; }
+      opt = src.slice(i + 1, ce);
+      i = skipWs(src, ce + 1);
+    }
+    if (src.charAt(i) !== '{') { re.lastIndex = m.index + 1; continue; }
+    var openIdx = i;
+    var be = braceEnd(src, openIdx);
+    // 宏体没闭合：与旧实现同样放弃这条定义，从宏体起点继续找下一个候选
+    if (be >= 0) macros[name] = { argc: argc, opt: opt, body: src.slice(openIdx + 1, be) };
+    re.lastIndex = openIdx + 1;
   }
   // \def\x{..}
   var re2 = /\\def\s*(\\[A-Za-z]+)\s*\{/g;
@@ -398,18 +462,21 @@ function renderLatex(srcRaw, opts) {
   opts = opts || {};
   var ctx = {
     warnings: [],
-    macros: {},
+    // 下面四张表的键都来自文档正文（宏名 / \label / \bibitem / \ref），必须是无原型字典：
+    // 用 {} 时 \ref{constructor} 会从原型链上读到 Object 的成员，判成「引用已定义」，
+    // refPos['constructor'].push 更是直接抛错，整页预览只剩一条渲染异常横幅
+    macros: Object.create(null),
     headings: [],
     counters: { sec: 0, subsec: 0, subsubsec: 0, fig: 0, tab: 0, eq: 0, footnote: 0, bib: 0 },
     appendix: false,   // \appendix 之后一级章节改用字母编号
-    labels: {},        // key -> 显示编号
-    cites: {},         // key -> 序号
+    labels: Object.create(null),        // key -> 显示编号
+    cites: Object.create(null),         // key -> 序号
     bibItems: [],      // { key, html }
     footnotes: [],
     meta: { title: '', author: '', date: null, twocolumn: false, ctex: false, layout: FALLBACK, authorBlocks: [], thanks: [], heads: null, notice: '', keywords: '', institute: '' },
     diagrams: [],      // { id, svg, nodes, tikzsetRanges, wrapperId }
     tables: [],        // { id, envStart/End, colspec(+区间), rows: [{contentStart/End, nextStart, cells:[{start,end,raw}]}] }
-    refPos: {},        // ref key -> 引用处绝对偏移，供「未定义引用」回落到行号
+    refPos: Object.create(null),        // ref key -> 引用处绝对偏移，供「未定义引用」回落到行号
     // off 为源码绝对偏移：警告只有挂上行号，问题栏才能给出「第 N 行」并点击跳转
     warn: function (m, off, kind) {
       if (ctx.warnings.length >= 60) return;
@@ -1378,11 +1445,19 @@ function splitItems(inner) {
   var items = [];
   // 只切顶层 \item：内层 \begin{itemize}\item b\end{itemize} 交给递归渲染。
   // 旧版不数嵌套，嵌套列表塌平成两个平级 <li>，内层标记还漏成正文里的 \beginitemize
-  var re = /\\(begin|end)\s*\{[^}]*\}|\\item(?![A-Za-z])/g, m, depth = 0, matches = [];
-  while ((m = re.exec(inner))) {
-    if (m[1] === 'begin') { depth++; continue; }
-    if (m[1] === 'end') { if (depth > 0) depth--; continue; }
-    if (depth === 0) matches.push({ index: m.index, end: m.index + m[0].length });
+  // 环境词元改走 texScan 的线性游标（旧正则的 [^}]* 在缺右括号时是二次方），
+  // 与 \item 各自扫完再按位置归并，深度计数与旧版单条正则等价
+  var toks = [];
+  forEachEnv(inner, function (tk) { toks.push({ index: tk.start, end: tk.end, kind: tk.kind }); }, { emptyName: true });
+  var imRe = /\\item(?![A-Za-z])/g, im;
+  while ((im = imRe.exec(inner))) toks.push({ index: im.index, end: im.index + im[0].length });
+  toks.sort(function (a, b) { return a.index - b.index; });
+  var depth = 0, matches = [];
+  for (var t = 0; t < toks.length; t++) {
+    var tk = toks[t];
+    if (tk.kind === 'begin') { depth++; continue; }
+    if (tk.kind === 'end') { if (depth > 0) depth--; continue; }
+    if (depth === 0) matches.push(tk);
   }
   if (!matches.length) return [{ text: inner, start: 0, label: undefined }];
   for (var k = 0; k < matches.length; k++) {
