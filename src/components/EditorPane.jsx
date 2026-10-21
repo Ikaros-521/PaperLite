@@ -210,6 +210,10 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
   grammarEnabledRef.current = grammarCheck === true;
   const grammarTimerRef = useRef(null);
   const grammarGenRef = useRef(0);
+  // gen 只能让结果作废，请求本身还在跑：切文档/关开关/卸载后仍把整篇发完，
+  // 既浪费对方的公共接口配额，也可能把上一文档的内容发完才停
+  const grammarAbortRef = useRef(null);
+  const grammarBusyRef = useRef(false);
   const grammarMarksRef = useRef([]);
   const grammarLastRef = useRef('');
   const clearGrammarMarks = () => {
@@ -224,33 +228,41 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
   async function runGrammar() {
     const cm = cmRef.current;
     if (!cm || !grammarEnabledRef.current) return;
+    // 一轮没跑完就不叠第二轮（叠加时两轮都在发整篇，配额翻倍且结果互相覆盖），
+    // 上一轮的在途请求直接掐掉：gen 只能作废结果，停不了已经发出去的那一篇
+    if (grammarBusyRef.current) { scheduleGrammar(); return; }
+    if (grammarAbortRef.current) grammarAbortRef.current.abort();
+    const ctrl = new AbortController();
+    grammarAbortRef.current = ctrl;
+    grammarBusyRef.current = true;
     const gen = ++grammarGenRef.current;
-    const value = cm.getValue();
-    if (value === grammarLastRef.current) return;   // 内容没变不重复请求
-    if (!value.trim() || value.length > 120000) { clearGrammarMarks(); return; }
-    const masked = maskNonProse(value);
-    const chunks = splitChunks(masked, CHUNK_MAX, CHUNKS_PER_RUN);
-    const marks = [];
     try {
-      for (const chunk of chunks) {
-        // 每块独立超时：断网/挂起时 fetch 可无限 pending，在途请求会一直占着
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 20000);
-        let r;
-        try {
-          r = await fetch(LT_ENDPOINT, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: buildRequestBody(chunk.text),
-            signal: ctrl.signal,
-          });
-        } finally { clearTimeout(timer); }
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const json = await r.json();
-        if (gen !== grammarGenRef.current) return;   // 输入已变/开关已关：丢弃本轮
-        marks.push(...parseMatches(json, masked, chunk.offset));
-      }
-    } catch (e) { return; /* 公共接口限流/断网：语法检查是增值项，绝不打扰写作 */ }
+      const value = cm.getValue();
+      if (value === grammarLastRef.current) return;   // 内容没变不重复请求
+      if (!value.trim() || value.length > 120000) { clearGrammarMarks(); return; }
+      const masked = maskNonProse(value);
+      const chunks = splitChunks(masked, CHUNK_MAX, CHUNKS_PER_RUN);
+      const marks = [];
+      try {
+        for (const chunk of chunks) {
+          // 单块 20s 上限：断网/挂起时 fetch 可无限 pending。超了就整轮收口，
+          // 下一轮由后续编辑或重排再发（aborted 的 signal 不会再复用）
+          const timer = setTimeout(() => ctrl.abort(), 20000);
+          let r;
+          try {
+            r = await fetch(LT_ENDPOINT, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: buildRequestBody(chunk.text),
+              signal: ctrl.signal,
+            });
+          } finally { clearTimeout(timer); }
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const json = await r.json();
+          if (gen !== grammarGenRef.current) return;   // 输入已变/开关已关：丢弃本轮
+          marks.push(...parseMatches(json, masked, chunk.offset));
+        }
+      } catch (e) { return; /* 公共接口限流/断网/被取消：语法检查是增值项，绝不打扰写作 */ }
     if (gen !== grammarGenRef.current) return;
     if (cm.getValue() !== value) { scheduleGrammar(); return; }   // 期间又改了：重排
     grammarLastRef.current = value;
@@ -265,6 +277,10 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
           { className: 'pl-grammar', title: tip }));
       } catch (e) { /* 行已被改短等边界忽略 */ }
     }
+    } finally {
+      grammarBusyRef.current = false;
+      if (grammarAbortRef.current === ctrl) grammarAbortRef.current = null;
+    }
   }
 
   // ---- AI 用词检测（可选、联网）：LanguageTool 查不出的搭配/可数性交给用户配置的 LLM ----
@@ -276,6 +292,10 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
   aiChannelRef.current = aiChannel || null;
   const aiTimerRef = useRef(null);
   const aiGenRef = useRef(0);
+  const aiAbortRef = useRef(null);
+  const aiBusyRef = useRef(false);
+  const aiRunAtRef = useRef(0);   // 上次真正发出的时刻：改一个字就重头轮转会按分钟级烧付费渠道
+  const AI_RESTART_MS = 30000;
   const aiMarksRef = useRef([]);
   const aiLastRef = useRef('');
   const aiCursorRef = useRef(0);   // 下一块下标：内容没变时逐块推进，查完一轮就停
@@ -308,25 +328,44 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
     if (!cm || !aiProofEnabledRef.current) return;
     const channel = aiChannelRef.current;
     if (!channel || !channel.baseUrl) return;   // 未配置渠道：静默，不打扰写作
+    // 一轮没跑完不叠第二轮；上一轮的在途请求（最长 60s）立刻掐掉
+    if (aiBusyRef.current) { scheduleAIProof(); return; }
+    if (aiAbortRef.current) aiAbortRef.current.abort();
+    const ctrl = new AbortController();
+    aiAbortRef.current = ctrl;
+    aiBusyRef.current = true;
     const gen = ++aiGenRef.current;
-    const value = cm.getValue();
-    if (!value.trim() || value.length > 120000) { clearAIMarks(); aiFoundRef.current = []; return; }
-    if (value !== aiLastRef.current) { aiLastRef.current = value; aiCursorRef.current = 0; aiFoundRef.current = []; }
-    const masked = maskNonProse(value);
-    const chunks = proofChunks(masked);
-    if (aiCursorRef.current >= chunks.length) return;   // 全文查完：等下次修改
-    const chunk = chunks[aiCursorRef.current];
-    let marks = [];
     try {
-      const r = await llmChat(channel, buildProofMessages(chunk.text), { maxTokens: 1600, noReasoning: true, timeoutMs: 60000 });
-      if (gen !== aiGenRef.current) return;   // 输入已变/开关已关：丢弃本轮
-      marks = parseAIResult(r.content, masked, chunk.offset);
-    } catch (e) { aiCursorRef.current = (aiCursorRef.current + 1) % Math.max(1, chunks.length); return; /* 失败静默，轮转推进避免卡在同一块 */ }
-    if (gen !== aiGenRef.current) return;
-    if (cm.getValue() !== value) { scheduleAIProof(); return; }   // 期间又改了：重排
-    aiFoundRef.current = aiFoundRef.current.concat(marks);
-    aiCursorRef.current = (aiCursorRef.current + 1) % Math.max(1, chunks.length);
-    drawAIMarks();
+      const value = cm.getValue();
+      if (!value.trim() || value.length > 120000) { clearAIMarks(); aiFoundRef.current = []; return; }
+      if (value !== aiLastRef.current) {
+        // 内容一变就得从头轮转（标记是按遮罩偏移定位的，沿用旧游标会画到错位上）。
+        // 但「每次停顿都从头再查一块」等于按分钟级重复计费，所以距上次实发不足
+        // AI_RESTART_MS 时先排到后面，等用户真的停下来再跑
+        const since = Date.now() - aiRunAtRef.current;
+        if (aiRunAtRef.current && since < AI_RESTART_MS) { aiTimerRef.current = setTimeout(runAIProof, AI_RESTART_MS - since); return; }
+        aiLastRef.current = value; aiCursorRef.current = 0; aiFoundRef.current = [];
+      }
+      const masked = maskNonProse(value);
+      const chunks = proofChunks(masked);
+      if (aiCursorRef.current >= chunks.length) return;   // 全文查完：等下次修改
+      const chunk = chunks[aiCursorRef.current];
+      aiRunAtRef.current = Date.now();
+      let marks = [];
+      try {
+        const r = await llmChat(channel, buildProofMessages(chunk.text), { maxTokens: 1600, noReasoning: true, timeoutMs: 60000, signal: ctrl.signal });
+        if (gen !== aiGenRef.current) return;   // 输入已变/开关已关：丢弃本轮
+        marks = parseAIResult(r.content, masked, chunk.offset);
+      } catch (e) { aiCursorRef.current = (aiCursorRef.current + 1) % Math.max(1, chunks.length); return; /* 失败或被取消都静默，轮转推进避免卡在同一块 */ }
+      if (gen !== aiGenRef.current) return;
+      if (cm.getValue() !== value) { scheduleAIProof(); return; }   // 期间又改了：重排
+      aiFoundRef.current = aiFoundRef.current.concat(marks);
+      aiCursorRef.current = (aiCursorRef.current + 1) % Math.max(1, chunks.length);
+      drawAIMarks();
+    } finally {
+      aiBusyRef.current = false;
+      if (aiAbortRef.current === ctrl) aiAbortRef.current = null;
+    }
   }
 
   useEffect(() => {
@@ -475,8 +514,11 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       clearTimeout(spellTimerRef.current);
       clearTimeout(grammarTimerRef.current);
       grammarGenRef.current++;
+      // 在途请求不会因为组件没了而停：整篇文档会继续发给公共接口 / 付费渠道
+      if (grammarAbortRef.current) grammarAbortRef.current.abort();
       clearTimeout(aiTimerRef.current);
       aiGenRef.current++;
+      if (aiAbortRef.current) aiAbortRef.current.abort();
       window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('blur', onBlur);
       // 先脱开共享 Doc（避免 StrictMode 双挂载时 “document is already in use”）
@@ -496,6 +538,10 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
       setSelPop(null);          // 换文档后旧选区失效，快捷条收起
       clearSpellMarks();   // 标记属于旧 Doc；新 Doc 稍后由 scheduleSpell 重画
       scheduleSpell();
+      // 换文档要先停掉上一篇的在途检查：新文档的 schedule 至少 2s/5s 之后才跑，
+      // 那段时间里上一篇的正文仍在往外发
+      if (grammarAbortRef.current) grammarAbortRef.current.abort();
+      if (aiAbortRef.current) aiAbortRef.current.abort();
       clearGrammarMarks();
       grammarLastRef.current = '';   // 换文档：内容变了，允许立即重新检查
       scheduleGrammar();
@@ -518,14 +564,20 @@ export default function EditorPane({ doc, onChange, onInit, onScrollRatio, onSav
   // 语法检查同理；关掉时还要让在途请求的回执作废
   useEffect(() => {
     if (grammarCheck) scheduleGrammar();
-    else { clearTimeout(grammarTimerRef.current); grammarGenRef.current++; clearGrammarMarks(); grammarLastRef.current = null; }
+    else {
+      clearTimeout(grammarTimerRef.current); grammarGenRef.current++; clearGrammarMarks(); grammarLastRef.current = null;
+      if (grammarAbortRef.current) grammarAbortRef.current.abort();   // 关掉开关不该让整篇继续发完
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grammarCheck]);
 
   // AI 用词检测开关同语法检查；关掉时游标与累积结果一并作废
   useEffect(() => {
     if (aiProofread) scheduleAIProof();
-    else { clearTimeout(aiTimerRef.current); aiGenRef.current++; clearAIMarks(); aiFoundRef.current = []; aiCursorRef.current = 0; }
+    else {
+      clearTimeout(aiTimerRef.current); aiGenRef.current++; clearAIMarks(); aiFoundRef.current = []; aiCursorRef.current = 0;
+      if (aiAbortRef.current) aiAbortRef.current.abort();   // 关掉后这一轮请求要立刻停，否则最长 60s 仍在计费
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiProofread]);
 
