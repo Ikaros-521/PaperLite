@@ -221,7 +221,8 @@ export default function PreviewPane({
     paper.querySelectorAll('.mermaid-block g.node.selected').forEach(el => el.classList.remove('selected'));
     if (!selection || !selection.sel || selection.sel.type !== 'mermaid' || !selection.sel.id) return;
     const block = paper.querySelectorAll('.mermaid-block')[selection.sel.block];
-    const gn = block && block.querySelector('g.node[data-id="' + selection.sel.id + '"]');
+    // id 来自 SVG 的 data-id，可能带引号：不 CSS.escape 就是选择器抛错、整块选中失效
+    const gn = block && block.querySelector('g.node[data-id="' + CSS.escape(String(selection.sel.id)) + '"]');
     if (gn) gn.classList.add('selected');
   }, [selection, result, mmdTick]);
 
@@ -335,7 +336,9 @@ export default function PreviewPane({
       const sidx = g.getAttribute('data-sidx');
       const host = g.closest('.diagram');
       const did = host ? +(host.getAttribute('data-did') || 0) : 0;
-      if (sidx !== null) onSelectNode(did, +sidx);
+      // 与 onJumpOff/onSelMermaid 一样要先判存在：移动端复用这个组件时没有样式面板，
+      // 直调未传的回调就是点一下图节点整片白屏（全仓没有 ErrorBoundary）
+      if (sidx !== null && onSelectNode) onSelectNode(did, +sidx);
       return;
     }
     // 普通内容：就近找带 data-off 的块级元素，回跳编辑器对应源码行。

@@ -39,8 +39,10 @@ export function useLongPress(onLongPress: () => void, enabled = true) {
 
   const start = (x: number, y: number) => {
     if (!enabled) return
-    origin.current = { x, y }
+    // 先清再记原点：clear() 会把 origin 置 null，反过来写等于每次滑动都因为没有
+    // 原点可比而不取消，滚文稿滚到 500ms 就误弹长按菜单
     clear()
+    origin.current = { x, y }
     timer.current = window.setTimeout(() => {
       timer.current = null
       origin.current = null

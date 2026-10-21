@@ -9,7 +9,7 @@
 // 数据源 = 共享工作区的真实 CodeMirror Doc + 桌面同一套渲染引擎
 // =============================================
 
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useDeferredValue, useMemo, useRef, useState } from 'react'
 import {
   ActionSheet,
   Button,
@@ -55,6 +55,8 @@ import { collectUserCommands } from '../../completion.js'
 import { renderLatex } from '../../engines/latex.js'
 import { renderMarkdownFull } from '../../engines/markdown.js'
 import { lintLaTeX } from '../../engines/linter.js'
+import { RENDER_MAX_SRC, tooLargeResult } from '../../previewBudget.js'
+import { escHtml } from '../../htmlEsc.js'
 import { aiFixIssuePrompt } from '../../workspace/chatContext.js'
 import { wordCount } from '../../fileActions.js'
 import { tr, getLang } from '../../i18n.js'
@@ -200,11 +202,13 @@ function Screen1_SourceEditor({ tab }: { tab: MobileTab }) {
    ================================================ */
 function Screen2_RichPreview({
   result,
+  assetTabs,
   onLongPress,
   onJumpOff,
   onSelectTable,
 }: {
   result: ReturnType<typeof renderLatex> & { isMd?: boolean }
+  assetTabs: unknown[]
   onLongPress: () => void
   onJumpOff: (offset: number) => void
   onSelectTable: (id: number) => void
@@ -226,6 +230,7 @@ function Screen2_RichPreview({
       )}
       <PreviewPane
         result={result}
+        assetTabs={assetTabs}
         zoom={1}
         onZoom={() => {}}
         syncScroll={false}
@@ -920,23 +925,41 @@ export function Flow2_Workspace() {
   } | null
 
   const value = tab?.doc ? tab.doc.getValue() : ''
+  // 渲染吃滞后值、静态检查吃防抖值：与桌面同口径。此前两端都漏了这层——移动端
+  // 每击键全量 renderLatex + lintLaTeX + 扫全部标签，长文直接把输入堵死
+  const renderValue = useDeferredValue(value)
+  const [lintValue, setLintValue] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setLintValue(value), 250)
+    return () => clearTimeout(timer)
+  }, [value])
   // LaTeX 规则只对 tex/draft 生效：code/text 类标签按 LaTeX 检查只会产误报（桌面对齐 isTexLike）
-  const issues = useMemo(() => ((tab?.kind === 'tex' || tab?.kind === 'draft') ? lintLaTeX(value) : []), [value, tab?.kind])
+  const issues = useMemo(() => ((tab?.kind === 'tex' || tab?.kind === 'draft') ? lintLaTeX(lintValue) : []), [lintValue, tab?.kind])
 
-  // 只渲染一次：预览与大纲共用同一份 result（renderLatex 对长文不便宜）
+  // 只渲染一次：预览与大纲共用同一份 result（renderLatex 对长文不便宜）。
+  // 形状必须与桌面一致：PreviewPane 直接读 result.meta、TablePanel 读 result.tables 与
+  // result.src（写回前校验区间），全仓没有 ErrorBoundary，少一个字段就是整棵移动树白屏。
+  // meta 桌面也只给 { ctex: true }，这里不猜版式类，免得更像错像
   const result = useMemo(() => {
+    if (renderValue.length > RENDER_MAX_SRC) return tooLargeResult(renderValue, getLang()) as never
     try {
-      if (tab?.kind === 'md') return { ...renderMarkdownFull(value), isMd: true } as never
-      return renderLatex(value, {}) as never
+      if (tab?.kind === 'md') {
+        return {
+          ...renderMarkdownFull(renderValue), isMd: true,
+          meta: { ctex: true }, warnings: [], diagrams: [], tables: [], src: renderValue,
+        } as never
+      }
+      const r = renderLatex(renderValue, {}) as { src?: string }
+      r.src = renderValue
+      return r as never
     } catch (e) {
       // 异常消息可能回显文档内容片段，进 innerHTML 前转义
-      const escHtml = (s: unknown) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
       return {
         html: '<div class="render-error">' + escHtml(tr(getLang(), 'app.renderErr') + String((e as Error).message || e)) + '</div>',
-        warnings: [], headings: [], diagrams: [], stats: { words: 0 },
+        meta: {}, warnings: [], diagrams: [], tables: [], headings: [], src: renderValue,
       } as never
     }
-  }, [value, tab?.kind])
+  }, [renderValue, tab?.kind])
 
   const headings = useMemo(
     () => ((result as { headings?: Array<{ level: number; text: string; offset: number }> })?.headings || []),
@@ -1152,7 +1175,7 @@ export function Flow2_Workspace() {
 
       {view === 'source'
         ? <Screen1_SourceEditor tab={tab} />
-        : <Screen2_RichPreview result={result as never} onLongPress={() => setPreviewMenu(true)} onJumpOff={jumpToOffset} onSelectTable={onSelectTable} />}
+        : <Screen2_RichPreview result={result as never} assetTabs={ws.tabs as never} onLongPress={() => setPreviewMenu(true)} onJumpOff={jumpToOffset} onSelectTable={onSelectTable} />}
 
       {!zen && (
         <div className="pl-toolbelt" data-keyboard={keyboard > 0}>
