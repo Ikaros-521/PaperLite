@@ -59,5 +59,22 @@ const doc2 = 'good line\nseond line';
 const t2 = findTypos(doc2, isWord);
 ok(t2.length === 1 && t2[0].line === 1 && t2[0].from === 0, '行号定位正确');
 
+// 身份字段必须遮住：语法检查/AI 校对开着时正文会在停顿后自动发出，
+// 姓名/单位/邮箱不该顺带离开本机（打开的还是别人的稿子时）
+{
+  const id = '\\author{张伟 <zhangwei@tsinghua.edu.cn> \\and 李四}\n\\affil{清华大学计算机系}\n这一段是正文。';
+  const m = maskNonProse(id);
+  ok(m.length === id.length, '身份遮罩同样等长（行列定位靠它）');
+  ok(!m.includes('张伟') && !m.includes('zhangwei@tsinghua') && !m.includes('李四'), '\\author 的姓名与邮箱被遮掉：' + JSON.stringify(m));
+  ok(!m.includes('清华大学'), '\\affil 的单位被遮掉');
+  ok(m.includes('这一段是正文'), '正文不受影响');
+  // \title 故意不遮：标题是自然语言，用户就是要检查它
+  ok(maskNonProse('\\title{A Radient Methdod}').includes('Radient'), '\\title 仍参与检查（不是身份字段）');
+  // 嵌套与 \\and 分隔不能把遮罩范围算错
+  const nested = '\\author{A\\thanks{注一} and B}\nprose here';
+  const mn = maskNonProse(nested);
+  ok(mn.length === nested.length && !mn.includes('注一') && mn.includes('prose here'), '嵌套 thanks 的遮罩范围正确：' + JSON.stringify(mn));
+}
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

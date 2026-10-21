@@ -6,11 +6,15 @@
  * 跨行的数学（$..$、$$..$$、\[..\]、\(..\)）与 verbatim/lstlisting/minted 环境有状态跟踪。
  */
 
-// 花括号参数整段遮罩的命令：引用键 / 标签 / 路径不是自然语言
+// 花括号参数整段遮罩的命令。两组理由不同：
+//   引用键 / 标签 / 路径不是自然语言（拼写与语法检查都不该碰）；
+//   身份字段是隐私——语法检查/AI 校对开着时，正文会在停顿后自动发出去，
+//   姓名/单位/邮箱不该顺带离开本机（尤其打开的是别人的稿子时）
 const MASK_ARG_COMMANDS = new Set([
   'cite', 'citep', 'citet', 'citealp', 'citeauthor', 'citeyear', 'parencite', 'textcite',
   'ref', 'eqref', 'autoref', 'cref', 'crefrange', 'pageref', 'label',
-  'includegraphics', 'bibliography', 'bibliographystyle', 'input', 'include', 'url'
+  'includegraphics', 'bibliography', 'bibliographystyle', 'input', 'include', 'url',
+  'author', 'affil', 'affiliation', 'email', 'thanks', 'orcid', 'address'
 ]);
 
 const VERBATIM_ENVS = /^(verbatim\*?|lstlisting|minted)$/;
