@@ -3,7 +3,7 @@
  * 这些都关系到 API Key 会不会离开本机、坏服务端能不能把标签页拖死。
  */
 import assert from 'node:assert/strict';
-import { chat, fetchModels, testConnection, baseUrlProblem, thinkingSwitch, loadChannels, saveChannels, newChannel } from '../src/llm.js';
+import { chat, fetchModels, testConnection, baseUrlProblem, thinkingSwitch, loadChannels, saveChannels, newChannel, PLATFORM_PRESETS } from '../src/llm.js';
 import { setLang } from '../src/i18n.js';
 
 setLang('zh');
@@ -119,6 +119,10 @@ assert.equal(seen.length, 0, '校验失败不该已经发出请求');
   assert.ok(String(bodies[4].messages[0].content).includes('推理'), '启用时带思维链引导的系统提示');
   await think('qwen3-30b', false, { noReasoning: true });
   assert.equal(bodies[5].enable_thinking, false, '摘要这类机械任务也走同一条关闭路径');
+  // noReasoning 要连 system 提示一起关：只关 thinking 字段、仍注入“逐步推理”等于没关
+  await think('glm-4.5', true, { noReasoning: true });
+  assert.deepEqual(bodies[6].thinking, { type: 'disabled' }, 'noReasoning 仍显式关闭推理');
+  assert.ok(!bodies[6].messages.some(m => m.role === 'system' && /推理/.test(m.content)), 'noReasoning 不该再注入思维链系统提示');
 
   // 开关识别与界面口径一致
   assert.equal(thinkingSwitch('glm-4.5'), 'thinking');
@@ -223,6 +227,14 @@ globalThis.fetch = realFetch;
   });
   await assert.rejects(chat(openaiCh, [{ role: 'user', content: 'hi' }], { stream: false }));
   globalThis.fetch = realFetch;
+}
+
+// ---- Coding Plan 预设必须走第三方工具的独立端点 ----
+{
+  const zc = PLATFORM_PRESETS.find(p => p.id === 'zhipu-coding');
+  assert.ok(zc && zc.protocol === 'openai' && zc.baseUrl === 'https://open.bigmodel.cn/api/coding/paas/v4', '智谱 Coding Plan 用 OpenAI 兼容的 coding 端点');
+  const mm = PLATFORM_PRESETS.find(p => p.id === 'minimax-coding');
+  assert.ok(mm && mm.protocol === 'openai' && mm.baseUrl === 'https://api.minimax.cn/v1', 'MiniMax Coding Plan 预设');
 }
 
 console.log('LLM channel: base URL validation, redirect policy on every path, SSE cancel-on-error and delta parsing passed.');

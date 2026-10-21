@@ -31,10 +31,15 @@ export const PLATFORM_PRESETS = [
     models: ['deepseek-chat', 'deepseek-reasoner'] },
   { id: 'zhipu', name: '智谱 GLM', nameEn: 'Zhipu GLM', protocol: 'openai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     models: ['glm-4.5', 'glm-4.5-air', 'glm-4-plus', 'glm-4-flash', 'embedding-3'] },
+  // Coding Plan 走独立端点，Anthropic 端点只给 Claude Code，第三方工具用会报 1113
+  { id: 'zhipu-coding', name: '智谱 GLM Coding Plan', nameEn: 'Zhipu GLM Coding Plan', protocol: 'openai',
+    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', models: ['glm-5.3', 'glm-5.3-flash', 'glm-5.3-flash[1m]'] },
   { id: 'qwen', name: '通义千问 Qwen', nameEn: 'Alibaba Qwen', protocol: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     models: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen-long', 'text-embedding-v3'] },
   { id: 'moonshot', name: 'Kimi (月之暗面)', nameEn: 'Kimi (Moonshot)', protocol: 'openai', baseUrl: 'https://api.moonshot.cn/v1',
     models: ['kimi-k2-0905-preview', 'kimi-latest', 'moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
+  { id: 'minimax-coding', name: 'MiniMax Coding Plan', protocol: 'openai', baseUrl: 'https://api.minimax.cn/v1',
+    models: ['MiniMax-M3.1-Flash'] },
   { id: 'siliconflow', name: '硅基流动 SiliconFlow', nameEn: 'SiliconFlow', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1',
     models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-72B-Instruct', 'BAAI/bge-m3'] },
   { id: 'openrouter', name: 'OpenRouter 聚合', nameEn: 'OpenRouter', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1',
@@ -267,7 +272,9 @@ function chatOpenAI(channel, messages, opts) {
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
   const temp = resolveTemperature(channel, opts);
   if (temp !== undefined) body.temperature = temp;
-  if (channel.cot) {
+  // noReasoning 是「连提示词一起关」：只关 thinking 字段、仍塞一段“逐步推理”的
+  // system 提示，对摘要/校对这类机械任务等于没关
+  if (channel.cot && !opts.noReasoning) {
     body.messages = [
       { role: 'system', content: t('ai.systemCoT') },
       ...body.messages

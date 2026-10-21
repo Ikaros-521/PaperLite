@@ -11,6 +11,10 @@ const SUFFIX_K = /-(\d{1,4})k$/i;
 
 const NAMED_RULES = [
   [/paperlite-mock/, 32000],
+  [/glm-5\.3.*\[1m\]/, 1000000],
+  [/glm-5\.3-flash/, 200000],
+  [/glm-5\.3/, 1000000],
+  [/minimax-m3\.1/i, 524288],
   [/qwen-long/, 1000000],
   [/gemini-2\.0-flash|gemini-2\.5|gemini-flash/, 1048576],
   [/claude/, 200000],

@@ -401,6 +401,8 @@ console.log('== 上下文预算（token 口径）==');
 ok(C.inferWindow('claude-sonnet-4-5') === 200000, 'Claude 200k');
 ok(C.inferWindow('gpt-4o') === 128000 && C.inferWindow('deepseek-chat') === 64000, 'OpenAI 128k / DeepSeek 64k');
 ok(C.inferWindow('moonshot-v1-32k') === 32000, '模型名后缀显式窗口');
+ok(C.inferWindow('glm-5.3') === 1000000 && C.inferWindow('glm-5.3-flash') === 200000 && C.inferWindow('glm-5.3-flash[1m]') === 1000000, 'GLM-5.3 1M / flash 200k / flash[1m] 1M');
+ok(C.inferWindow('MiniMax-M3.1-Flash') === 524288, 'MiniMax M3.1 524k');
 ok(C.inferWindow('some-random-model') === 0 && C.inferWindow('') === 0, '认不出返回 0');
 ok(C.resolveWindow({ chatModel: 'gpt-4o' }).tokens === 128000, '默认按模型推断');
 ok(C.resolveWindow({ chatModel: 'gpt-4o', ctxWindow: 8000 }).tokens === 8000, '自定义覆盖优先于推断');
