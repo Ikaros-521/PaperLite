@@ -104,5 +104,18 @@ ok(c === null, '普通文本不触发');
 c = matchRefContext('\\cite{one, two');
 ok(c && c.segment === ' two', '逗号后含空白的片段如实返回（由 hint 过滤）：' + JSON.stringify(c.segment));
 
+// \label{ 没有 } 时，正则版会从每个起点把 [^}]+ 重试到文末（360KB 实测 4.66s，
+// 而补全每敲一下都对所有打开标签跑一遍）；游标版必须留在毫秒级
+{
+  const bad = '\\label{ '.repeat(80000);   // ≈1.44MB，旧写法外推上百秒
+  const t0 = Date.now();
+  const res = collectLabels(bad);
+  const ms = Date.now() - t0;
+  ok(ms < 800, '无右界的批量 \\label{ 保持线性, got ' + ms + 'ms');
+  ok(res.length === 0, '一个都闭不上时不该产出键');
+  const mixed = collectLabels('\\label{a} ' + '\\label{ '.repeat(20000));
+  ok(mixed.length === 1 && mixed[0].key === 'a', '前面合法的 label 仍收到（游标不被后面的坏数据带偏）');
+}
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

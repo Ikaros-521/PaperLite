@@ -17,15 +17,19 @@ function stripComments(text) {
 }
 
 // collectLabels: [{ key, pos, line }] —— pos/line 用于后续展示来源（暂无 UI，先算出来备着）
+// 手写 indexOf 游标而不是 /\\label\{([^}]+)\}/g：坏文件里几千个没有 } 的 \label{ 会让
+// 正则从每个起点把 [^}]+ 重试到文末，180KB 实测 1.17s、360KB 4.66s（二次方），
+// 而补全每敲一下就对所有打开标签调它 —— 一份别人写的 .tex 就能把打字冻住。
+const LABEL_NEEDLE = '\\label{';
 export function collectLabels(text) {
   const src = stripComments(text);
   const out = [];
-  const re = /\\label\{([^}]+)\}/g;
-  let m;
-  while ((m = re.exec(src))) {
-    if (!m[1].trim()) continue;
-    // exec 结果只有 .index，没有 .start —— 写错时 pos 一直是 undefined，跳转拿不到落点
-    out.push({ key: m[1].trim(), pos: m.index });
+  for (let p = src.indexOf(LABEL_NEEDLE); p >= 0; p = src.indexOf(LABEL_NEEDLE, p + LABEL_NEEDLE.length)) {
+    const start = p + LABEL_NEEDLE.length;
+    const end = src.indexOf('}', start);
+    if (end < 0) break;                     // 后面已经没有 } 了，再往前的 \label 同样闭不上
+    const key = src.slice(start, end);
+    if (key.trim()) out.push({ key: key.trim(), pos: p });
   }
   return out;
 }
