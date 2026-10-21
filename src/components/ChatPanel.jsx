@@ -4,7 +4,7 @@ import * as ctx from '../context.js';
 import { showAlert as alert, showConfirm } from '../dialogs.js';
 import { stripToolBlocks, parseToolCalls } from '../workspace/agentTools.js';
 import { renderChatMarkdown, splitChatBlocks } from '../engines/markdown.js';
-import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS } from '../workspace/agentRuntime.js';
+import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS, AGENT_APPROVAL_DEFAULT } from '../workspace/agentRuntime.js';
 import { dropTurn, editResend, MAX_SESSIONS } from '../workspace/chatSessions.js';
 import { thinkingSwitch } from '../llm.js';
 
@@ -43,7 +43,7 @@ const readPanelRect = () => {
   } catch (e) { return null; }
 };
 
-export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null, sessions = null, activeSessionId = '', onNewSession = null, onSwitchSession = null, onDeleteSession = null, onForkSession = null }) {
+export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null, sessions = null, activeSessionId = '', persistFailed = false, onNewSession = null, onSwitchSession = null, onDeleteSession = null, onForkSession = null }) {
   const t = useT();
   const lang = useLang();
   const [input, setInput] = useState('');
@@ -688,7 +688,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         <div className="chat-sessions">
           <div className="cs-head">
             <b>{t('chat.sessionsTitle')}</b>
-            <button className="btn sm" disabled={busy || !onNewSession}
+            <button className="btn sm" disabled={busy || externalBusy || !onNewSession}
               onClick={async () => { if (onNewSession) { await onNewSession(); setAgentTask(null); } setShowSessions(false); }}>
               ＋ {t('chat.newSession')}
             </button>
@@ -697,12 +697,12 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
           <ul className="cs-list">
             {sessions.map(s => (
               <li key={s.id} className={s.id === activeSessionId ? 'on' : ''}>
-                <button className="cs-item" title={s.title} disabled={busy}
+                <button className="cs-item" title={externalBusy ? t('diag.fixing') : s.title} disabled={busy || externalBusy}
                   onClick={() => { if (onSwitchSession) onSwitchSession(s.id); setShowSessions(false); }}>
                   <span className="cs-t">{s.title}</span>
                   <span className="cs-m">{t('chat.sessionMsgs', { n: s.count })} · {when(s.updatedAt)}</span>
                 </button>
-                <button className="cs-del" title={t('chat.deleteSession')} disabled={busy} onClick={() => removeSession(s)}>✕</button>
+                <button className="cs-del" title={t('chat.deleteSession')} disabled={busy || externalBusy} onClick={() => removeSession(s)}>✕</button>
               </li>
             ))}
           </ul>
@@ -926,7 +926,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             // 权限档位就地可切：跑一轮 Agent 时才发现「每次审核」在设置弹窗里，
             // 等于要么打断工作去开设置、要么整轮免确认
             onAgentApproval && (
-              <select className="ct-chip" value={(agentCfg && agentCfg.approval) || 'auto'}
+              <select className="ct-chip" value={(agentCfg && agentCfg.approval) || AGENT_APPROVAL_DEFAULT}
                 onChange={e => onAgentApproval(e.target.value)}
                 title={t('agent.lvTip')} disabled={busy}>
                 {AGENT_APPROVALS.map(lv => <option key={lv} value={lv}>{t('agent.lv' + lv[0].toUpperCase() + lv.slice(1))}</option>)}
@@ -954,6 +954,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             title={channel && channel.cot ? t('chat.cotOnTip') : t('chat.cotTip')}>
             ◈ {t('chat.cotChip')}
           </button>
+          {persistFailed && <span className="chat-persist-warn" title={t('chat.persistFailedTip')}>⚠ {t('chat.persistFailed')}</span>}
           <span className="ct-grow" />
           {busy
             ? <button className="btn sm" onClick={() => abortRef.current && abortRef.current.abort()}>{t('chat.stop')}</button>

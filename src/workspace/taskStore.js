@@ -231,11 +231,15 @@ export function makeTaskStore(driver) {
 }
 
 let shared = null;
-/** 浏览器侧共享实例（App 与 ChatPanel 用同一个，避免重复开库） */
-export async function getTaskStore() {
+/** 浏览器侧共享实例（App 与 ChatPanel 用同一个，避免重复开库）。
+ *  缓存的是「初始化这件事」而不是结果对象：两个调用方同时进来时，旧写法都看见
+ *  shared 仍是 null，于是各自 openDriver()，多开一条 IDB 连接挂在页面上
+ *  （连接数是有上限的，而且第二条会被版本升级请求堵住）。 */
+export function getTaskStore() {
   if (shared) return shared;
-  const driver = await openDriver();
-  shared = makeTaskStore(driver);
+  shared = openDriver().then(driver => makeTaskStore(driver));
+  // 开库本身失败时不把拒绝状态钉死：留给下一次调用重试
+  shared.catch(() => { shared = null; });
   return shared;
 }
 

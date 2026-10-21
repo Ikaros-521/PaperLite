@@ -39,7 +39,12 @@ export function useChatSessions({ projectKey, persist = true }) {
   const dirtyRef = useRef(new Set());      // 待落库的会话 id（切会话不能把它清掉）
   const retryRef = useRef(0);               // 连续补写次数
   const [retryTick, setRetryTick] = useState(0);   // 只用来在写失败后重新触发落库 effect
+  const [persistFailed, setPersistFailed] = useState(false);  // 补写用尽后仍写不进库（配额满/事务被拦）
   const sessionsRef = useRef([]);
+  // 当前 sessions 列表实际归属的项目 key。落库、列举、淘汰全部按它走，绝不读实时
+  // projectKey：换文件夹时列表还是旧项目的，而 effect 已经拿到新 key，
+  // 用实时值就是「A 的对话带着 B 的 key 写进库」——跨项目串会话的根因。
+  const ownerKeyRef = useRef('');
   sessionsRef.current = sessions;
   keyRef.current = projectKey || '';
 
@@ -60,6 +65,18 @@ export function useChatSessions({ projectKey, persist = true }) {
     loadedRef.current = key;
     import('./taskStore.js')
       .then(async m => {
+        // 换项目前，先把上一个项目攒着的脏会话按「它自己的 key」写完，再换列表。
+        // 不冲这一笔，这些 id 会在下一次防抖里带着新 key 落库（串台），
+        // 或者被换列表后的 find() 找不到而静默丢掉（用户那轮对话就这么没了）。
+        const prevKey = ownerKeyRef.current;
+        if (prevKey && prevKey !== key && dirtyRef.current.size) {
+          const pending = [...dirtyRef.current];
+          dirtyRef.current.clear();
+          for (const id of pending) {
+            const s = sessionsRef.current.find(x => x.id === id);
+            if (s && (s.messages || []).length) await m.saveSession({ ...s, projectKey: prevKey });
+          }
+        }
         let list = await m.listSessions(key);
         if (!list.length) {
           const legacy = await m.adoptLegacyChat(key);
@@ -69,6 +86,13 @@ export function useChatSessions({ projectKey, persist = true }) {
         if (!list.length) list = [newSession(key)];   // 空会话不写库，等它有了内容再说
         const want = readPointer()[key];
         const active = list.find(s => s.id === want) || list[0];
+        // 列表、归属 key、脏集合、活动指针、补写计数一起换：只换列表的话，
+        // 淘汰会拿旧项目的活动 id 去判新项目的行该留哪条，旧 id 不在新列表里
+        // 就等于「没有要保的那条」，新项目刚写进去的行会被当成超限淘汰掉
+        ownerKeyRef.current = key;
+        dirtyRef.current.clear();
+        retryRef.current = 0;
+        hydratedRef.current = false;
         setSessions(list);
         setActive(active.id);
         hydratedRef.current = true;
@@ -82,32 +106,39 @@ export function useChatSessions({ projectKey, persist = true }) {
   // 到点的定时器，只写当前那条的话，刚聊完那轮的正文就永远留在内存里（实测会留下
   // 一堆有标题没内容的空行）。空会话也不写库——新建后没说话不该占历史。
   useEffect(() => {
-    if (!persist || !projectKey || !hydratedRef.current) return undefined;
-    if (!dirtyRef.current.size) return undefined;
+    if (!persist || !hydratedRef.current) return undefined;
+    // 落库/列举/淘汰都按列表归属的 key，不读实时 projectKey（见 ownerKeyRef 注释）
+    const owner = ownerKeyRef.current;
+    if (!owner || !dirtyRef.current.size) return undefined;
     const timer = setTimeout(async () => {
       const ids = [...dirtyRef.current];
       dirtyRef.current.clear();
       try {
         const m = await import('./taskStore.js');
+        let gaveUp = false;
         for (const id of ids) {
           const s = sessionsRef.current.find(x => x.id === id);
           if (!s || !(s.messages || []).length) continue;
           // 写库失败不抛错，只回 false（配额满/事务被拦）。留原样不清脏集合就等于静默丢历史；
           // 但无限重试会在 permanently 写不进时变成后台常驻，所以按轮次封顶
-          const saved = await m.saveSession({ ...s, projectKey });
-          if (!saved && retryRef.current < SAVE_RETRY_MAX) {
+          const saved = await m.saveSession({ ...s, projectKey: owner });
+          if (saved) continue;
+          if (retryRef.current < SAVE_RETRY_MAX) {
             dirtyRef.current.add(id);
             retryRef.current++;
             setRetryTick(n => n + 1);
-          }
+          } else gaveUp = true;
         }
+        // 补写次数用尽就给个回声：草稿与历史那条路径都会亮保存失败，聊天这边静默丢掉
+        // 等于用户以为历史还在，回头只剩一条有标题没内容的空会话
+        setPersistFailed(gaveUp);
         if (!dirtyRef.current.size) retryRef.current = 0;
         // 淘汰以库为准：内存列表可能滞后一帧，按它算会留下多出来的旧行
-        const rows = await m.listSessions(projectKey);
+        const rows = await m.listSessions(owner);
         const keep = evictSessions(rows, activeRef.current, MAX_SESSIONS);
         const keepIds = new Set(keep.map(s => s.id));
         const dropped = rows.filter(s => !keepIds.has(s.id));
-        for (const d of dropped) await m.deleteSession(projectKey, d.id);
+        for (const d of dropped) await m.deleteSession(owner, d.id);
         setSessions(prev => evictSessions(prev, activeRef.current, MAX_SESSIONS));
       } catch (e) { ids.forEach(i => dirtyRef.current.add(i)); }
     }, SAVE_DEBOUNCE_MS);
@@ -170,6 +201,7 @@ export function useChatSessions({ projectKey, persist = true }) {
     briefs: sessions.map(sessionBrief),
     activeId,
     available: !!persist && hydratedRef.current,
+    persistFailed,
     onStart: startSession,
     onSwitch: switchSession,
     onDelete: deleteSession,

@@ -327,6 +327,8 @@ select.ct-chip.on { background-image:
 .chat-sessions .cs-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .chat-sessions .cs-head b { color: var(--accent-deep); font-size: 12px; }
 .chat-sessions .cs-hint { margin-left: auto; font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; }
+/* 历史写不进库的常驻回声：只在这件事真的失败后出现，不占正常排版 */
+.chat-persist-warn { font-size: 10.5px; color: var(--seal); white-space: nowrap; }
 .chat-sessions ul.cs-list { list-style: none; margin: 0; padding: 0; }
 .cs-list li { display: flex; align-items: stretch; gap: 4px; border-top: 1px dotted var(--edge); }
 .cs-list li.on { background: var(--badge-bg); border-radius: 6px; }
