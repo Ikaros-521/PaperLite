@@ -19,7 +19,7 @@ let value = 'A', disk = '', finish, fail = false;
 let tabs = [{ id: 1, kind: 'tex', name: 'paper.tex', handle: {}, historyKey: 'h', saved: 'old', dirty: true,
   disk: { m: 1, s: 1 }, doc: { getValue: () => value, setValue: text => { value = text; } } }];
 const common = {
-  useCallback: fn => fn, activeId: 1, rootDir: null, flash() {}, confirm: async () => true,
+  useCallback: fn => fn, activeId: 1, rootDir: null, projectId: '', flash() {}, confirm: async () => true,
   tabsRef: { get current() { return tabs; } }, setTabs: fn => { tabs = fn(tabs); },
   recordVersion: () => ({ ok: true }), setHistoryError() {}, setHistoryTick() {},
   getLang: () => 'zh', tr: (_, key) => key, t: key => key, alert() {}, infoFor,
@@ -81,7 +81,7 @@ for (const kind of ['tex', 'draft']) for (const inFolder of [true, false]) {
   value = 'save-as A';
   tabs[0] = { ...tabs[0], kind, handle: null, saved: '', dirty: true };
   const asBegin = workspaceSrc.indexOf('  const saveTabAs = useCallback(');
-  const asDeps = '  }, [t, rootDir, confirm, alertBox, onTreeChanged]);';
+  const asDeps = '  }, [t, rootDir, projectId, confirm, alertBox, onTreeChanged]);';
   const asSource = workspaceSrc.slice(asBegin, workspaceSrc.indexOf(asDeps, asBegin) + asDeps.length);
   const copies = [];
   const saveAs = vm.runInNewContext(asSource + '\nsaveTabAs', {

@@ -13,7 +13,8 @@ import * as fs from '../fs.js';
 import { infoFor } from '../fileTypes.js';
 import { validName } from '../fileActions.js';
 import { downloadFile } from '../exporter.js';
-import { recordVersion, copyHistory, takeCorruptNotice } from '../historyStorage.js';
+import { recordVersion, copyHistory, takeCorruptNotice, migrateHistoryScope } from '../historyStorage.js';
+import { migrateMainDocKey } from '../mainDoc.js';
 import { noteLiveTabs } from '../liveTabs.js';
 import { samples } from '../engines/samples.js';
 import { tr, getLang, detectLang } from '../i18n.js';
@@ -47,6 +48,9 @@ export function useWorkspace(ui) {
     return first && first.doc ? first.doc.getValue() : '';
   });
   const [rootDir, setRootDir] = useState(null);
+  // 项目身份不再用文件夹名：同名目录会串聊天/历史/主文档 pin。UUID 由 fs.ensureProjectId
+  // 按句柄身份分配，切换目录时与 rootDir 一起原子更新。
+  const [projectId, setProjectId] = useState('');
   const [restorePrompt, setRestorePrompt] = useState(null);
   const [historyTick, setHistoryTick] = useState(0);
   const [historyError, setHistoryError] = useState('');
@@ -61,7 +65,7 @@ export function useWorkspace(ui) {
   const activeTab = useMemo(() => tabs.filter(x => x.id === activeId)[0] || null, [tabs, activeId]);
   // 历史键的唯一定口径：makeTab 把 [scope, path] 编进 key，快照必须按被改的那个标签算
   const historyKeyOf = useCallback((tab) => (tab && tab.historyKey)
-    || JSON.stringify([rootDir?.name || '', tab?.kind === 'draft' ? 'draft' : tab?.path]), [rootDir?.name]);
+    || JSON.stringify([projectId || '', tab?.kind === 'draft' ? 'draft' : tab?.path]), [projectId]);
   const historyKey = historyKeyOf(activeTab);
 
   // ---- 草稿自动保存：整组草稿标签各存一份。写失败必须让人看见——静默 catch 等于静默丢稿 ----
@@ -197,29 +201,56 @@ export function useWorkspace(ui) {
   }, [activeTab?.doc, historyKey, noteHistory]);
 
   // ---- 文件夹 ----
+  // 旧版本按文件夹名存聊天/历史/主文档 pin；第一次拿到 UUID 时把这些数据搬到新键。
+  // 只搬一次：目标键已有数据就跳过（同名文件夹的历史歧义第一次打开时定归属）。
+  const migrateLegacyProject = useCallback(async (name, pid) => {
+    if (!name || !pid || pid === name || pid.startsWith('name:')) return;
+    try { migrateMainDocKey(name, pid); } catch (e) { /* pin 迁移失败就保留旧键 */ }
+    try { migrateHistoryScope(name, pid); } catch (e) { /* 历史迁移失败就保留旧键 */ }
+    try {
+      const { migrateSessions } = await import('./taskStore.js');
+      await migrateSessions('dir:' + name, pid);
+    } catch (e) { /* IndexedDB 不可用则保留旧会话 */ }
+  }, []);
+
+  // 目录与身份必须一起落地：先设 rootDir 再异步补 projectId，会让打开文件的瞬间
+  // 用空键建出历史，迁又迁不回来。
+  const adoptRootDir = useCallback(async (handle, pid) => {
+    await migrateLegacyProject(handle?.name || '', pid);
+    setRootDir(handle);
+    setProjectId(pid || '');
+  }, [migrateLegacyProject]);
+
   const openFolder = useCallback(async () => {
     try {
       const handle = await fs.pickDirectory();
-      setRootDir(handle); setRestorePrompt(null);
+      const pid = await fs.ensureProjectId(handle);
+      await adoptRootDir(handle, pid);
+      setRestorePrompt(null);
       await fs.saveRootHandle(handle);
       onSideTab('files');
       flashRef.current(t('app.folderOpened', { name: handle.name }));
     } catch (e) {
       if (e && e.name !== 'AbortError') alertBox(t('app.openFolderFailed', { msg: e.message || e }));
     }
-  }, [t, alertBox, onSideTab]);
+  }, [t, alertBox, onSideTab, adoptRootDir]);
 
   const closeFolder = useCallback(async () => {
-    setRootDir(null); setRestorePrompt(null); await fs.clearRootHandle();
+    setRootDir(null); setProjectId(''); setRestorePrompt(null); await fs.clearRootHandle();
   }, []);
 
   const restoreFolder = useCallback(async () => {
     if (!restorePrompt) return;
     const perm = await fs.requestPermission(restorePrompt, 'readwrite');
-    if (perm === 'granted') { setRootDir(restorePrompt); setRestorePrompt(null); onSideTab('files'); }
+    if (perm === 'granted') {
+      const pid = await fs.ensureProjectId(restorePrompt);
+      await adoptRootDir(restorePrompt, pid);
+      setRestorePrompt(null);
+      onSideTab('files');
+    }
     // 拒绝授权时也吱一声：点了「恢复」却毫无动静，用户只会以为按钮坏了
     else flashRef.current(t('app.permDenied'));
-  }, [restorePrompt, onSideTab, t]);
+  }, [restorePrompt, onSideTab, t, adoptRootDir]);
 
   // ---- 打开文件 ----
   const openFileTab = useCallback(async (fileHandle, path, parentDir) => {
@@ -239,7 +270,7 @@ export function useWorkspace(ui) {
       const text = await fs.readFileText(fileHandle);
       const tab = makeTab({
         name, path, kind: info.kind, handle: fileHandle, parentDir, text,
-        modeSpec: info.mode, saved: text, historyScope: parentDir ? rootDir?.name || '' : '',
+        modeSpec: info.mode, saved: text, historyScope: parentDir ? projectId : '',
         disk: await fs.diskStamp(fileHandle),
       });
       setTabs(ts => ts.concat([tab])); setActiveId(tab.id); setActiveValue(text);
@@ -248,7 +279,7 @@ export function useWorkspace(ui) {
       alertBox(tr(getLang(), 'app.cannotOpen', { name, msg: e.message || e }));
       return null;
     }
-  }, [rootDir?.name, alertBox]);
+  }, [projectId, alertBox]);
 
   // ---- 新建 / 复制 / 上传 ----
   const newFile = useCallback(async () => {
@@ -346,7 +377,7 @@ export function useWorkspace(ui) {
         setTabs(ts => ts.map(x => x.id === tab.id ? { ...x, saving: true } : x));
         await fs.writeFileText(h, value);
         const stamp = await fs.diskStamp(h);
-        const nextKey = JSON.stringify([rootDir.name, tab.name]);
+        const nextKey = JSON.stringify([projectId || '', tab.name]);
         // 草稿键按 draftId 索引且只有这一个标签用，转存后标签已不是草稿 → 迁移即回收源键；
         // 未落盘标签的键是 [范围, 路径]，可能与其他同名内存标签共用，照旧只复制
         const copied = copyHistory(tab.historyKey, nextKey, { move: tab.kind === 'draft' });
@@ -392,7 +423,7 @@ export function useWorkspace(ui) {
     downloadFile(tab.name, value, 'text/plain;charset=utf-8');
     flashRef.current(t('app.downloadFallback', { name: tab.name }));
     return false;
-  }, [t, rootDir, confirm, alertBox, onTreeChanged]);
+  }, [t, rootDir, projectId, confirm, alertBox, onTreeChanged]);
 
   // ---- 保存当前标签 ----
   const saveActive = useCallback(async () => {
@@ -663,7 +694,7 @@ export function useWorkspace(ui) {
 
   return {
     tabs, setTabs, tabsRef, activeId, setActiveId, activeValue, setActiveValue, activeTab,
-    rootDir, setRootDir, restorePrompt, setRestorePrompt,
+    rootDir, setRootDir, projectId, adoptRootDir, restorePrompt, setRestorePrompt,
     historyKey, historyTick, setHistoryTick, historyError, setHistoryError, historyClearedRef,
     noteHistory, snapshot, snapshotTab,
     openFolder, closeFolder, restoreFolder, openFileTab,

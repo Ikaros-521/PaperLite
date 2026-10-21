@@ -111,6 +111,23 @@ const ask = (text) => ({ role: 'user', content: text });
   assert.equal(await store.loadChat('dir:A'), null, '旧行读过就没了');
   assert.deepEqual(await store.listSessions('dir:C'), [], '没存过的项目返回空数组');
   assert.equal(await store.adoptLegacyChat('dir:C'), null);
+
+  // 文件夹名键 → UUID：会话行与旧版单对话行一起搬
+  await store.saveSession({ id: 's4', projectKey: 'dir:same', title: '同名目录', createdAt: 4, updatedAt: 40, messages: [ask('同名目录')] });
+  await store.saveChat('dir:same', [ask('旧单对话'), mk('旧答')]);
+  assert.equal(await store.migrateSessions('dir:same', 'p-same'), 2, '会话与旧单对话都搬');
+  assert.deepEqual(await store.listSessions('dir:same'), [], '旧项目键清空');
+  assert.equal((await store.listSessions('p-same'))[0].id, 's4', '新项目键能读到会话');
+  assert.ok(await store.loadChat('p-same'), '旧单对话跟着搬到新键');
+  assert.equal(await store.migrateSessions('dir:same', 'p-same'), 0, '重复迁移不重复搬');
+
+  // 目标键已有新会话时仍要合并旧会话（上次迁一半失败/后来先落了新会话）
+  await store.saveSession({ id: 's5', projectKey: 'dir:more', title: '旧会话', createdAt: 5, updatedAt: 50, messages: [ask('旧会话')] });
+  await store.saveSession({ id: 's6', projectKey: 'p-more', title: '新会话', createdAt: 6, updatedAt: 60, messages: [ask('新会话')] });
+  assert.equal(await store.migrateSessions('dir:more', 'p-more'), 1, '目标非空也要把旧会话补进来');
+  assert.deepEqual((await store.listSessions('p-more')).map(s => s.id).sort(), ['s5', 's6']);
 }
+
+console.log('chatSessions: all tests passed');
 
 console.log('chatSessions: all tests passed');

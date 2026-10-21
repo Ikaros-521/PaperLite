@@ -5,7 +5,7 @@
  *
  * 解析顺序：用户固定（设置里选过）> 当前标签（本身就是主文档）> 打开标签探测
  * > 文件夹扫描。纯逻辑、无 React/DOM 依赖，Node 可直接单测；
- * 持久化走 localStorage，按文件夹名隔离（不同项目各自的设置互不干扰）。
+ * 持久化走 localStorage，按项目 UUID 隔离（同名文件夹也不会串设置）。
  */
 
 const LS_KEY = 'paperlite.maindoc.v1';
@@ -25,6 +25,20 @@ export function saveMainDocSetting(folderKey, path) {
   if (!path) delete all[folderKey];
   else all[folderKey] = path;
   try { localStorage.setItem(LS_KEY, JSON.stringify(all)); } catch (e) { /* ignore */ }
+}
+
+/** 项目身份从「文件夹名」升级为 UUID 时，把旧的 pin 搬到新键。
+ *  目标键已有值时以目标为准，旧键只删不覆盖；迁移失败就保留旧键，下次打开再试。 */
+export function migrateMainDocKey(fromName, toId) {
+  const from = String(fromName || '');
+  const to = String(toId || '');
+  if (!from || !to || from === to) return false;
+  const all = loadMainDocSetting();
+  if (!Object.prototype.hasOwnProperty.call(all, from)) return false;
+  if (all[to] === undefined) all[to] = all[from];
+  delete all[from];
+  try { localStorage.setItem(LS_KEY, JSON.stringify(all)); return true; }
+  catch (e) { return false; }
 }
 
 /**

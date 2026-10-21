@@ -101,7 +101,7 @@ export default function App() {
   // ---- 工作区：标签 / 草稿 / 文件夹 / 保存 / 版本历史（与移动端 #/m 共用同一份编排）----
   const {
     tabs, setTabs, tabsRef, activeId, setActiveId, activeValue, setActiveValue,
-    rootDir, setRootDir, restorePrompt, setRestorePrompt,
+    rootDir, projectId, adoptRootDir, restorePrompt, setRestorePrompt,
     historyKey, setHistoryTick, historyError, setHistoryError, historyClearedRef,
     noteHistory, snapshot, snapshotTab,
     openFolder, closeFolder, restoreFolder, openFileTab,
@@ -301,10 +301,13 @@ export default function App() {
     return { labels, bibKeys };
   }, [tabs, activeId, deferred, folderIndex]);
 
-  // ---- 主文档（编译入口）：固定设置按文件夹名隔离；候选 = 打开的 tex 标签（实时内容）→ 磁盘扫描 ----
+  // ---- 主文档（编译入口）：固定设置按项目 UUID 隔离；候选 = 打开的 tex 标签（实时内容）→ 磁盘扫描 ----
   const [mainDocSetting, setMainDocSetting] = useState(() => loadMainDocSetting());
-  const folderKeyRef = useRef(rootDir?.name || '_tabs');
-  folderKeyRef.current = rootDir?.name || '_tabs';
+  const folderKeyRef = useRef(projectId || '_tabs');
+  folderKeyRef.current = projectId || '_tabs';
+  // 旧版按文件夹名存的 pin 会在 adoptRootDir 里迁到 UUID；状态是首次挂载时读的，
+  // 切项目后要重读一次，否则 pin 看起来“丢了”
+  useEffect(() => { setMainDocSetting(loadMainDocSetting()); }, [projectId]);
   const setPinnedMainDoc = useCallback((path) => {
     saveMainDocSetting(folderKeyRef.current, path);
     setMainDocSetting(loadMainDocSetting());
@@ -418,7 +421,7 @@ export default function App() {
             await fs.writeFileText(fh, bibtex + '\n');      // 新建文件直接带上首条
             setTreeKey(n => n + 1);
             const info = infoFor(name);
-            target = makeTab({ name, kind: info.kind, handle: fh, parentDir: rootDir, text: bibtex + '\n', modeSpec: info.mode, saved: bibtex + '\n', historyScope: rootDir.name || '', disk: await fs.diskStamp(fh) });
+            target = makeTab({ name, kind: info.kind, handle: fh, parentDir: rootDir, text: bibtex + '\n', modeSpec: info.mode, saved: bibtex + '\n', historyScope: projectId, disk: await fs.diskStamp(fh) });
             setTabs(ts => ts.concat(target));
             prefilled = true;
           } catch (err) { /* 写不了盘就退回内存标签 */ }
@@ -521,9 +524,9 @@ export default function App() {
   const agentCfgRef = useRef(agentCfg);
   useEffect(() => { agentCfgRef.current = agentCfg; }, [agentCfg]);
   // 多会话：会话列表是唯一真相源，chatMessages 就是活动会话的 messages（见 useChatSessions）。
-  // 项目键决定这一批会话归属哪个项目：文件夹名优先，没连文件夹统一归到 draft。
-  // 用名字而不是句柄——同一目录重开后句柄会变，历史不该跟着丢。
-  const chatKey = rootDir ? 'dir:' + rootDir.name : 'draft';
+  // 项目键是持久化 UUID（fs.ensureProjectId 用 isSameEntry 认回同一目录），
+  // 文件夹名相同不代表同一个项目；没连文件夹统一归到 draft。
+  const chatKey = rootDir ? projectId : 'draft';
   const chat = useChatSessions({ projectKey: chatKey, persist: agentCfg.persist !== false });
   const chatMessages = chat.messages;
   const setChatMessages = chat.setMessages;
@@ -556,13 +559,14 @@ export default function App() {
   // ---- 恢复上次授权的文件夹（引擎探测与预热已移入 useCompile）----
   useEffect(() => {
     (async () => {
-      const h = await fs.loadRootHandle();
-      if (!h) return;
-      const perm = await fs.queryPermission(h, 'readwrite');
-      if (perm === 'granted') setRootDir(h);
-      else setRestorePrompt(h);
+      const p = await fs.loadRootProject();
+      if (!p) return;
+      const perm = await fs.queryPermission(p.handle, 'readwrite');
+      // 句柄与项目 UUID 一起恢复：只设 rootDir 会让首屏短暂用空项目键
+      if (perm === 'granted') await adoptRootDir(p.handle, p.projectId);
+      else setRestorePrompt(p.handle);
     })();
-  }, []);
+  }, [adoptRootDir]);
 
   useEffect(() => {
     const settings = { ...editorSettings, syncScroll };
@@ -637,7 +641,12 @@ export default function App() {
   const newFolder = async () => {
     try {
       const dir = rootDir || await fs.pickDirectory();
-      if (!rootDir) { setRootDir(dir); setRestorePrompt(null); await fs.saveRootHandle(dir); }
+      if (!rootDir) {
+        const pid = await fs.ensureProjectId(dir);
+        await adoptRootDir(dir, pid);
+        setRestorePrompt(null);
+        await fs.saveRootHandle(dir);
+      }
       setSideTab('files');
       const name = (await showPrompt(t('ft.newDirPrompt')))?.trim();
       if (!name) return;

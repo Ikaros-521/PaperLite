@@ -147,6 +147,29 @@ export function copyHistory(from, to, { move = false } = {}) {
   if (move) delete next[from];
   return persistHistory(next, versions[0] ? [versions[0].id] : []);
 }
+/** 项目身份从文件夹名升级为 UUID：把 [name, path] 历史键整体挪到 [id, path]。
+ *  目标键已有版本时按 id 去重合并；persistHistory 失败则不落盘，旧数据原样保留。 */
+export function migrateHistoryScope(fromName, toId) {
+  const from = String(fromName || '');
+  const to = String(toId || '');
+  if (!from || !to || from === to) return false;
+  const all = historyStore();
+  const next = Object.create(null);
+  let changed = false;
+  for (const [key, list] of Object.entries(all)) {
+    let parts;
+    try { parts = JSON.parse(key); } catch (e) { next[key] = list; continue; }
+    // "draft" 是草稿历史的保留 scope：文件夹就算叫 draft 也不能搬走它
+    if (!Array.isArray(parts) || parts.length !== 2 || parts[0] !== from || parts[0] === 'draft') { next[key] = list; continue; }
+    const nextKey = JSON.stringify([to, parts[1]]);
+    const merged = [...(next[nextKey] || []), ...list];
+    next[nextKey] = [...new Map(merged.map(v => [v.id, v])).values()].sort((a, b) => b.date - a.date);
+    changed = true;
+  }
+  if (!changed) return false;
+  return persistHistory(next);
+}
+
 // 没有任何打开标签引用的键（改名/转存留下的、旧版共用的、形状坏掉的）在面板里看不见，
 // 却照样吃共享配额。keep 传当前全部标签的 historyKey。
 // 「别的窗口仍打开」的键不算未打开：那是同一个 localStorage，另一窗口的心跳还亮着

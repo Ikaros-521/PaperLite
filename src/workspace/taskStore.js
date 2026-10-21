@@ -163,6 +163,36 @@ export function makeTaskStore(driver) {
       await driver.remove('chats', 'c:' + projectKey);
       return { id: 'legacy-' + Date.now().toString(36), projectKey, title: '', createdAt: row.updatedAt || Date.now(), updatedAt: row.updatedAt || Date.now(), messages: row.messages };
     },
+    /**
+     * 项目键从「dir:文件夹名」升级为 UUID 时搬会话行。
+     * 按 sessionId 合并而不是“目标非空就跳过”：上次迁到一半失败、后来新会话先落库时，
+     * 旧会话仍要能进来；目标已有同 id 的只删旧行，不重复插入。
+     */
+    async migrateSessions(fromKey, toKey) {
+      if (!ok || !fromKey || !toKey || fromKey === toKey) return 0;
+      const all = await driver.all('chats');
+      if (!Array.isArray(all)) return 0;
+      const targetIds = new Set(all.filter(r => r && r.projectKey === toKey && r.sessionId).map(r => r.sessionId));
+      let moved = 0;
+      for (const row of all) {
+        if (!row) continue;
+        if (row.projectKey === fromKey && row.sessionId) {
+          if (targetIds.has(row.sessionId)) { await driver.remove('chats', row.id); continue; }
+          await driver.put('chats', { ...row, id: SESSION_ROW + toKey + '/' + row.sessionId, projectKey: toKey });
+          await driver.remove('chats', row.id);
+          targetIds.add(row.sessionId);
+          moved++;
+        } else if (row.id === 'c:' + fromKey && Array.isArray(row.messages)) {
+          const targetId = 'c:' + toKey;
+          if (!(await driver.get('chats', targetId))) {
+            await driver.put('chats', { ...row, id: targetId, key: toKey });
+          }
+          await driver.remove('chats', row.id);
+          moved++;
+        }
+      }
+      return moved;
+    },
     async saveTask(task) {
       if (!ok || !task || !task.id) return false;
       // 审计与快照才是长任务的价值所在，但整轮正文不该跟着落库
@@ -218,3 +248,4 @@ export async function saveSession(session) { return (await getTaskStore()).saveS
 export async function listSessions(projectKey) { return (await getTaskStore()).listSessions(projectKey); }
 export async function deleteSession(projectKey, id) { return (await getTaskStore()).deleteSession(projectKey, id); }
 export async function adoptLegacyChat(projectKey) { return (await getTaskStore()).adoptLegacyChat(projectKey); }
+export async function migrateSessions(fromKey, toKey) { return (await getTaskStore()).migrateSessions(fromKey, toKey); }

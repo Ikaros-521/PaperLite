@@ -115,13 +115,23 @@ export function fileBlobUrl(fileHandle) {
 /* ---- 根句柄持久化（IndexedDB）---- */
 const DB = 'paperlite-fs';
 const STORE = 'handles';
+const PROJECTS = 'projects';
+const DB_VERSION = 2;
 
 function idb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    const req = indexedDB.open(DB, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      // 1 → 2：新增文件夹身份表。句柄按 id 存，打开目录时用 isSameEntry 找回来，
+      // 这样两个同名文件夹不会共用聊天/历史/主文档设置。
+      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+      if (!db.objectStoreNames.contains(PROJECTS)) db.createObjectStore(PROJECTS, { keyPath: 'id' });
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    // 另一个标签页还开着旧版本连接时升级会被挡住；不能让调用方永远挂在 await 上
+    req.onblocked = () => reject(new Error('indexedDB blocked'));
   });
 }
 // 连接复用：每次调用都 open 且从不 close，频繁切换目录会累积打开的 IDB 连接
@@ -133,14 +143,52 @@ function idbOnce() {
   }
   return dbPromise;
 }
-async function tx(mode, fn) {
+async function tx(mode, fn, store = STORE) {
   const db = await idbOnce();
   return new Promise((resolve, reject) => {
-    const t = db.transaction(STORE, mode);
-    const req = fn(t.objectStore(STORE));
+    const t = db.transaction(store, mode);
+    const req = fn(t.objectStore(store));
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+// 同一个目录可能被 StrictMode / 双击同时 ensure 两次：串行化读-判-写，
+// 否则两次都查不到旧记录，会给同一个文件夹分配两个 UUID，下次启动随机认回其中一个。
+let projectIdTail = Promise.resolve();
+export function ensureProjectId(handle) {
+  const run = projectIdTail.then(() => ensureProjectIdNow(handle));
+  projectIdTail = run.catch(() => {});
+  return run;
+}
+
+/** 文件夹的持久身份：首次见到就分配 UUID，之后靠 isSameEntry 认回同一个目录。
+ *  不能用名字：同名文件夹会串聊天/历史/主文档 pin；句柄跨会话会换包装对象，
+ *  也不能拿对象身份当键。isSameEntry 是 File System Access 提供的稳定比较。 */
+async function ensureProjectIdNow(handle) {
+  const name = String((handle && handle.name) || '');
+  if (!handle || !name) return '';
+  if (typeof handle.isSameEntry !== 'function') return 'name:' + name;
+  try {
+    const rows = await tx('readonly', s => s.getAll(), PROJECTS);
+    for (const row of rows || []) {
+      if (!row || !row.id || !row.handle || typeof row.handle.isSameEntry !== 'function') continue;
+      try { if (await row.handle.isSameEntry(handle)) return row.id; } catch (e) { /* 句柄已失效，继续找 */ }
+    }
+    const id = 'p-' + (globalThis.crypto?.randomUUID?.() || (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)));
+    await tx('readwrite', s => s.put({ id, handle, name, updatedAt: Date.now() }), PROJECTS);
+    return id;
+  } catch (e) {
+    // 隐私模式/旧内核拿不到 IDB：退回名称键，至少本会话的聊天与历史可用
+    return 'name:' + name;
+  }
+}
+
+/** 恢复上次授权的目录时，一次把句柄与项目身份取回来 */
+export async function loadRootProject() {
+  const handle = await loadRootHandle();
+  if (!handle) return null;
+  return { handle, projectId: await ensureProjectId(handle) };
 }
 export async function saveRootHandle(handle) {
   try { await tx('readwrite', s => s.put(handle, 'root')); } catch (e) { /* 忽略持久化失败 */ }

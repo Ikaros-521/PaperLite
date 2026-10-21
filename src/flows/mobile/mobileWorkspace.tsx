@@ -211,7 +211,7 @@ export function MobileWorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => { saveAgentSettings(agentCfg) }, [agentCfg])
   // 多会话：与桌面同一个 hook（会话列表是唯一真相源，落库走 IndexedDB）
   const chat = useChatSessions({
-    projectKey: ws.rootDir ? 'dir:' + (ws.rootDir as { name?: string }).name : 'draft',
+    projectKey: (ws.projectId as string) || 'draft',
     persist: agentCfg.persist !== false,
   })
   const chatMessages = chat.messages

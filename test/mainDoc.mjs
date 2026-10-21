@@ -1,5 +1,5 @@
 /* 主文档（编译入口）解析测试：固定设置、自动探测、磁盘扫描回退 */
-import { hasDocumentclass, resolveMainDoc, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry, deleteMainDocEntry } from '../src/mainDoc.js';
+import { hasDocumentclass, resolveMainDoc, loadMainDocSetting, saveMainDocSetting, renameMainDocEntry, deleteMainDocEntry, migrateMainDocKey } from '../src/mainDoc.js';
 
 let pass = 0, fail = 0;
 function ok(cond, msg) {
@@ -103,6 +103,14 @@ ok(renameMainDocEntry('chapters', 'secs') === true, '文件夹改名换整段前
 ok(loadMainDocSetting().paper === 'secs/intro-v2.tex', '前缀迁移: ' + loadMainDocSetting().paper);
 ok(renameMainDocEntry('secs', 'secs') === false && renameMainDocEntry('', 'x') === false, '同名或空路径不动存储');
 ok(renameMainDocEntry('gone', 'x') === false, '没命中就别惊动 React 状态');
+
+console.log('== 项目身份迁移 ==');
+lsStore.clear();
+saveMainDocSetting('paper', 'main.tex');
+ok(migrateMainDocKey('paper', 'p-123') === true, '按文件夹名的 pin 要搬到 UUID');
+ok(loadMainDocSetting()['p-123'] === 'main.tex' && !('paper' in loadMainDocSetting()), '迁移后旧键删除、新键保留');
+ok(migrateMainDocKey('missing', 'p-x') === false, '没有旧键时不惊动存储');
+ok(migrateMainDocKey('p-123', 'p-123') === false, '同键不迁移');
 
 console.log('== pin 删除同步 ==');
 lsStore.clear();

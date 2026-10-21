@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { compareVersions, inlineChanges } from '../src/historyDiff.js';
 import { readHistory, recordVersion, renameVersion, copyHistory, deleteHistory, clearHistory, historyUsage, unusedHistory, pruneHistory } from '../src/fileActions.js';
 import { noteLiveTabs } from '../src/liveTabs.js';
-import { HISTORY_LIMITS, takeCorruptNotice } from '../src/historyStorage.js';
+import { HISTORY_LIMITS, takeCorruptNotice, migrateHistoryScope } from '../src/historyStorage.js';
 
 // Reconstruct both original byte strings, including CRLF and missing final newlines.
 const cases = [['', ''], ['', 'hello\n'], ['hello', ''], ['a\nb\nc\n', 'a\nB\nc\n'],
@@ -251,5 +251,24 @@ assert.equal(takeCorruptNotice(), true, '坏库要提示一次');
 assert.equal(takeCorruptNotice(), false, '提示只报一次');
 recordVersion('doc', 'fresh start');
 assert.equal(localStorage.getItem('paperlite.history.v1.corrupt'), broken, '写回新历史不覆盖隔离副本');
+
+// ---- 项目身份从文件夹名升级为 UUID：旧 [名, 路径] 历史整体搬过去 ----
+data.clear();
+localStorage.setItem = (k, v) => data.set(k, v);
+recordVersion('["paper","a.tex"]', '旧 A');
+recordVersion('["paper","b.tex"]', '旧 B');
+recordVersion('["draft","d1"]', '草稿不能动');
+assert.equal(migrateHistoryScope('draft', 'p-2'), false, '保留 scope 不被文件夹名迁移');
+assert.equal(readHistory('["draft","d1"]').length, 1, '草稿历史原样保留');
+assert.equal(migrateHistoryScope('paper', 'p-1'), true, '有旧键时迁移返回 true');
+assert.equal(readHistory('["paper","a.tex"]').length, 0, '旧键清空');
+assert.equal(readHistory('["p-1","a.tex"]')[0].text, '旧 A', '版本搬到新键');
+assert.equal(readHistory('["p-1","b.tex"]')[0].text, '旧 B');
+assert.equal(migrateHistoryScope('paper', 'p-1'), false, '没有可迁移的旧键时返回 false');
+recordVersion('["p-1","a.tex"]', '新键已有');
+recordVersion('["paper","a.tex"]', '旧键再来');
+migrateHistoryScope('paper', 'p-1');
+const mergedTexts = readHistory('["p-1","a.tex"]').map(v => v.text);
+assert.ok(mergedTexts.includes('旧键再来') && mergedTexts.includes('新键已有'), '目标已有版本时合并、不丢');
 
 console.log('History: exact diff reconstruction, CRLF/EOF, large edits, labels, restore backups, storage failure, multi-window prune protection and corrupt-store quarantine passed.');
