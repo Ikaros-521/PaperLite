@@ -17,9 +17,31 @@ const KEEP_TURNS = 6;      // 压缩时保留末尾条数
 const COMPACT_AT = 0.85;   // 达到窗口该比例时提示并可自动压缩
 const NEAR_BOTTOM = 80;    // 距底部小于此像素才视为「贴着底部」，自动跟随只在这个范围内生效
 const PLAN_OPEN_KEY = 'paperlite.chat.planOpen.v1';   // 计划卡折叠偏好（跨会话保留）
+const RECT_KEY = 'paperlite.chat.rect.v1';            // 浮窗位置 / 宽高（刷新后回原处）
 
 // scrollHeight 会随流式增长，所以这个值必须在滚动发生的那一刻读，不能缓存
 const gapToBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight;
+
+// 与拖拽时同一套边界：标题栏至少留 60px 在视口里，否则浮窗拖不回来
+const clampPanelPos = (p, w) => ({
+  x: Math.min(Math.max(p.x, 60 - w), Math.max(60, window.innerWidth - 60)),
+  y: Math.min(Math.max(p.y, 8), Math.max(8, window.innerHeight - 44))
+});
+
+const readPanelRect = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(RECT_KEY) || 'null');
+    if (!s || typeof s !== 'object') return null;
+    const width = Number.isFinite(s.width)
+      ? Math.min(Math.max(s.width, 300), Math.max(300, Math.min(960, window.innerWidth - 80)))
+      : null;
+    const height = Number.isFinite(s.height) ? s.height : null;
+    const pos = s.pos && Number.isFinite(s.pos.x) && Number.isFinite(s.pos.y)
+      ? clampPanelPos(s.pos, width || 360)
+      : null;
+    return { pos, width, height };
+  } catch (e) { return null; }
+};
 
 export default function ChatPanel({ open, onClose, channels, activeChannelId, setActiveChannelId, setChannels = null, onOpenSettings, buildContext, messages, setMessages, inject, onBeforeApply, narrow = false, externalBusy = false, agentEnv = null, agentCfg = null, onAgentApproval = null, onBusyChange = null, sessions = null, activeSessionId = '', onNewSession = null, onSwitchSession = null, onDeleteSession = null, onForkSession = null }) {
   const t = useT();
@@ -29,9 +51,11 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   const [scope, setScope] = useState('selection');
   const [mode, setMode] = useState('chat');   // 'chat' 普通对话 | 'agent' 工具代理
   const [showReasoning, setShowReasoning] = useState({});
-  const [pos, setPos] = useState(null);      // null=停靠右侧；{x,y}=浮动位置（同样式面板）
-  const [width, setWidth] = useState(null);  // null=默认 360；左缘可拉伸
-  const [height, setHeight] = useState(null);
+  // 刷新后回到上次的浮窗几何；移动端（narrow）填满容器，不读这份
+  const [savedRect] = useState(() => (narrow ? null : readPanelRect()));
+  const [pos, setPos] = useState(savedRect ? savedRect.pos : null);      // null=停靠右侧；{x,y}=浮动位置（同样式面板）
+  const [width, setWidth] = useState(savedRect ? savedRect.width : null);  // null=默认 360；左缘可拉伸
+  const [height, setHeight] = useState(savedRect ? savedRect.height : null);
   const [reqUsage, setReqUsage] = useState(null); // 最近一次请求装配出的分类用量
   const [realUsage, setRealUsage] = useState(null); // 服务端返回的实测 usage（缺省则用估算）
   const [compacting, setCompacting] = useState(false);
@@ -59,6 +83,30 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   // 面板忙（对话 / agent 循环 / 上下文压缩）要报给宿主：AI 修复队列是另一条独立的
   // LLM 通道，两边同时跑等于双份 token，而且都会往同一个消息数组写
   useEffect(() => { if (onBusyChange) onBusyChange(busy || compacting); }, [busy, compacting, onBusyChange]);
+
+  // 拖动 / 拉伸时每个 pointermove 都在改 state，落盘做防抖。
+  // 停靠（pos=null）也算一种状态：双击标题回停靠后刷新仍是停靠。
+  useEffect(() => {
+    if (narrow) return undefined;
+    const timer = setTimeout(() => {
+      try {
+        if (pos || width || height) localStorage.setItem(RECT_KEY, JSON.stringify({ pos, width, height }));
+        else localStorage.removeItem(RECT_KEY);
+      } catch (e) { /* 存不下只是下次回到默认位置 */ }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [narrow, pos, width, height]);
+
+  // 窗口变小后，上次的坐标可能把标题栏推出视口，拖都拖不回来
+  useEffect(() => {
+    if (narrow) return undefined;
+    const onResize = () => {
+      const w = panelRef.current ? panelRef.current.offsetWidth : (width || 360);
+      setPos(p => (p ? clampPanelPos(p, w) : p));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [narrow, width]);
 
   const channel = useMemo(
     () => channels.filter(c => c.id === activeChannelId)[0] || channels[0] || null,
