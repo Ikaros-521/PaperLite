@@ -574,7 +574,9 @@ export default function App() {
       // Vim 键位按需动态加载 addon（cm5-vim，别名接回 codemirror 包），不进主包；
       // 关闭时立即回到默认键位
       if (settings.vimMode) Promise.all([import('cm5-vim'), import('codemirror/addon/dialog/dialog.css')])
-        .then(() => { try { c.setOption('keyMap', 'vim'); } catch (e) { /* ignore */ } })
+        // 解析完成时用户可能已经把 Vim 关掉了：不复核当前设置就 setOption，
+        // 关掉的键位会被这条迟到的回执重新装上
+        .then(() => { try { if (settingsRef.current.vimMode) c.setOption('keyMap', 'vim'); } catch (e) { /* ignore */ } })
         .catch(() => { /* 加载失败维持默认键位 */ });
       else c.setOption('keyMap', 'default');
       c.refresh();
@@ -906,6 +908,9 @@ export default function App() {
       // CM5 的焦点元素本身就是 textarea：它不是「普通输入控件」，否则编辑器内
       // 所有快捷键（查找替换/编译/视图切换/Ctrl+B-I）都会被这条 return 拦掉
       if (inPlainInput && !e.target.closest?.('.CodeMirror')) return;
+      // 焦点落在弹窗/遮罩里的非输入控件（按钮、复选框）时上面那条判不出来，
+      // 于是 Ctrl+Enter 会隔着设置弹窗触发编译、Ctrl+1/2/3 把底下的视图切走
+      if (e.target.closest?.('.modal-mask, dialog[open]')) return;
       if (mod && e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newFile(); }
       // 编译与导出走键盘：写作时不该为了出稿去菜单里找
       if (mod && e.key === 'Enter') { e.preventDefault(); doCompile(); }
