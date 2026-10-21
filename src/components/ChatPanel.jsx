@@ -372,7 +372,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     abortRef.current = ac;
     publish(turn);
     try {
-      const { usage, task, answer, incomplete } = await runAgentLoop({
+      const { usage, task, raw, answer, incomplete } = await runAgentLoop({
         channel,
         messages: turn,
         system: agentSystemPrompt({ withTaskTools: plan }) + (plan ? t('agent.planRules') : ''),
@@ -393,11 +393,14 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       });
       setRealUsage(usage || null);
       if (task) {
-        persistTask(task);
+        // 落库与评审都用 raw：小结里的 snapshots 是条数、没有 steps，
+        // 喂给 caseOf/runReview 得到的是空步骤和 snaps: undefined
+        const forStore = raw || task;
+        persistTask(forStore);
         // 评审是额外一整轮请求（实测 ~700 token），要能被「停止」掐掉：
         // 复用本轮的 AbortController，它到 finally 才被清空。
         // 流中途断掉时 answer 是半截，别再拿它跑一轮评审假装验收过。
-        if (agentCfg && agentCfg.review && !incomplete) await runReview(task, answer, ac.signal);
+        if (agentCfg && agentCfg.review && !incomplete) await runReview(forStore, answer, ac.signal);
       }
     } catch (e) {
       if (e.name !== 'AbortError') {

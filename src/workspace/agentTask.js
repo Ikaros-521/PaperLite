@@ -132,9 +132,13 @@ export function updateStep(task, args) {
     if (missing.length) return { ok: false, error: tr(L, 'agent.errStepDepsOpen', { n, deps: missing.join(', ') }) };
     task.currentStep = n;
   }
+  const repeat = step.status === status;
   step.status = status;
   const note = str(args.note, FIELD_MAX);
   if (note) step.note = note;
+  // 同一个状态再报一次不算推进：否则模型反复对同一步 update_plan(done) 就能把
+  // counters.steps 刷成「4/1 完成」、把 noProgress 归零续命，还每次都打一张快照
+  if (repeat) return { ok: true, needsSnapshot: false };
   task.counters.noProgress = 0;
   if (status === 'done') task.counters.steps++;
   // 「全部收口」要在任何终态迁移后判一次：只 done 才检查的话，最后一步被 skip 的

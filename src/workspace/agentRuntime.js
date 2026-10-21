@@ -212,7 +212,15 @@ export async function runAgentLoop(opts) {
     // answer 带出去给验收评审用：ChatPanel 手里的 messages 是发布快照，闭包里读到的是
     // 进循环前的那一份，自己找最后一条 assistant 会拿到空串
     const lastAssistant = [...list].reverse().find(m => m && m.role === 'assistant' && m.content);
-    return { usage, task: taskSummary(task), answer: lastAssistant ? String(lastAssistant.content) : '' };
+    // task 给人看（小结形状，测试与计划卡都按它读），raw 给落库与评审用：
+    // caseOf 与评审提示词要的是 steps/snapshots 数组，喂小结会得到空步骤、snaps: undefined
+    return { usage, task: taskSummary(task), raw: task, answer: lastAssistant ? String(lastAssistant.content) : '' };
+  };
+  // 用户按「停止」后必须立刻退出改盘路径：外层的 catch 靠 name 把这一轮记成 aborted，
+  // 换成 return finish('completed') 就成了「停止没生效但任务算完成了」
+  const abortIfStopped = () => {
+    if (!signal || !signal.aborted) return;
+    const e = new Error('aborted'); e.name = 'AbortError'; throw e;
   };
 
   try {
@@ -252,6 +260,10 @@ export async function runAgentLoop(opts) {
       throw e;
     }
     usage = addUsage(usage, res.usage);
+    // 主动中止时协议层不让流算「不完整」（state.aborted 会把 incomplete 压成 false），
+    // 所以这里必须自己认出来：否则半截回答被记成完成，无工具块时直接 completed 收口，
+    // 验收评审照跑——用户按了停止，却还多烧一整轮 token
+    abortIfStopped();
     // 流没有正常收尾时，半截正文里的工具块不可信：标记消息后收口，别拿着残缺 JSON 去改盘
     if (res.incomplete) {
       patchLast(m => ({ ...m, incomplete: true }));
@@ -364,8 +376,13 @@ export async function runAgentLoop(opts) {
           const info = typeof execute.describe === 'function'
             ? execute.describe(c.tool, v.args)
             : { mutates: true, tool: c.tool, path: String((v.args && v.args.path) || ''), detail: '' };
+          // 弹窗挂起期间点「停止」不会让 await 自己醒（showConfirm 不认 signal），
+          // 所以醒来后必须复查：否则「允许」会把已经叫停的改动照常写进文档，
+          // 本轮还记成 completed
+          abortIfStopped();
           let yes = false;
           try { yes = !!(await opts.requestApproval(info)); } catch (e) { yes = false; }
+          abortIfStopped();
           if (!yes) {
             push({ role: 'user', kind: 'tool-result', tool: c.tool, args: v.args, running: false, ok: false,
               content: tr(L, 'agent.errDeniedByUser', { tool: c.tool }) });
