@@ -23,6 +23,7 @@ import TourGuide from './components/TourGuide.jsx';
 import { tourStepsFor, shouldWelcome, dismissWelcome, markTourDone } from './tour.js';
 import { renderLatex } from './engines/latex.js';
 import { renderMarkdownFull } from './engines/markdown.js';
+import { RENDER_MAX_SRC, countOf, fmtSize, tooLargeResult } from './previewBudget.js';
 import { lintLaTeX } from './engines/linter.js';
 import { collectIssues, currentCompileErrors, issueFingerprint } from './diagnostics.js';
 import { collectLabels, collectBibKeys } from './projectIndex.js';
@@ -63,9 +64,6 @@ const SIDEBAR_MIN = 150, SIDEBAR_MAX = 520, SIDEBAR_DEFAULT = 232;
 const SPLIT_MIN = 15, SPLIT_MAX = 85, SPLIT_DEFAULT = 52;
 // 侧栏拖到最宽时，仍要给编辑区 + 预览区留出的最小空间
 const PANES_KEEP = 350;
-// 实时预览的源码预算：与 fs.js 的 2MB 打开上限留出倍数余量，正常论文（几十~几百 KB）
-// 够不着，畸形文稿在冻结主线程之前先被挡在门外
-const RENDER_MAX_SRC = 1024 * 1024;
 // 「本标签没有已忽略问题」的稳定空数组：写成 [] 字面量每次 render 都是新引用，
 // 会把依赖它的 memo 全部作废（诊断标记因此每键重建）
 const NO_FPS = [];
@@ -825,17 +823,11 @@ export default function App() {
 
 
   // ---- 预览渲染 ----
-  // 尺寸闸：渲染是同步跑在主线程上的，而行内公式的输出放大实测约 85 倍
-  // （84KB 源码 → 7.1MB HTML），叠加 fs.js 的 2MB 打开上限，一份畸形文稿能把标签页
-  // 先冻结再撑爆。病态正则已经线性化，但「输出规模」这一维只能靠预算兜：
-  // 超预算不再渲染，给一句能照着做的提示，真正的成稿走「编译 PDF」那条路。
-  const tooLargeResult = (text, prefix) => ({
-    html: '<div class="render-error">' + escHtml(prefix) + '</div>',
-    meta: {}, warnings: [], diagrams: [], tables: [], stats: countOf(text), headings: [],
-  });
+  // 尺寸闸与降级结果在 previewBudget.js：移动端共用同一预算与同一降级形状，
+  // 各写一份正是「桌面改了移动端跟着崩」的来路。
   const latexResult = useMemo(() => {
     if (!isTexLike) return null;
-    if (deferred.length > RENDER_MAX_SRC) return tooLargeResult(deferred, tr(getLang(), 'app.previewTooLarge', { size: fmtSize(deferred) }));
+    if (deferred.length > RENDER_MAX_SRC) return tooLargeResult(deferred);
     const t0 = performance.now();
     let r;
     try { r = renderLatex(deferred, {}); }
@@ -850,7 +842,7 @@ export default function App() {
 
   const mdResult = useMemo(() => {
     if (!isMd) return null;
-    if (deferred.length > RENDER_MAX_SRC) return tooLargeResult(deferred, tr(getLang(), 'app.previewTooLarge', { size: fmtSize(deferred) }));
+    if (deferred.length > RENDER_MAX_SRC) return tooLargeResult(deferred);
     const t0 = performance.now();
     let r;
     try { r = renderMarkdownFull(deferred); }
@@ -1798,16 +1790,6 @@ export default function App() {
   );
 }
 
-function countOf(s) {
-  const str = String(s || '');
-  const cjk = (str.match(/[\u4e00-\u9fff]/g) || []).length;
-  const latin = (str.replace(/[\u4e00-\u9fff]/g, ' ').match(/[A-Za-z0-9][A-Za-z0-9'’\-]*/g) || []).length;
-  return { cjk, words: latin + cjk };
-}
-function fmtSize(s) {
-  const bytes = new Blob([String(s || '')]).size;
-  return bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(1) + ' KB';
-}
 async function downloadCompiled(compileResult, onError) {
   try {
     const r = await fetch(compileResult.pdfUrl);
