@@ -5,7 +5,7 @@ import { showAlert as alert, showConfirm } from '../dialogs.js';
 import { stripToolBlocks, parseToolCalls } from '../workspace/agentTools.js';
 import { renderChatMarkdown, splitChatBlocks } from '../engines/markdown.js';
 import { runAgentLoop, agentSystemPrompt, AGENT_APPROVALS, AGENT_APPROVAL_DEFAULT } from '../workspace/agentRuntime.js';
-import { dropTurn, editResend, MAX_SESSIONS } from '../workspace/chatSessions.js';
+import { dropTurn, editResend, regenerateFrom, isTurnStart, MAX_SESSIONS } from '../workspace/chatSessions.js';
 import { thinkingSwitch } from '../llm.js';
 
 /* AI 对话面板：多渠道选择、上下文范围（选区/段落/全文/检索增强）、流式输出（含思维链）、
@@ -200,6 +200,12 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inject && inject.n]);
 
+  // 重新生成只给最后一轮：重发是往对话末尾追加，中间那轮点了等于把那段悄悄挪到最后
+  const lastTurnStart = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) if (isTurnStart(messages[i])) return i;
+    return -1;
+  }, [messages]);
+
   // 用量基线：只随消息条数变化重算，流式增量不触发整段历史重新估算
   const settledCount = busy ? messages.length - 1 : messages.length;
   const base = useMemo(() => {
@@ -352,9 +358,11 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
   };
 
   // ---- Agent 模式：模型经文本协议调工具，循环执行直到给出最终回答 ----
-  const runAgent = async (q) => {
+  const runAgent = async (q, opts) => {
     const brief = agentEnv.buildBrief();
     const plan = !agentCfg || agentCfg.plan !== false;
+    // 重新生成时消息列表刚被截过，本帧的 messages 还是旧闭包，必须吃调用方给的那份
+    const turn = ((opts && opts.history) || messages).concat([{ role: 'user', content: q }]);
     setReqUsage(null);
     setRealUsage(null);
     setAgentTask(null);
@@ -362,11 +370,11 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     setBusy(true); busyRef.current = true;
     const ac = new AbortController();
     abortRef.current = ac;
-    publish(messages.concat([{ role: 'user', content: q }]));
+    publish(turn);
     try {
       const { usage, task, answer, incomplete } = await runAgentLoop({
         channel,
-        messages: messages.concat([{ role: 'user', content: q }]),
+        messages: turn,
         system: agentSystemPrompt({ withTaskTools: plan }) + (plan ? t('agent.planRules') : ''),
         docHeader: t('ai.agentCtxHeader'),
         doc: brief,
@@ -468,14 +476,17 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     // 压缩期间发出的消息与流式回复会被吞掉
     if (!q || busy || compacting || externalBusy) return;
     if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
-    setInput('');
+    // 重新生成不碰输入框：里面可能是用户刚打了一半的下一句
+    if (!opts || !opts.keepInput) setInput('');
     setNote('');
     // 发送是用户主动动作：无条件回到底部并恢复跟随（上滚关掉的跟随在这里重新打开）
     stickRef.current = true; holdRef.current = false;
     // 自动发送的注入会带 scope/mode 覆盖（setScope/setMode 要下一拍才生效，不能吃旧闭包值）
     const useMode = (opts && opts.mode) || mode;
-    if (useMode === 'agent' && agentEnv) return runAgent(q);
+    if (useMode === 'agent' && agentEnv) return runAgent(q, opts);
     const useScope = (opts && opts.scope) || scope;
+    // 重新生成刚截掉这一轮，messages 还是截断前的闭包，历史基线同样要听调用方的
+    const prior = (opts && opts.history) || messages;
     // 进异步段前先置忙：buildContext（检索范围走网络）与自动压缩都有长 await 窗口，
     // 期间 inject 自动发送按 busyRef 判忙会二次进入，两个 send 互相覆盖消息
     setBusy(true); busyRef.current = true;
@@ -489,7 +500,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       history: list,
       budget
     });
-    let history = messages.concat([{ role: 'user', content: q, ctxNote: pack.note }]);
+    let history = prior.concat([{ role: 'user', content: q, ctxNote: pack.note }]);
     let built = build(history);
     // 判断用未裁剪的总占用：装配结果本身会被预算截断，看不出「到底差多少」
     const need = ctx.rawUsage({
@@ -536,6 +547,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     } catch (e) {
       // 上下文构建 / 自动压缩段的异常：此前以 unhandled rejection 沉默失败
       flashNote(t('chat.reqFailed', { msg: e.message || e }));
+      // 这一轮还没进对话（publish 在后面），输入框又被发送时清空了——把提问还回去，
+      // 否则重打一遍是唯一的补救办法。用户在这几秒里打了新字就不覆盖。
+      setInput(v => (v ? v : q));
     } finally {
       setBusy(false); busyRef.current = false;
       abortRef.current = null;
@@ -583,6 +597,19 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     setInput(r.text);
     stickRef.current = true;
     setTimeout(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }, 60);
+  };
+  // 重新生成：撤掉这一轮，用同一个提问立刻再请求一次。请求失败与「响应未完整结束」
+  // 都留在这条回答上，重试是它们唯一的补救入口；回复不理想时也能直接换一版。
+  const retryAt = async (i) => {
+    if (busy || compacting || externalBusy) return;
+    const r = regenerateFrom(messages, i);
+    if (!r || !r.question.trim()) return;
+    if (!channel) { alert(t('chat.needChannel')); onOpenSettings(); return; }
+    // Agent 轮重跑会重新执行它用过的工具（包括改文档）并再花一轮 token，这代价必须问过才动
+    if (r.agent && !await showConfirm(t('chat.retryAgentWarn'))) return;
+    publish(r.list);
+    stickRef.current = true; holdRef.current = false;
+    send(r.question, { history: r.list, mode: r.agent ? 'agent' : mode, keepInput: true });
   };
   const forkAt = async (i) => {
     if (!onForkSession) return;
@@ -865,11 +892,13 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
             {m.role === 'assistant' && m.incomplete ? (
               <div className="chat-incomplete" role="status">⚠ {t('chat.streamIncomplete')}</div>
             ) : null}
-            {/* 每条气泡的快捷操作：复制正文（去掉工具块）、编辑重发（只给提问）、
-                从这里分一支到新会话、删除这一轮。流式进行中不给，避免边收边改列表 */}
+            {/* 每条气泡的快捷操作：复制正文（去掉工具块）、重新生成（只给最后一轮的回答）、
+                编辑重发（只给提问）、从这里分一支到新会话、删除这一轮。
+                流式进行中不给，避免边收边改列表 */}
             {!busy && (m.content || m.role === 'user') ? (
               <div className="chat-msg-acts">
                 {m.content ? <button title={t('chat.copyMsg')} onClick={() => copy(stripToolBlocks(m.content))}>⧉</button> : null}
+                {m.role === 'assistant' && !m.kind && i > lastTurnStart ? <button title={t('chat.retryMsg')} onClick={() => retryAt(i)}>⟳</button> : null}
                 {m.role === 'user' && !m.kind ? <button title={t('chat.editResend')} onClick={() => resendAt(i)}>✎</button> : null}
                 {onForkSession && m.content ? <button title={t('chat.forkHere')} onClick={() => forkAt(i)}>⑂</button> : null}
                 <button title={t('chat.deleteMsg')} onClick={() => removeMessage(i)}>🗑</button>
