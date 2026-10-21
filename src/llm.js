@@ -73,10 +73,16 @@ function resolveTemperature(channel, opts) {
   return ct === null || ct === undefined ? undefined : ct;
 }
 
+// loadChannels 读坏时只能回 []，而桌面与移动端的挂载 effect 会立刻把这个 [] 写回去——
+// 等于把用户的全部渠道与 API Key 静默清空（历史与草稿有 .corrupt 隔离，渠道没有）。
+// 这里记住「本次读到的是坏数据」，在被一次真实非空写入取代之前拒绝用空列表落盘。
+let loadedCorrupt = false;
+const CORRUPT_KEY = LS_KEY + '.corrupt';
+
 export function loadChannels() {
   try {
     const arr = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
-    if (!Array.isArray(arr)) return [];
+    if (!Array.isArray(arr)) return noteCorrupt();
     let migrateCot = false;
     try {
       if (!localStorage.getItem(COT_DEFAULT_KEY)) {
@@ -97,9 +103,25 @@ export function loadChannels() {
       if (migrateCot && !next.cot) next.cot = true;
       return next;
     });
-  } catch (e) { return []; }
+  } catch (e) { return noteCorrupt(); }
+}
+
+/** 读到坏数据：把原值挪到 .corrupt 留一条恢复线索，并标记本次为空列表不可信 */
+function noteCorrupt() {
+  loadedCorrupt = true;
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) localStorage.setItem(CORRUPT_KEY, raw);
+  } catch (e) { /* 存不下至少别把原值覆盖掉 */ }
+  return [];
 }
 export function saveChannels(list) {
+  // 空列表只允许覆盖「本来就一条都没有」的键：见 loadedCorrupt 注释
+  if (loadedCorrupt && !(list && list.length)) {
+    console.warn('[paperlite] 渠道配置此前读取失败，已跳过一次空写入（原值在 ' + CORRUPT_KEY + '）');
+    return;
+  }
+  loadedCorrupt = false;
   // 配额满/隐私模式下保存会抛：静默吞掉等于让用户改的渠道与 API Key 无声丢失，
   // 至少留一条 console 证据供排查（UI 侧无独立保存按钮可挂提示）
   try { localStorage.setItem(LS_KEY, JSON.stringify(list)); }
