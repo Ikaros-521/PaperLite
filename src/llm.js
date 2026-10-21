@@ -549,17 +549,19 @@ export async function summarize(channel, text, budget) {
 // ---------------- 嵌入检索 ----------------
 
 // 嵌入（用于文档检索增强）；Anthropic 协议无嵌入接口 → 返回 null（调用方降级为全文截断）
-export async function embed(channel, texts) {
+export async function embed(channel, texts, opts = {}) {
   if (!channel.embedModel || protocolOf(channel) === 'anthropic') return null;
   try {
     const r = await fetch(url(channel, '/embeddings'), {
       method: 'POST',
       headers: headers(channel),
       body: JSON.stringify({ model: channel.embedModel, input: texts }),
+      // 检索是在「发送」之前跑的：没超时的挂起端点会让整次发送无限等下去
+      signal: timeoutSignal(opts.signal),
       redirect: 'error'
     });
     if (!r.ok) return null;
-    const j = await r.json();
+    const j = await readJson(r);   // 不用 r.json()：嵌入响应是几百个浮点数组，得先过上限
     return (j.data || []).map(d => d.embedding);
   } catch (e) { return null; }
 }
