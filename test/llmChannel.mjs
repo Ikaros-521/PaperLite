@@ -3,7 +3,7 @@
  * 这些都关系到 API Key 会不会离开本机、坏服务端能不能把标签页拖死。
  */
 import assert from 'node:assert/strict';
-import { chat, fetchModels, baseUrlProblem, thinkingSwitch, loadChannels, saveChannels, newChannel } from '../src/llm.js';
+import { chat, fetchModels, testConnection, baseUrlProblem, thinkingSwitch, loadChannels, saveChannels, newChannel } from '../src/llm.js';
 import { setLang } from '../src/i18n.js';
 
 setLang('zh');
@@ -144,6 +144,43 @@ assert.equal(seen.length, 0, '校验失败不该已经发出请求');
   assert.equal(r.content, '重试成功', '降级重试照常出结果');
   assert.equal(n, 2, '一次 400 一次重试');
   assert.equal(seen[seen.length - 1].enable_thinking, undefined, '重试时把可选扩展字段去掉');
+}
+
+// ---- 测试连接不能只看 /models：Anthropic 协议必须真打 /v1/messages ----
+{
+  const calls = [];
+  globalThis.fetch = async (u, opts) => {
+    calls.push({ u, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null });
+    if (u.endsWith('/models')) return okJson({ data: [{ id: 'claude-x' }] });
+    return okJson({ type: 'message', content: [{ type: 'text', text: 'pong' }], usage: { input_tokens: 1, output_tokens: 1 } });
+  };
+  const r = await testConnection({ ...anthropicCh, cot: true });
+  assert.equal(r.ok, true);
+  const m = calls.filter(c => c.u.endsWith('/messages'))[0];
+  assert.ok(m, 'Anthropic 协议测试必须真的请求 /v1/messages');
+  assert.equal(m.method, 'POST');
+  assert.equal(m.body.max_tokens, 5, '测试用最小对话');
+  assert.equal(m.body.thinking, undefined, '测试连接不能启用 thinking 预算');
+}
+
+// ---- 200 里裹着业务错误也要报出来（智谱 Anthropic /models 实测行为） ----
+{
+  globalThis.fetch = async () => okJson({ code: 401, msg: '令牌已过期或验证不正确', success: false });
+  await assert.rejects(fetchModels(anthropicCh), /令牌已过期/);
+  // code:1 这类成功码不能被误判，空列表照常返回
+  globalThis.fetch = async () => okJson({ code: 1, data: [] });
+  assert.deepEqual(await fetchModels(anthropicCh), []);
+}
+
+// ---- /models 成功不能掩盖 /v1/messages 失败 ----
+{
+  globalThis.fetch = async (u) => {
+    if (u.endsWith('/models')) return okJson({ data: [{ id: 'claude-x' }] });
+    return { ok: false, status: 403, headers: new Map(), text: async () => 'CORS blocked' };
+  };
+  const r = await testConnection(anthropicCh);
+  assert.equal(r.ok, false, '模型列表成功不代表真正对话可用');
+  assert.match(r.msg, /403/);
 }
 
 globalThis.fetch = realFetch;

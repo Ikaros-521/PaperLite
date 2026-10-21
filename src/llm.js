@@ -193,14 +193,52 @@ export async function fetchModels(channel, opts = {}) {
   const ids = arr
     .map(m => (typeof m === 'string' ? m : (m && (m.id || m.name || m.model))))
     .filter(Boolean);
+  // 网关可能 HTTP 200 裹着业务错误（智谱 Anthropic 的 /models 对无效 Key
+  // 回 200 + {code:401,msg}）；只判 r.ok 会让「获取模型 / 测试连接」假绿
+  if (!ids.length) {
+    const msg = apiErrorMessage(j);
+    if (msg) throw new Error(msg.slice(0, 160));
+  }
   return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+}
+
+// 常见错误体：{error:{message}} / {success:false,msg} / {code:非200,msg}
+function apiErrorMessage(j) {
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return '';
+  const e = j.error;
+  if (e) {
+    if (typeof e === 'string') return e;
+    if (e.message) return String(e.message);
+    if (e.code) return String(e.code);
+  }
+  if (j.success === false) return String(j.msg || j.message || j.code || '');
+  if (j.code !== undefined && j.code !== null && j.code !== '') {
+    const code = Number(j.code);
+    // 数字只认 4xx/5xx；非数字只放过常见的成功词，避免把 code:1 这类成功码当错误
+    if (Number.isFinite(code) ? code >= 400 : !/^(ok|success|succeed|true)$/i.test(String(j.code))) {
+      return String(j.msg || j.message || ('code ' + j.code));
+    }
+  }
+  return '';
 }
 
 // ---------------- 测试连接 ----------------
 
-// 优先 /models，失败则发一条极短对话
+// Anthropic 的 /models 只证明列表接口可达，真正对话走 /v1/messages；
+// 网关可能只给列表配了 CORS（智谱就是这样），所以必须真发一次最小对话。
+// OpenAI 兼容路径仍优先 /models，失败再发一条极短对话。
 export async function testConnection(channel, opts = {}) {
   try {
+    if (protocolOf(channel) === 'anthropic') {
+      await chat(channel, [{ role: 'user', content: 'ping' }], {
+        maxTokens: 5, noReasoning: true, signal: timeoutSignal(opts.signal)
+      });
+      let ids = [], listErr = '';
+      try { ids = (await fetchModels(channel, opts)).slice(0, 5); }
+      catch (e) { listErr = e.message || String(e); }
+      if (!ids.length && listErr) return { ok: true, msg: t('llm.okChatOnly', { msg: listErr }) };
+      return { ok: true, msg: ids.length ? t('llm.ok', { models: t('llm.okModels', { models: ids.join(getLang() === 'en' ? ', ' : '、') }) }) : t('llm.ok', { models: '' }) };
+    }
     let ids = [];
     try {
       ids = (await fetchModels(channel, opts)).slice(0, 5);
