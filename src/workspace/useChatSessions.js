@@ -48,7 +48,9 @@ export function useChatSessions({ projectKey, persist = true }) {
   sessionsRef.current = sessions;
   keyRef.current = projectKey || '';
 
-  const setActive = (id) => { activeRef.current = id; setActiveId(id); writePointer(keyRef.current, id); };
+  // 活动指针也只按列表归属的 key 写：换项目的窗口里用实时 key 写，等于把新项目
+  // 自己的指针改指向旧项目的一条会话
+  const setActive = (id) => { activeRef.current = id; setActiveId(id); writePointer(ownerKeyRef.current || keyRef.current, id); };
   const upsert = (list, session) => {
     const i = list.findIndex(s => s.id === session.id);
     if (i < 0) return [session, ...list];
@@ -157,7 +159,10 @@ export function useChatSessions({ projectKey, persist = true }) {
   }, []);
 
   const startSession = useCallback(async () => {
-    const key = keyRef.current;
+    // 新建/删除/分支一律按列表归属的 key（ownerKeyRef），不读实时 projectKey：
+    // e24d08d 只把落库那条路径改了过来，这三处还漏着——换文件夹的读取窗口里
+    // 点「⑂分支」，就是拿 A 项目的正文按 B 的 key 写库
+    const key = ownerKeyRef.current || keyRef.current;
     if (!key) return null;
     const s = newSession(key);
     setSessions(prev => evictSessions([s, ...prev], s.id, MAX_SESSIONS));
@@ -171,7 +176,7 @@ export function useChatSessions({ projectKey, persist = true }) {
   }, [sessions]);
 
   const deleteSession = useCallback(async (id) => {
-    const key = keyRef.current;
+    const key = ownerKeyRef.current || keyRef.current;
     dirtyRef.current.delete(id);
     const rest = sessions.filter(s => s.id !== id);
     setSessions(rest);
@@ -184,7 +189,7 @@ export function useChatSessions({ projectKey, persist = true }) {
 
   /** 从某条消息处分一支：前缀进新会话并切过去，原会话一个字都不动 */
   const forkSession = useCallback(async (index) => {
-    const key = keyRef.current;
+    const key = ownerKeyRef.current || keyRef.current;
     const source = sessions.find(s => s.id === activeId);
     if (!source) return null;
     const s = { ...newSession(key), messages: forkMessages(source.messages, index), title: forkTitle(source) };
