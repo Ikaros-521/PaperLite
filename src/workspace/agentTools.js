@@ -35,8 +35,34 @@ function fail(msg, code) { return { ok: false, result: String(msg), code: code |
 // 再加上「组内交替 + 组外量词」（(a|aa)+ 型）：只靠嵌套判据漏得最多，因为它的组里
 // 没有量词。不做完整的安全分析，挡住模型最常写出的两种就够了——正则是逐行在 UI 线程
 // exec 的，一条病态模式就能冻住整个标签页；认不出的形态由 searchInFiles 的墙钟预算兜住。
-const NESTED_QUANT = /\([^()]*(?:[+*?])\)[+*?{]/;
-const ALT_QUANT = /\([^()]*(?:\|[^()]*)+\)[+*?{]/;
+// 指数回溯判据：逐层跟踪括号，「组里出现过量词或交替」且「这个组整体又跟了量词」
+// 就是 (a+)+ / ((a)+)+c / (a|aa)+ 这一类。之前用两条正则去匹配这种形态，嵌套一层就漏
+// （((a)+)+c 实测放行），而正则是逐行在 UI 线程 exec 的，一条病态模式就冻住整个标签页。
+// \d{2} 这类量词也计入，宁可误拒一条合理模式，也不要放过一个冻结界面的
+function riskyPattern(p) {
+  const text = String(p || '');
+  const stack = [{ quant: false, alt: false }];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\') { i++; continue; }
+    if (c === '[') { const j = text.indexOf(']', i + 1); if (j < 0) return true; i = j; continue; }
+    if (c === '(') { stack.push({ quant: false, alt: false }); continue; }
+    if (c === ')') {
+      if (stack.length < 2) return true;   // 括号不配对也当可疑：交给上层报错，不放进 exec
+      const g = stack.pop();
+      const quantified = /[+*?{]/.test(text[i + 1] || '');
+      if (quantified && (g.quant || g.alt)) return true;
+      const top = stack[stack.length - 1];
+      if (quantified || g.quant || g.alt) top.quant = true;
+      continue;
+    }
+    if (!stack.length) continue;
+    const top = stack[stack.length - 1];
+    if (c === '|') top.alt = true;
+    else if (c === '+' || c === '*' || c === '?' || c === '{') top.quant = true;
+  }
+  return stack.length > 1;                   // 括号没闭合也拒
+}
 // 病态正则执行预算：单次搜索最多占 UI 线程这么久
 const SEARCH_TIME_BUDGET_MS = 1200;
 
@@ -234,7 +260,7 @@ export function makeAgentExecutor(deps) {
     const L = getLang();
     // query 的必填与长度上限在注册表里，这里只留「跑起来才知道」的语义检查
     const query = String(args.query || '');
-    if (args.regex === true && (NESTED_QUANT.test(query) || ALT_QUANT.test(query))) return fail(tr(L, 'agent.errRegexUnsafe'), 'regex_unsafe');
+    if (args.regex === true && riskyPattern(query)) return fail(tr(L, 'agent.errRegexUnsafe'), 'regex_unsafe');
     const r = searchInFiles(searchFiles(), {
       query,
       regex: args.regex === true,
