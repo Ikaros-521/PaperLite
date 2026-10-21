@@ -51,3 +51,36 @@ export function forEachEnv(s, cb, opts) {
     p = close + 1;
   }
 }
+
+/**
+ * 单遍扫出 s 里真出现过的宏名，只留 macros 字典里定义过的那些，按首次出现顺序返回。
+ *
+ * 为什么要它：宏展开原先对每个文本片段都把**整本字典**的宏名各编译一条正则再扫一遍，
+ * 代价是「片段数 × 宏数 × 片段长」。4000 条 \newcommand + 4000 段正文（175KB，远没到
+ * 预览的 1MB 源码闸）实测冻结主线程 31.5s，且每翻一倍约 ×4.5。改成先花 O(片段长)
+ * 认出这片里出现过哪些宏，再只对这几个动手。
+ *
+ * 匹配口径与旧正则 `\\name(?![A-Za-z])` 逐位等价：反斜杠后的连续字母算一个词法单元，
+ * 所以 `\mab` 里不会命中宏 ma（旧写法靠 lookahead 拒绝，这里靠「取极大字母串」拒绝）。
+ *
+ * 查字典必须认 own property：\newcommand{\constructor}{..} 是合法宏名，用 macros[name]
+ * 判存在会从原型链上取到 Function，mac.body 是 undefined → 整页渲染抛错。
+ */
+export function macroNamesIn(s, macros) {
+  if (!s || !macros) return [];
+  const found = [];
+  const seen = Object.create(null);
+  let i = 0;
+  while (i < s.length) {
+    const b = s.indexOf('\\', i);
+    if (b < 0) break;
+    let j = b + 1;
+    while (j < s.length && /[A-Za-z]/.test(s.charAt(j))) j++;
+    if (j > b + 1) {
+      const name = s.slice(b + 1, j);
+      if (!seen[name] && Object.hasOwn(macros, name)) { seen[name] = 1; found.push(name); }
+    }
+    i = j > b + 1 ? j : b + 1;
+  }
+  return found;
+}

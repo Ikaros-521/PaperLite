@@ -32,3 +32,55 @@ export function tooLargeResult(text, L) {
     meta: {}, warnings: [], diagrams: [], tables: [], stats: countOf(text), headings: [], src: String(text || ''),
   };
 }
+
+// ---------------- 产物预算 ----------------
+// 只卡源码长度挡不住放大：行内公式的产物实测约 99.5 倍（0.76MB 源码 → 76MB HTML 字符串，
+// 渲染 3.6s），而那 76MB 还要当 innerHTML 解析成约 500 万个 DOM 节点。所以除了入口的
+// RENDER_MAX_SRC，产物这一侧也要有一道闸，并且要在叶子节点（每个公式）处累计，
+// 否则字符串已经建完了才拦，等于只拦住了后半段。
+export const RENDER_MAX_HTML = 8 * 1024 * 1024;
+const HTML_BUDGET_CODE = 'render_html_budget';
+
+/**
+ * 一次渲染专用的产物计数器。必须按渲染建实例：挂到模块上会让上一篇文档的量
+ * 算到下一篇头上，聊天气泡与预览共用一条公式渲染路径时尤其致命。
+ * 超限即抛，由调用方（App 的 latexResult/mdResult、移动端 result）换成降级结果。
+ */
+export function makeHtmlBudget(limit) {
+  const max = limit || RENDER_MAX_HTML;
+  let n = 0;
+  return {
+    get total() { return n; },
+    add(len) {
+      n += len;
+      if (n > max) {
+        const e = new Error('render html budget exceeded: ' + n + ' > ' + max);
+        e.code = HTML_BUDGET_CODE;
+        // 带上已累计的体积：降级横幅要说「渲染出 9.2 MB（上限 8 MB）」，
+        // 而不是把上限当实测值报——那样用户看不出到底超了多少
+        e.bytes = n;
+        throw e;
+      }
+    },
+  };
+}
+
+/** 是不是产物预算触发的抛出（区别于真的渲染异常：前者该降级显示，后者才给错误横幅） */
+export function isHtmlBudgetTrip(e) { return !!(e && e.code === HTML_BUDGET_CODE); }
+
+/** 产物已经超预算时的降级结果；与 tooLargeResult 同形状，少一个字段就是渲染期抛错 */
+export function tooLargeHtmlResult(text, htmlLen, L) {
+  // fmtSize 收的是字符串（按 UTF-8 字节量），这里手里是长度数字，别再绕它一层
+  const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+  return {
+    html: '<div class="render-error">' + escHtml(tr(L || getLang(), 'app.previewHtmlTooLarge',
+      { size: mb(htmlLen), limit: mb(RENDER_MAX_HTML) })) + '</div>',
+    meta: {}, warnings: [], diagrams: [], tables: [], stats: countOf(text), headings: [], src: String(text || ''),
+  };
+}
+
+/** 叶子累计之外的兜底：整篇产物过长同样降级（表格等非公式路径的放大由这层拦） */
+export function capHtmlResult(r, text, L) {
+  const len = r && typeof r.html === 'string' ? r.html.length : 0;
+  return len > RENDER_MAX_HTML ? tooLargeHtmlResult(text, len, L) : r;
+}

@@ -5,19 +5,25 @@
 import MarkdownIt from 'markdown-it';
 import katex from 'katex';
 import { escHtml } from '../htmlEsc.js';
+import { makeHtmlBudget } from '../previewBudget.js';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: true });
 // 聊天气泡另开一份：模型习惯一行一句（不空行），不认单换行会把整段糊成一行；
 // 关掉 typographer，免得把 " -- (c) 换成弯引号与破折号——聊天里的内容常被抄回编辑器
 const mdChat = new MarkdownIt({ html: false, linkify: true, breaks: true, typographer: false });
 
-function renderMathSafe(tex, display) {
+function renderMathSafe(tex, display, budget) {
+  let html;
   try {
-    return katex.renderToString(tex, { displayMode: !!display, throwOnError: false, strict: false });
+    html = katex.renderToString(tex, { displayMode: !!display, throwOnError: false, strict: false });
   } catch (e) {
     const esc = String(tex).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return '<span class="math-error">' + esc + '</span>';
+    html = '<span class="math-error">' + esc + '</span>';
   }
+  // 产物预算在叶子处累计（与 engines/latex.js 的 renderMath 同一口径）：一个公式的 HTML
+  // 可达源码的百倍，整篇拼完再量就只剩拦住后半段了
+  if (budget) budget.add(html.length);
+  return html;
 }
 
 // 在非 <code>/<pre> 片段中处理 $..$ / $$..$$
@@ -43,12 +49,12 @@ function atob64(s) {
 
 // 把 mathPass 藏起来的 @@MDX...@@ 还原成 KaTeX。
 // 聊天那份 md 开了 breaks，段内换行已经变成 <br> 混进公式里了，先还原成空格再交给 KaTeX
-function mathBackfill(html) {
+function mathBackfill(html, budget) {
   return html.replace(/@@MDX([A-Za-z0-9+/=]+)@@/g, (_, b64) => {
     let raw;
     try { raw = decodeURIComponent(escape(atob64(b64))).replace(/<br\s*\/?>/gi, ' '); } catch (e) { return ''; }
-    if (raw.startsWith('@@D@@')) return '<div class="equation"><span class="eq-body">' + renderMathSafe(raw.slice(5), true) + '</span></div>';
-    return renderMathSafe(raw.slice(5), false);
+    if (raw.startsWith('@@D@@')) return '<div class="equation"><span class="eq-body">' + renderMathSafe(raw.slice(5), true, budget) + '</span></div>';
+    return renderMathSafe(raw.slice(5), false, budget);
   });
 }
 
@@ -61,6 +67,8 @@ export function renderMarkdown(src) {
  *  链接一律新窗口打开（点一下不该把正在写的稿子整页换掉）；
  *  图片只留替代文字（CSP 的 img-src 不含远程 http，外链图必然显示成破图）。 */
 export function renderChatMarkdown(src) {
+  // 聊天气泡故意不套产物预算：预算靠抛出中断渲染，而 ChatPanel 没有 try/catch 兜这条路径，
+  // 全仓也没有 ErrorBoundary——抛出等于把整个对话面板顶掉。模型单条回答的长度另有上限（llm.js）
   const html = mathBackfill(mathPass(mdChat.render(String(src || ''))));
   return html
     .replace(/<a href=/g, '<a target="_blank" rel="noopener noreferrer" href=')
@@ -141,7 +149,7 @@ export function renderMarkdownFull(src) {
     return '<div class="diagram mermaid-block" data-code="' + escHtml(encodeURIComponent(code.trim())) + '"></div>';
   });
   html = mathPass(html);
-  // 回填数学
-  html = mathBackfill(html);
+  // 回填数学（本次渲染一份独立预算，超限抛出 → 调用方换成降级预览）
+  html = mathBackfill(html, makeHtmlBudget());
   return { html, headings };
 }

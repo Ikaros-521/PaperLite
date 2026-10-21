@@ -2,7 +2,8 @@ import katex from 'katex';
 import * as TIKZ from './tikz.js';
 import { t, getLang } from '../i18n.js';
 import { readDocumentclass, resolveLayout, FALLBACK } from './classLayout.js';
-import { forEachEnv } from '../texScan.js';
+import { forEachEnv, macroNamesIn } from '../texScan.js';
+import { makeHtmlBudget } from '../previewBudget.js';
 import { escHtml } from '../htmlEsc.js';
 
 /* PaperLite · LaTeX → HTML 渲染器（论文常用子集）
@@ -304,7 +305,7 @@ function matchEnvs(s) {
 // .repeat(200)（12KB）冻结主线程 5.4s，200KB 外推约 90s。改成「正则只定候选起点、
 // 剩下的确定性单遍解析」：每个 \s* 只能吃满后面那段空白（后随词元没有一个以空白开头），
 // 所以不存在可回退的分配，代价与扫描过的字符数同阶。
-function scanMacros(src) {
+export function scanMacros(src) {
   // 无原型字典：定义查不到时 ctx.macros[name] 会从原型链上取到 Function，
   // 于是 \toString 被当成宏、mrec.body 是 undefined、渲染整页抛错
   var macros = Object.create(null);
@@ -357,17 +358,37 @@ function scanMacros(src) {
 }
 
 // 在 text 上展开宏（返回新串）。args 从 text 中宏名后依次抓取 {} 组。
-function expandMacros(text, macros, depth) {
+// 展开上限：\a → x\a 这类自增长的宏体能在 12 层递归里把正文撑到内存耗尽，
+// 次数与长度各封一道（与 readOpt 的 OPT_MAX、colspec 的 MAX_COLSPEC_COLS 同一套路）。
+// 超上限时「停止展开、返回已展开的部分」，不抛错——畸形文档该降级显示，不该顶掉整页预览。
+const MACRO_MAX_OPS = 20000;
+const MACRO_MAX_TEXT = 4 * 1024 * 1024;
+
+// 找 out 里下一个独立的 \name；后随字母不算命中，与旧正则 (?![A-Za-z]) 同口径。
+// needle 里只有开头一个反斜杠，所以失配时从 k+1 继续找不会漏、也不会原地打转。
+function findMacro(out, needle) {
+  var k = 0;
+  while ((k = out.indexOf(needle, k)) >= 0) {
+    if (!/[A-Za-z]/.test(out.charAt(k + needle.length))) return k;
+    k++;
+  }
+  return -1;
+}
+
+// 导出只为让 test/macroExpand.mjs 拿旧实现做差分对照：新旧必须对同一份文档给同一段正文
+export function expandMacros(text, macros, depth) {
   if (depth > 12) return text;
-  var changed = false, out = text;
-  Object.keys(macros).forEach(function (name) {
-    var mac = macros[name];
-    var re = new RegExp('\\\\' + name + '(?![A-Za-z])');
-    var m;
-    var guard = 0;
-    while ((m = re.exec(out)) && guard++ < 50) {
-      var after = m.index + m[0].length;
-      var replacement = mac.body;
+  // 旧写法在这里对 Object.keys(macros) 的每个宏名编译一条正则再扫全文，于是每个文本片段
+  // 都要付「宏数 × 片段长」的代价；先用一遍扫描认出本片真的出现过哪几个宏
+  var names = macroNamesIn(text, macros);
+  if (!names.length) return text;
+  var changed = false, out = text, ops = 0;
+  for (var ni = 0; ni < names.length; ni++) {
+    var name = names[ni], mac = macros[name];
+    var needle = '\\' + name;
+    var guard = 0, at;
+    while (ops++ < MACRO_MAX_OPS && guard++ < 50 && (at = findMacro(out, needle)) >= 0) {
+      var after = at + needle.length;
       // 抓参数
       var pos = after, ok = true;
       var argsUsed = [];
@@ -383,13 +404,13 @@ function expandMacros(text, macros, depth) {
         argsUsed.push(g.text); pos = g.end + 1;
       }
       if (!ok) break;
-      // 替换 #1..
-      replacement = replacement.replace(/#(\d)/g, function (_, d) { return argsUsed[+d - 1] !== undefined ? argsUsed[+d - 1] : ''; });
-      out = out.slice(0, m.index) + replacement + out.slice(pos);
+      // 替换 #1..（拼接而非 String.replace 的替换串：宏体里的 $& 不该被解释）
+      var replacement = mac.body.replace(/#(\d)/g, function (_, d) { return argsUsed[+d - 1] !== undefined ? argsUsed[+d - 1] : ''; });
+      out = out.slice(0, at) + replacement + out.slice(pos);
       changed = true;
     }
-  });
-  if (changed) out = expandMacros(out, macros, depth + 1);
+  }
+  if (changed && out.length <= MACRO_MAX_TEXT) out = expandMacros(out, macros, depth + 1);
   return out;
 }
 
@@ -414,6 +435,9 @@ function renderMath(tex, display, ctx, macrosForKatex, at) {
     html = '<span class="math-error" title="' + esc(e.message || '') + '">' + esc(tex) + '</span>';
     ctx.warn(t('render.mathError', { msg: String(e.message || '').slice(0, 80) }), at, 'math');
   }
+  // 产物预算在叶子处累计：行内公式的 HTML 实测可达源码的 99.5 倍，等整篇拼完再量就晚了
+  // （0.76MB 源码能拼出 76MB 字符串，然后还要当 innerHTML 解析）
+  if (ctx && ctx._htmlBudget) ctx._htmlBudget.add(html.length);
   return html;
 }
 
@@ -469,6 +493,8 @@ function renderLatex(srcRaw, opts) {
   opts = opts || {};
   var ctx = {
     warnings: [],
+    // 本次渲染专用的产物计数器（挂在 ctx 上，绝不能挂模块：否则上一篇的量算到下一篇头上）
+    _htmlBudget: makeHtmlBudget(),
     // 下面四张表的键都来自文档正文（宏名 / \label / \bibitem / \ref），必须是无原型字典：
     // 用 {} 时 \ref{constructor} 会从原型链上读到 Object 的成员，判成「引用已定义」，
     // refPos['constructor'].push 更是直接抛错，整页预览只剩一条渲染异常横幅

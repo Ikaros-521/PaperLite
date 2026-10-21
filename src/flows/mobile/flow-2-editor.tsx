@@ -55,7 +55,7 @@ import { collectUserCommands } from '../../completion.js'
 import { renderLatex } from '../../engines/latex.js'
 import { renderMarkdownFull } from '../../engines/markdown.js'
 import { lintLaTeX } from '../../engines/linter.js'
-import { RENDER_MAX_SRC, tooLargeResult } from '../../previewBudget.js'
+import { RENDER_MAX_SRC, RENDER_MAX_HTML, tooLargeResult, tooLargeHtmlResult, capHtmlResult, isHtmlBudgetTrip } from '../../previewBudget.js'
 import { escHtml } from '../../htmlEsc.js'
 import { aiFixIssuePrompt } from '../../workspace/chatContext.js'
 import { wordCount } from '../../fileActions.js'
@@ -945,14 +945,16 @@ export function Flow2_Workspace() {
     try {
       if (tab?.kind === 'md') {
         return {
-          ...renderMarkdownFull(renderValue), isMd: true,
+          ...capHtmlResult(renderMarkdownFull(renderValue), renderValue), isMd: true,
           meta: { ctex: true }, warnings: [], diagrams: [], tables: [], src: renderValue,
         } as never
       }
-      const r = renderLatex(renderValue, {}) as { src?: string }
+      const r = capHtmlResult(renderLatex(renderValue, {}), renderValue) as { src?: string }
       r.src = renderValue
       return r as never
     } catch (e) {
+      // 产物超预算走同一个降级形状：只卡源码长度挡不住百倍放大（桌面同口径）
+      if (isHtmlBudgetTrip(e)) return tooLargeHtmlResult(renderValue, (e as { bytes?: number }).bytes || RENDER_MAX_HTML) as never
       // 异常消息可能回显文档内容片段，进 innerHTML 前转义
       return {
         html: '<div class="render-error">' + escHtml(tr(getLang(), 'app.renderErr') + String((e as Error).message || e)) + '</div>',
