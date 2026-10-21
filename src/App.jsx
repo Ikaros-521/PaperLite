@@ -3,7 +3,7 @@ import CodeMirror from 'codemirror';
 import FileDialog from './components/FileDialog.jsx';
 import DialogHost from './components/MessageDialog.jsx';
 import { showAlert as alert, showConfirm, showPrompt } from './dialogs.js';
-import { validName, wordCount, readHistory, recordVersion, renameVersion, deleteHistory, clearHistory, historyUsage, unusedHistory, pruneHistory, downloadSourceZip } from './fileActions.js';
+import { validName, agentPathCheck, wordCount, readHistory, recordVersion, renameVersion, deleteHistory, clearHistory, historyUsage, unusedHistory, pruneHistory, downloadSourceZip } from './fileActions.js';
 import HistoryDialog from './components/HistoryDialog.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import { quickInsert, replaceTemplate } from './editorTools.js';
@@ -1175,12 +1175,16 @@ export default function App() {
   const createFileForAgent = useCallback(async (path, content) => {
     const L = getLang();
     // 旧写法 replace(/^[./\\]+/, '') 把 ../x 静默改成 x、.latexmkrc 改成 latexmkrc：
-    // 悄悄换目标比直接拒绝更糟（模型以为建在 a/ 下，实际落在别处）。现在按段校验。
-    const segs = String(path || '').replace(/\/+/g, '/').split('/').filter(Boolean);
+    // 悄悄换目标比直接拒绝更糟（模型以为建在 a/ 下，实际落在别处）。现在按段校验，
+    // 判据与 UI 路径共用同一份 validName——此前这里内联了一份，NUL.tex/con.tex 就过去了
     // code 回给执行器：注册表按错误码追加「下一步该怎么做」，没有码就只能把原文丢回给模型猜
-    if (!segs.length || /[\\:*?"<>|\u0000-\u001f]/.test(String(path || ''))) return { ok: false, msg: tr(L, 'app.badFileName'), code: 'bad_name' };
-    if (segs.some(s => s.startsWith('.'))) return { ok: false, msg: tr(L, 'agent.errHiddenPath', { path: String(path || '') }), code: 'hidden_path' };
-    const clean = segs.join('/');
+    const checked = agentPathCheck(path);
+    if (checked.code) return {
+      ok: false,
+      msg: tr(L, checked.code === 'hidden_path' ? 'agent.errHiddenPath' : 'app.badFileName', { path: String(path || '') }),
+      code: checked.code,
+    };
+    const clean = checked.path;
     if (String(content == null ? '' : content).length > 2 * 1024 * 1024) {
       return { ok: false, msg: tr(L, 'fs.tooLarge', { size: (String(content).length / 1048576).toFixed(1) }), code: 'too_large' };
     }

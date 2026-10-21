@@ -10,6 +10,24 @@ export function validName(name) {
     && !WIN_RESERVED.test(name);
 }
 
+/**
+ * 模型/工具递过来的路径按段校验，返回 { path } 或 { code }。
+ *
+ * 为什么要单独成函数：Agent 建文件那条路自己内联写了一份检查，只挡了非法字符与点开头，
+ * 于是 `NUL.tex`、`con.tex`、结尾点号这类名字从这条路上过去了——同一类问题在 c332f44
+ * 已经给 UI 路径堵过。判据只留一份（validName），两条路径不可能再各写各的漂移。
+ *
+ * 顺序：先 validName 再隐藏路径。`..`/`.` 本身就被 validName 判成坏名字；而 `.latexmkrc`
+ * 是合法名字、只是不该由模型写，落 hidden_path 那条更准确的文案上。
+ */
+export function agentPathCheck(path) {
+  const segs = String(path || '').replace(/\/+/g, '/').split('/').filter(Boolean);
+  if (!segs.length) return { code: 'bad_name' };
+  if (segs.some(s => !validName(s))) return { code: 'bad_name' };
+  if (segs.some(s => s.startsWith('.'))) return { code: 'hidden_path' };
+  return { path: segs.join('/') };
+}
+
 export function wordCount(text) {
   const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
   const words = (text.replace(/[\u3400-\u9fff]/g, ' ').match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || []).length;

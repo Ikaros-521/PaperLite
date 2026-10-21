@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { validName, wordCount, readHistory, recordVersion, sourceZip } from '../src/fileActions.js';
+import { validName, agentPathCheck, wordCount, readHistory, recordVersion, sourceZip } from '../src/fileActions.js';
+
+// Agent 建文件的路径判据必须与 UI 同一份（validName），否则保留名从这条路上过去：
+// App.jsx 里内联那份只挡了非法字符与点开头，NUL.tex/con.tex 照建
+assert.equal(agentPathCheck('NUL.tex').code, 'bad_name', 'Windows 保留名要拒');
+assert.equal(agentPathCheck('sub/con.tex').code, 'bad_name', '中间目录同样按段校验');
+assert.equal(agentPathCheck('a/b. ').code, 'bad_name', '结尾空格/点要拒');
+assert.equal(agentPathCheck('a/../b.tex').code, 'bad_name', '.. 是坏名字，不是「静默换个目标」');
+assert.equal(agentPathCheck('a\\b.tex').code, 'bad_name', '反斜杠不当分隔符');
+assert.equal(agentPathCheck('x?y.tex').code, 'bad_name');
+assert.equal(agentPathCheck('').code, 'bad_name', '空路径');
+assert.equal(agentPathCheck('///').code, 'bad_name', '只有分隔符');
+assert.equal(agentPathCheck('.latexmkrc').code, 'hidden_path', '合法名但隐藏路径，走更准的那条文案');
+assert.equal(agentPathCheck('src/.env').code, 'hidden_path');
+assert.equal(agentPathCheck('figs/flow 1.tex').path, 'figs/flow 1.tex', '正常路径原样（按段归一后）通过');
+assert.equal(agentPathCheck('a//b.tex').path, 'a/b.tex', '重复分隔符归一');
+assert.equal(agentPathCheck('论文/方法.tex').path, '论文/方法.tex');
 
 assert.equal(validName('../paper.tex'), false);
 assert.equal(validName('..'), false);
