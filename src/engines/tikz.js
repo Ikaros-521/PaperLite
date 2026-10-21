@@ -3,6 +3,7 @@
  * 覆盖论文流程图/架构图常用语法，输出 SVG 字符串（无 DOM 依赖，可在 Node 中测试）。
  * 每个节点记录其在原文档中的选项区间（绝对偏移），供样式面板回写源码。
  */
+import { escHtml } from '../htmlEsc.js';
 
 
 var CM = 96 / 2.54;
@@ -30,8 +31,11 @@ var DIRS = { right: [1, 0], left: [-1, 0], above: [0, -1], below: [0, 1],
   'below right': [0.7071, 0.7071], 'below left': [-0.7071, 0.7071] };
 
 // ---------------- 字符工具 ----------------
-function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-function f(x) { return (Math.round(x * 10) / 10).toString(); }
+function esc(s) { return escHtml(s); }   // 口径与 htmlEsc.js 共用一份
+// SVG 属性里出现 NaN 会让浏览器直接丢掉这个元素（节点静默消失），非有限值一律按 0 出图
+function f(x) { return (Math.round((Number.isFinite(x) ? x : 0) * 10) / 10).toString(); }
+// 数值选项一律夹取：非有限值（opacity=abc）回退默认，别让 NaN 进 SVG 属性
+function fin(v, lo, hi, dflt) { return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt; }
 function skipWs(s, i) { while (i < s.length && /\s/.test(s.charAt(i))) i++; return i; }
 
 function braceEnd(s, i) {
@@ -267,8 +271,9 @@ function interpret(list) {
       case 'font': o.fontVal = v || ''; return;
       case 'inner sep': o.innerSepPt = parseLen(v, 'pt') / PT; return;
       case 'node distance': o.nodeDistanceCm = parseLen(v, 'cm') / CM; return;
-      case 'opacity': o.opacity = parseFloat(v); return;
-      case 'scale': o.scale = parseFloat(v); return;
+      // 非有限值（opacity=abc）不能进 SVG 属性：浏览器会连元素一起丢掉，节点静默消失
+      case 'opacity': o.opacity = fin(parseFloat(v), 0, 1, null); return;
+      case 'scale': o.scale = fin(parseFloat(v), -1e6, 1e6, null); return;
       case 'pos': o.pos = parseFloat(v); return;
       case 'midway': o.pos = 0.5; return;
       case 'near start': o.pos = 0.25; return;

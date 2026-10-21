@@ -3,5 +3,9 @@
  * 而漏的那一处通常正好在「把异常原文回显给用户」的路径上——异常消息会带上文档内容片段。
  */
 export function escHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  // 连单引号一起转义：现在所有属性都用双引号包裹，但只要有人写成单引号属性，
+  // 少这一条就是属性逃逸（引擎与组件各有一份同名实现，正是最容易漏同步的地方）
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }

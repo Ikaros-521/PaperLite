@@ -3,6 +3,7 @@ import * as TIKZ from './tikz.js';
 import { t, getLang } from '../i18n.js';
 import { readDocumentclass, resolveLayout, FALLBACK } from './classLayout.js';
 import { forEachEnv } from '../texScan.js';
+import { escHtml } from '../htmlEsc.js';
 
 /* PaperLite · LaTeX → HTML 渲染器（论文常用子集）
  *
@@ -22,7 +23,7 @@ const MAX_COLSPEC_COLS = 512;
 
 
 function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return escHtml(s);   // 口径只在 htmlEsc.js 里存一份
 }
 
 // 链接 scheme 白名单：\url/\href 与 KaTeX trust 共用。无 scheme（相对路径/锚点）
@@ -399,8 +400,14 @@ function renderMath(tex, display, ctx, macrosForKatex, at) {
   try {
     html = katex.renderToString(tex, {
       displayMode: !!display, throwOnError: false, strict: false,
-      // trust 不再全开：\href/\url 的链接经 safeUrl 白名单，其余信任场景一律拒绝
-      trust: function (c) { return !!safeUrl(c && c.url); },
+      // trust 不再全开：\href/\url 的链接经 safeUrl 白名单，其余信任场景一律拒绝。
+      // \includegraphics 在数学里会渲染成 <mglyph src>，必须走文本路径同一道门
+      // （localAssetPath：只许项目内相对路径），否则远端 URL 无需点击就发外请求
+      trust: function (c) {
+        var u = c && c.url;
+        if (c && c.command === '\\includegraphics') return !!localAssetPath(u);
+        return !!safeUrl(u);
+      },
       macros: macrosForKatex || {}
     });
   } catch (e) {
@@ -934,7 +941,9 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       }
       var inner = renderFlow(g1.text, ctx, base + g1.start, false, true);
       var hid = 'h-' + ctx.headings.length;
-      ctx.headings.push({ level: lvl, num: num, text: flattenMarks(stripTags(inner)), id: hid, offset: base + i });
+      // 标题文本按纯文本交给目录/大纲（那边还会再 esc 一次）：渲染产物里的
+      // &amp;/&quot; 不还原，用户在目录里看到的就是 &amp;amp; 这种双重转义
+      ctx.headings.push({ level: lvl, num: num, text: decodeEnt(flattenMarks(stripTags(inner))), id: hid, offset: base + i });
       // 标题内的 \label
       labelsOf(g1.text).forEach(function (k) { ctx.labels[k] = num || ''; });
       var tag = lvl <= 3 ? 'h' + (lvl + 1) : 'p';
@@ -1154,9 +1163,18 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       if (o1) {
         var wm = o1.text.match(/width\s*=\s*([\d.]*\\(?:textwidth|linewidth|columnwidth)|[\d.]+(?:cm|mm|pt|in))/);
         if (wm) {
+          // 数值自己折算也要夹：这里绕过了 texDimCss 的 clampLen，
+          // \includegraphics[width=99999999cm] 会产出 width:3779999962px 把预览撑白
           var frac = wm[1].match(/^([\d.]*)\\(textwidth|linewidth|columnwidth)/);
-          if (frac) wstyle = ' style="width:' + (frac[1] === '' ? 100 : parseFloat(frac[1]) * 100) + '%"';
-          else { var px = { cm: 37.8, mm: 3.78, pt: 1.33, in: 96 }; var um = wm[1].match(/^([\d.]+)(cm|mm|pt|in)/); if (um) wstyle = ' style="width:' + (+um[1] * px[um[2]]) + 'px"'; }
+          if (frac) {
+            var f = frac[1] === '' ? 1 : parseFloat(frac[1]);
+            wstyle = ' style="width:' + (isFinite(f) ? Math.min(100, Math.max(0, f * 100)) : 100) + '%"';
+          } else {
+            var px = { cm: 37.8, mm: 3.78, pt: 1.33, in: 96 };
+            var um = wm[1].match(/^([\d.]+)(cm|mm|pt|in)/);
+            var upx = um ? +um[1] * px[um[2]] : NaN;
+            if (um) wstyle = ' style="width:' + (isFinite(upx) ? Math.min(CSS_PX_MAX, Math.max(0, upx)) : 0) + 'px"';
+          }
         }
       }
       var gsrc = localAssetPath(g1.text);
@@ -1173,6 +1191,11 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
 }
 
 function stripTags(s) { return String(s).replace(/<[^>]*>/g, ''); }
+// 与 esc 相反的那一步：把渲染产物里的实体还原回原文，供「当纯文本用」的地方（目录、大纲）
+function decodeEnt(s) {
+  return String(s).replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+}
 
 // IEEEtran 一级章节用罗马数字
 function toRoman(n) {
