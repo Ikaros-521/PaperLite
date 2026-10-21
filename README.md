@@ -79,7 +79,7 @@ node server.mjs    # 推荐：静态托管 + TeX 编译 API + LLM Mock → http:
 
 「🤖 AI 设置」弹窗分「**渠道**」「**Agent**」两个子页，切换着改不同配置。渠道页支持 **OpenAI 兼容** 与 **Anthropic (Claude)** 两种主流协议，可添加多个渠道，每渠道独立配置：
 
-- **平台预设**：内置 OpenAI / Anthropic / DeepSeek / 智谱 GLM / 通义千问 / Kimi / 硅基流动 / OpenRouter / Ollama / LM Studio 等，选中即自动配好协议与 Base URL（也可手动自定义）
+- **平台预设**：内置 OpenAI / Anthropic / DeepSeek / 智谱 GLM（含 Coding Plan）/ MiniMax Coding Plan / 通义千问 / Kimi / 硅基流动 / OpenRouter / Ollama / LM Studio 等，选中即自动配好协议与 Base URL（也可手动自定义）
 - **协议**：OpenAI 兼容（`/chat/completions`）或 Anthropic（`/v1/messages`，`x-api-key` + `anthropic-version`，浏览器直连自动声明）
 - Base URL / API Key / **对话模型** / **检索模型**（embedding，用于文档检索增强；Anthropic 协议无嵌入接口，检索自动回退）
 - **模型下拉**：点「获取模型」拉取该渠道可用模型列表（`/models`），输入即过滤、点选填入，也可直接手输
@@ -234,6 +234,17 @@ npm run electron:build
 > **Settings → Pages → Build and deployment → Source 选择「GitHub Actions」**
 
 之后每次 push 到 `main`，约 2 分钟后即可在 `https://<用户名>.github.io/<仓库名>/` 访问线上版本。构建产物为相对路径（`base: './'`），子路径部署无需任何改动。
+
+### AI 搜索与抓取（GEO）
+
+为让 AI 搜索与问答引擎（ChatGPT / Perplexity / Claude / 豆包等）以及不执行 JavaScript 的爬虫理解项目，构建产物包含：
+
+- `index.html`：title / description / canonical / Open Graph / Twitter meta，以及 `WebApplication + WebSite + FAQPage` JSON-LD；启动页在不依赖 JS 的情况下提供产品介绍与 FAQ（React 挂载后清掉）。
+- `llms.txt` / `llms-full.txt`：面向大模型的简洁与完整项目说明，页面用 `<link rel="llms">` 与正文链接暴露。
+- `robots.txt` / `sitemap.xml`：允许主流 AI 抓取并列站点地图。
+- `og.png`：1200×630 社交分享图。
+
+> GitHub Pages 项目站点位于 `/PaperLite/` 子路径，而爬虫按规范只读取域名根目录的 `robots.txt`，所以 `public/robots.txt` 只在直接访问、迁移到根目录或自定义域名时才会被自动读取；要让根目录策略生效，需在 `Ikaros-521.github.io` 用户站点仓库另放一份。`sitemap.xml` 可在搜索引擎后台手动提交。
 
 ### 线上（Pages）与本机服务分别用哪个引擎
 
