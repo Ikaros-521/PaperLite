@@ -123,8 +123,10 @@ export function exportPng(svgEl, name, scale) {
     ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.drawImage(img, 0, 0, cv.width, cv.height);
     cv.toBlob(blob => {
-      downloadFile(name || 'diagram.png', blob, 'image/png');
       URL.revokeObjectURL(url);
+      // 超大画布会被浏览器拒绝编码，toBlob 给 null；直接下载会得到一个无效的假 PNG
+      if (!blob) { alert(t('exp.pngFailed')); return; }
+      downloadFile(name || 'diagram.png', blob, 'image/png');
     }, 'image/png');
   };
   img.onerror = () => { alert(t('exp.pngFailed')); URL.revokeObjectURL(url); };
