@@ -576,5 +576,33 @@ ok(fakeBegin.html.includes('内文'), '后接的真实环境照常渲染');
   ok(!!half.svg, '局部配平的坏路径仍出图，不是整幅报废');
 }
 
+// ---------- 病态输入的线性与数值夹取 ----------
+{
+  const docOf = body => '\\documentclass{article}\n\\begin{document}\n' + body + '\n\\end{document}\n';
+  // 未闭合 \[ 以前每个都把余文扫到 EOF（88KB→0.4s，翻倍×4），现在靠「最后位置 + 负水位线」收成线性
+  const tMath = Date.now();
+  const badMath = renderLatex(docOf(String.raw`\[ `.repeat(20000)), {});
+  ok(Date.now() - tMath < 800, '大批未闭合 \\[ 保持线性, got ' + (Date.now() - tMath) + 'ms');
+  ok(!!badMath.html, '病态输入仍出结果，不是整页空白');
+  // 水位线不能吃掉后面的合法公式
+  const mixed = renderLatex(docOf(String.raw`\[ 未闭合 a+b` + '\n\n' + String.raw`\[ c+d \]` + '\n'), {});
+  ok(mixed.html.includes('katex') || mixed.html.includes('equation'), '前一个未闭合不该让后一个合法公式也不渲染');
+
+  // \caption[ 长跑无近端 ]：以前每条都扫到那个孤零零的 ]
+  const tOpt = Date.now();
+  renderLatex(docOf(String.raw`\caption[ `.repeat(20000) + ']'), {});
+  ok(Date.now() - tOpt < 800, '超跨度的可选参数按「没有可选参数」处理，保持线性, got ' + (Date.now() - tOpt) + 'ms');
+  const fig = renderLatex(docOf(String.raw`\begin{figure}[h]\caption[短标题]{长标题}\end{figure}`), {});
+  ok(fig.html.includes('长标题') && !fig.html.includes('[短标题]') && !fig.html.includes('[h]'),
+    '正常长度的可选参数照常读出并消费掉（不该以方括号原样出现在正文里）：' + fig.html);
+
+  // 数值只校验形状不校验量级时，9999999in 会原样进 style 把排版撑爆
+  const huge = renderLatex(docOf('\\begin{tabular}{p{9999999in}}a\\end{tabular}'), {});
+  const w = (/width:([\d.]+)px/.exec(huge.html) || [])[1];
+  ok(w !== undefined && Number(w) <= 20000, 'p{9999999in} 的宽度要夹到合理上限, got ' + w);
+  const neg = renderLatex(docOf(String.raw`甲\\[-3pt]乙`), {});
+  ok(neg.html.includes('margin-top:-3.99px'), '负的 \\vspace 类长度仍按原值出（夹取只砍极端）');
+}
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

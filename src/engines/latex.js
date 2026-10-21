@@ -167,13 +167,16 @@ function readGroup(s, i) {
   return { text: s.slice(i + 1, e), start: i + 1, end: e };
 }
 // 读 `[...]`（内部 {} 中的 ] 不算），返回 { text, openIdx } 或 null
+// 可选参数在 TeX 里本就是一小行；不设跨度时，一个孤零零的远端 ] 会让每条 \caption[
+// 都扫到它（实测 350KB 规模 174ms→679ms，翻倍×4）。超跨度按「没有可选参数」处理。
+var OPT_MAX = 4000;
 function readOpt(s, i) {
   i = skipWs(s, i);
   if (s.charAt(i) !== '[') return null;
   // 没有 ] 就白扫一条尾巴：坏文件里每条 \caption[ 都扫一次，同样 O(N·L)
   if (lastBracketOf(s) <= i) return null;
   var depth = 0;
-  for (var j = i; j < s.length; j++) {
+  for (var j = i; j < s.length && j - i <= OPT_MAX; j++) {
     var c = s.charAt(j);
     if (c === '\\') { j++; continue; }
     if (c === '{') depth++;
@@ -345,7 +348,26 @@ function renderMath(tex, display, ctx, macrosForKatex, at) {
 
 // 找数学环境结尾。i 指向内容起始。
 // 返回值约定：'$' -> 尾 $ 下标；'$$' -> 第一个 $ 下标；'\\]' / '\\)' -> 反斜杠下标
+//
+// 两道闸，因为「\[ 一个都没闭合」的坏文件会让每个起点都把余文扫到 EOF
+// （实测 88KB→0.4s，按 fs.js 的 2MB 打开上限外推是分钟级，而 renderLatex 跑在同步 useMemo 里）：
+//   ① 该结束符在本串里最后出现的位置一帧一算，落在 i 之前就能直接判未闭合；
+//   ② 真的扫到 EOF 仍没命中就立水位线，同一串里更靠后的起点同样不必再扫。
+// 两条提前 return 的情形（行内 $ 撞 \begin、跨空行）是「找到了但不该吞」，不能立水位线。
+var _fmSrc = null, _fmLast = null, _fmMark = null;
+function fmTermLast(s, needle) {
+  if (s !== _fmSrc) {
+    _fmSrc = s;
+    _fmLast = { '$': s.lastIndexOf('$'), '\\]': s.lastIndexOf('\\]'), '\\)': s.lastIndexOf('\\)') };
+    _fmMark = { '$': -1, '\\]': -1, '\\)': -1 };
+  }
+  return _fmLast[needle];
+}
 function findMathEnd(s, i, term) {
+  var needle = (term === '$' || term === '$$') ? '$' : term;
+  var last = fmTermLast(s, needle);
+  if (_fmMark[needle] >= 0 && i >= _fmMark[needle]) return -1;
+  if (last < i) { _fmMark[needle] = i; return -1; }
   var j = i;
   while (j < s.length) {
     var c = s.charAt(j);
@@ -367,6 +389,7 @@ function findMathEnd(s, i, term) {
     if (term === '$$' && c === '$' && s.charAt(j + 1) === '$') return j;
     j++;
   }
+  _fmMark[needle] = i;    // 走到这里 = 整条余文没有结束符
   return -1;
 }
 
@@ -595,16 +618,20 @@ function stripThanks(text) {
 
 // ---------------- 换行 \\[<dim>] ----------------
 // TeX 长度 → CSS 长度；em/ex 交给浏览器按当前字号解析，其余按 96dpi 折算，无单位按 sp
+// 只校验形状不校验量级时，p{9999999in} 会原样进 style 变成 width:959999904px，
+// 整张表把预览撑成一屏空白。夹到 ±20000px / ±100em（负值是 \vspace 的合法写法，保留）。
+var CSS_PX_MAX = 20000, CSS_EM_MAX = 100;
+function clampLen(v, hi) { return Math.min(hi, Math.max(-hi, v)); }
 function texDimCss(raw) {
   var m = String(raw == null ? '' : raw).trim().match(/^(-?[\d.]+)\s*([a-zA-Z]+)?$/);
   if (!m) return null;
   var v = parseFloat(m[1]);
   if (!isFinite(v)) return null;
   var u = (m[2] || 'sp').toLowerCase();
-  if (u === 'em' || u === 'ex') return +v.toFixed(3) + u;
+  if (u === 'em' || u === 'ex') return (+clampLen(v, CSS_EM_MAX).toFixed(3)) + u;
   var px = { pt: 1.33, bp: 1.33, in: 96, cm: 37.8, mm: 3.78, dd: 1.42, cc: 17.05, sp: 0.00002 }[u];
   if (typeof px !== 'number') return null;
-  return +(v * px).toFixed(2) + 'px';
+  return (+clampLen(v * px, CSS_PX_MAX).toFixed(2)) + 'px';
 }
 
 // s[pos] 起是紧跟 \\ 的可选长度参数；返回 { css, next }，非长度参数不吞掉（保持原样）
