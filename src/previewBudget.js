@@ -12,6 +12,12 @@ import { escHtml } from './htmlEsc.js';
 // 与 fs.js 的 2MB 打开上限留出倍数余量，正常论文（几十~几百 KB）够不着
 export const RENDER_MAX_SRC = 1024 * 1024;
 
+// KaTeX 的 maxSize（单位 em，默认 Infinity）：不设的话 `\rule{100000em}{20em}`
+// 原样输出成 border-right-width:100000em，一个字符的公式就能把排版撑出十万像素的横向滚动。
+// 取 80em 是留余量的结果：数学里 `\includegraphics[width=10in]` 折算约 72em，
+// 正常插图不会被夹，畸形值才被抓——两个渲染引擎（latex/markdown）必须用同一个值。
+export const KATEX_MAX_SIZE = 80;
+
 /** 中英文混排的字数统计：预览页脚与状态栏共用同一口径 */
 export function countOf(s) {
   const str = String(s || '');

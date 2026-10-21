@@ -10,6 +10,8 @@
  */
 import assert from 'node:assert/strict';
 import { renderLatex } from '../src/engines/latex.js';
+import { renderMarkdownFull } from '../src/engines/markdown.js';
+import { KATEX_MAX_SIZE } from '../src/previewBudget.js';
 import { lintLaTeX } from '../src/engines/linter.js';
 
 const B = String.fromCharCode(92);
@@ -58,5 +60,45 @@ assert.ok(!optHtml.includes('蓝色正文') && !optHtml.includes('仅一参蓝�
 
 const numbered = renderLatex(B + 'section{甲}' + B + 'label{s}' + B + 'ref{s}');
 assert.ok(numbered.html.includes('>1<') || /\b1\b/.test(numbered.html.replace(/<[^>]+>/g, ' ')), '正常 \ref 仍要编号');
+
+// ---- 正文里的 NUL 不许把整页预览顶掉 ----
+// 占位符以 \x00 分界，而 escHtml 不吞 NUL：verbatim/verb 里出现 NUL + 畸形百分号时，
+// 那段正文会被当成 \x00R:…\x00 占位符匹配上，旧写法在这直接 decodeURIComponent 抛
+// URIError，界面上整篇预览换成一条「渲染器异常」。现在按未定义引用收口，其余照排。
+const NUL = String.fromCharCode(0), LF = String.fromCharCode(10);
+{
+  const doc = B + 'begin{document}' + LF +
+    B + 'begin{verbatim}' + LF + NUL + 'R:%zz' + NUL + LF +
+    B + 'end{verbatim}' + LF + '后半段正文 $x^2$ 必须还在' + LF + B + 'end{document}';
+  let r = null, threw = null;
+  try { r = renderLatex(doc, {}); } catch (e) { threw = e; }
+  assert.equal(threw, null, '畸形百分号只是正文里的字节，不该抛出：' + (threw && threw.message));
+  assert.ok(r.html.includes('后半段正文'), '后半段照常渲染');
+  assert.ok(r.html.includes('bad-ref'), '认不出的占位符按未定义引用显示 ?');
+  assert.ok(!r.html.includes('%zz'), '原始片段不许渗进 HTML');
+  const citeDoc = B + 'begin{document}' + LF + NUL + 'C:%zz' + NUL + LF + B + 'cite{a}' + LF + B + 'end{document}';
+  let c2 = null;
+  try { c2 = renderLatex(citeDoc, {}); } catch (e) { c2 = 'THREW ' + e.message; }
+  assert.equal(typeof c2, 'object', 'cite 回填同样不抛：' + c2);
+  const protoRef = renderLatex(B + 'ref{constructor}' + B + 'ref{toString}', {});
+  assert.ok(protoRef.html.includes('bad-ref'), '原型键名的未定义引用正常降级（计数表得是无原型字典）');
+}
+
+// ---- KaTeX 尺寸闸：maxSize 默认 Infinity，\rule{100000em}{20em} 会原样进 CSS ----
+// 只断言真的参与布局的值：annotation 里回显的是 LaTeX 源码本身，那里出现 100000em
+// 是正常且隐藏的（mathml 层），拿整串 html 去 indexOf 会误判成「没夹住」
+const cssLens = (html) => (html.match(/(?:border-right-width|border-top-width|width|height):\s*([\d.]+)em/g) || [])
+  .map(s => parseFloat(s.replace(/[^\d.]/g, '')));
+{
+  const big = renderLatex('$' + B + 'rule{100000em}{20em}$', {});
+  assert.ok(cssLens(big.html).length > 0, '夹具要真的产出尺寸样式');
+  assert.ok(Math.max(...cssLens(big.html)) <= KATEX_MAX_SIZE + 0.001,
+    '尺寸必须被夹到 KATEX_MAX_SIZE，实测 CSS: ' + JSON.stringify(cssLens(big.html)));
+  const okDoc = renderLatex('$' + B + 'rule{3em}{1em}$', {});
+  assert.ok(cssLens(okDoc.html).includes(3), '正常尺寸不该被夹：' + JSON.stringify(cssLens(okDoc.html)));
+  const md = renderMarkdownFull('$' + B + 'rule{100000em}{20em}$');
+  assert.ok(cssLens(md.html).length > 0 && Math.max(...cssLens(md.html)) <= KATEX_MAX_SIZE + 0.001,
+    'Markdown 侧必须同口径，实测 CSS: ' + JSON.stringify(cssLens(md.html)));
+}
 
 console.log('engineBudget: all tests passed');

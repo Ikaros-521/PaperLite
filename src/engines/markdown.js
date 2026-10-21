@@ -5,7 +5,7 @@
 import MarkdownIt from 'markdown-it';
 import katex from 'katex';
 import { escHtml } from '../htmlEsc.js';
-import { makeHtmlBudget } from '../previewBudget.js';
+import { makeHtmlBudget, KATEX_MAX_SIZE } from '../previewBudget.js';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: true });
 // 聊天气泡另开一份：模型习惯一行一句（不空行），不认单换行会把整段糊成一行；
@@ -15,7 +15,9 @@ const mdChat = new MarkdownIt({ html: false, linkify: true, breaks: true, typogr
 function renderMathSafe(tex, display, budget) {
   let html;
   try {
-    html = katex.renderToString(tex, { displayMode: !!display, throwOnError: false, strict: false });
+    // maxSize 与 engines/latex.js 的 renderMath 同值：两条数学渲染路径给出一套尺寸，
+    // 否则同一份公式在 .tex 与 .md 里撑开的版面不一样
+    html = katex.renderToString(tex, { displayMode: !!display, throwOnError: false, strict: false, maxSize: KATEX_MAX_SIZE });
   } catch (e) {
     const esc = String(tex).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     html = '<span class="math-error">' + esc + '</span>';

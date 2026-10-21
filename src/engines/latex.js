@@ -3,7 +3,7 @@ import * as TIKZ from './tikz.js';
 import { t, getLang } from '../i18n.js';
 import { readDocumentclass, resolveLayout, FALLBACK } from './classLayout.js';
 import { forEachEnv, macroNamesIn } from '../texScan.js';
-import { makeHtmlBudget } from '../previewBudget.js';
+import { makeHtmlBudget, KATEX_MAX_SIZE } from '../previewBudget.js';
 import { escHtml } from '../htmlEsc.js';
 
 /* PaperLite · LaTeX → HTML 渲染器（论文常用子集）
@@ -421,6 +421,8 @@ function renderMath(tex, display, ctx, macrosForKatex, at) {
   try {
     html = katex.renderToString(tex, {
       displayMode: !!display, throwOnError: false, strict: false,
+      // 尺寸闸：默认 Infinity，`\rule{100000em}{20em}` 会原样进 CSS 把版面撑爆（与 markdown 同值）
+      maxSize: KATEX_MAX_SIZE,
       // trust 不再全开：\href/\url 的链接经 safeUrl 白名单，其余信任场景一律拒绝。
       // \includegraphics 在数学里会渲染成 <mglyph src>，必须走文本路径同一道门
       // （localAssetPath：只许项目内相对路径），否则远端 URL 无需点击就发外请求
@@ -560,10 +562,20 @@ function renderLatex(srcRaw, opts) {
   if (ctx._colsMarked) html = html.replace('\x00COLS\x00', '<div class="doc-cols">') + '</div>';
 
   // ---- 回填 ----
-  var refSeen = {};
+  // 占位符以 \x00 分界，而 escHtml 不吞 NUL：正文里（\begin{verbatim}、\verb）真出现 NUL 时，
+  // 「\x00R:%zz\x00」这种片段会被当成占位符匹配上，decodeURIComponent 抛 URIError，
+  // 一句「渲染器异常」顶掉整页预览——而那只是正文里的几个字节，不是渲染器坏了。
+  // 认不出合法转义就按未定义引用收口，也不把原始片段拼回 HTML。
+  var decodeKey = function (enc) {
+    try { return decodeURIComponent(enc); } catch (e) { return null; }
+  };
+  // 无原型字典：\ref{constructor} 未定义时 (refSeen[key] || 0) + 1 会从原型链上取到
+  // Object 的构造器，加 1 变成一长串函数源码文本，出处计数就成了字符串
+  var refSeen = Object.create(null);
   html = html.replace(/\x00R:([^\x00]*)\x00/g, function (_, enc) {
     // key 编码后入占位符：label/cite 键可含控制字符，原样放会截断占位符泄漏正文
-    var key = decodeURIComponent(enc);
+    var key = decodeKey(enc);
+    if (key === null) return '<span class="bad-ref">?</span>';
     if (ctx.labels[key] !== undefined) return esc(ctx.labels[key]);
     // 同一个 key 可能被引用多次，按出现次序取各自的出处
     var n = refSeen[key] = (refSeen[key] || 0) + 1;
@@ -571,7 +583,8 @@ function renderLatex(srcRaw, opts) {
     return '<span class="bad-ref">?</span>';
   });
   html = html.replace(/\x00C:([^\x00]*)\x00/g, function (_, enc) {
-    var key = decodeURIComponent(enc);
+    var key = decodeKey(enc);
+    if (key === null) return '<span class="bad-ref" title="' + esc(t('render.missingCite')) + '">?</span>';
     if (ctx.cites[key] !== undefined) return String(ctx.cites[key]);
     return '<span class="bad-ref" title="' + esc(t('render.missingCite')) + '">?</span>';
   });
