@@ -87,6 +87,46 @@ assert.equal(seen.length, 0, '校验失败不该已经发出请求');
   assert.equal(res.reasoning, '想想');
   assert.equal(streamed, '你好，世界', 'onDelta 与返回值一致');
   assert.deepEqual(res.usage, { input: 3, output: 2, cached: 0 });
+  assert.equal(res.incomplete, false, '收到 [DONE] 才算完整');
+}
+
+// ---- SSE 没有结束标记：必须标记 incomplete，不能当完整回答 ----
+{
+  const body = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"半截"}}]}\n\n');
+  globalThis.fetch = async () => ({ ok: true, status: 200, headers: new Map(), body: { getReader: () => {
+    let sent = 0;
+    return { read: async () => (sent++ ? { done: true } : { done: false, value: body }), cancel: async () => {} };
+  } } });
+  const res = await chat(openaiCh, [{ role: 'user', content: 'hi' }], { stream: true });
+  assert.equal(res.content, '半截');
+  assert.equal(res.incomplete, true, '没有 [DONE]/finish_reason 要提示未完整');
+}
+
+// ---- 只发 finish_reason 也算完整收尾（兼容不吐 [DONE] 的网关） ----
+{
+  const body = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"完整"},"finish_reason":"stop"}]}\n\n');
+  globalThis.fetch = async () => ({ ok: true, status: 200, headers: new Map(), body: { getReader: () => {
+    let sent = 0;
+    return { read: async () => (sent++ ? { done: true } : { done: false, value: body }), cancel: async () => {} };
+  } } });
+  const res = await chat(openaiCh, [{ role: 'user', content: 'hi' }], { stream: true });
+  assert.equal(res.content, '完整');
+  assert.equal(res.incomplete, false, 'finish_reason 本身就是结束标记');
+}
+
+// ---- Anthropic 的 message_stop 同样是结束标记 ----
+{
+  const body = new TextEncoder().encode(
+    'data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n'
+    + 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"收到"}}\n\n'
+    + 'data: {"type":"message_stop"}\n\n');
+  globalThis.fetch = async () => ({ ok: true, status: 200, headers: new Map(), body: { getReader: () => {
+    let sent = 0;
+    return { read: async () => (sent++ ? { done: true } : { done: false, value: body }), cancel: async () => {} };
+  } } });
+  const res = await chat(anthropicCh, [{ role: 'user', content: 'hi' }], { stream: true });
+  assert.equal(res.content, '收到');
+  assert.equal(res.incomplete, false, 'message_stop 后不报截断');
 }
 
 // ---- 非流式坏 JSON：给一句人话而不是 SyntaxError ----

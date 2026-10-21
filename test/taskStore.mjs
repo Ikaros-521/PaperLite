@@ -44,6 +44,8 @@ function memoryDriver() {
   assert.equal(t[2].args.path, 'main.tex', '参数要留着，恢复后才知道当时调了什么');
   assert.deepEqual(t[3].review, { goalOk: false, missing: ['少一节'] }, '评审结论要能跟着对话恢复');
   assert.equal(t[4].count, 12);
+  assert.equal(trimMessages([{ role: 'assistant', content: '半截', incomplete: true }])[0].incomplete, true,
+    '未完整结束的标记要跟着会话落库，恢复后仍能提示');
   assert.equal(trimMessages(null).length, 0);
   assert.equal(trimMessages([null, 'x']).length, 0, '坏条目丢掉而不是让整段历史不可用');
 

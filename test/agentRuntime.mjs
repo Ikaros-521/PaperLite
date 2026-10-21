@@ -424,4 +424,29 @@ delete globalThis.localStorage;
   assert.equal(task.touched.join(','), 'main.tex', '被拦下的落点不该记进已改动清单');
 }
 
+// ---- 流未正常收尾：即使半截正文里有工具块，也不能拿去改盘 ----
+{
+  const savedFetch = globalThis.fetch;
+  const content = '```tool\n{"tool":"read_file","args":{"path":"main.tex"}}\n```';
+  const body = new TextEncoder().encode('data: ' + JSON.stringify({ choices: [{ delta: { content } }] }) + '\n\n');
+  globalThis.fetch = async () => ({
+    ok: true, status: 200, headers: new Map(),
+    body: { getReader: () => { let sent = 0; return { read: async () => (sent++ ? { done: true } : { done: false, value: body }), cancel: async () => {} }; } },
+  });
+  const ran = [];
+  const lists = [];
+  const res = await runAgentLoop({
+    channel,
+    messages: [{ role: 'user', content: '读一下 main.tex' }],
+    system: 's', docHeader: 'd', doc: '', summaryHeader: 'sum', budget: 8000,
+    execute: async (name, args) => { ran.push(name + ':' + (args.path || '')); return { ok: true, result: '不应该被执行' }; },
+    onUpdate: l => lists.push(l),
+  });
+  globalThis.fetch = savedFetch;
+  assert.deepEqual(ran, [], '未完整流里的工具调用不能执行');
+  assert.equal(res.incomplete, true, '调用方要能跳过验收评审');
+  const last = lists[lists.length - 1];
+  assert.equal(last[last.length - 1].incomplete, true, 'assistant 消息要带 incomplete 标记');
+}
+
 console.log('agentRuntime: all tests passed');

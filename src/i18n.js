@@ -360,6 +360,7 @@ export const DICT = {
     'chat.summaryLabel': '历史摘要', 'chat.summaryNote': '由 {n} 条早期消息压缩而来',
     'chat.roleUser': '用户', 'chat.roleAi': '助手',
     'chat.reqFailed': '⚠ 请求失败：{msg}\n\n请检查渠道配置（Base URL / Key / 模型名）或点「测试连接」。',
+    'chat.streamIncomplete': '响应未完整结束：连接中途断开或网关未发送结束标记，以上内容可能不完整。',
     // ---- AI 设置 ----
     'set.title': '⚙ AI 设置',
     'set.intro': '支持 OpenAI 兼容与 Anthropic (Claude) 两种主流协议；内置常用平台预设，选中即自动配好 Base URL，对话/检索模型可点「获取模型」拉取下拉选择。API Key 仅保存在本机浏览器 localStorage。',
@@ -1154,6 +1155,7 @@ export const DICT = {
     'chat.summaryLabel': 'History summary', 'chat.summaryNote': 'compacted from {n} earlier messages',
     'chat.roleUser': 'User', 'chat.roleAi': 'Assistant',
     'chat.reqFailed': '⚠ Request failed: {msg}\n\nCheck the channel config (Base URL / Key / model name) or click "Test Connection".',
+    'chat.streamIncomplete': 'The response did not finish cleanly: the connection dropped or the gateway sent no end marker; the content above may be incomplete.',
     'set.title': '⚙ AI Settings',
     'set.intro': 'Supports OpenAI-compatible and Anthropic (Claude) protocols; built-in platform presets auto-fill the Base URL. Chat/retrieval models can be fetched via "Fetch models". API keys are stored only in this browser\'s localStorage.',
     'set.activeTip': 'Set as active channel', 'set.edit': 'Edit', 'set.collapse': 'Collapse',

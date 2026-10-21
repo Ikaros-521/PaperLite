@@ -249,6 +249,14 @@ export async function runAgentLoop(opts) {
       throw e;
     }
     usage = addUsage(usage, res.usage);
+    // 流没有正常收尾时，半截正文里的工具块不可信：标记消息后收口，别拿着残缺 JSON 去改盘
+    if (res.incomplete) {
+      patchLast(m => ({ ...m, incomplete: true }));
+      // 告诉调用方别拿半截回答去做验收评审；消息上的 incomplete 标记已足够提示用户
+      const out = finish('completed');
+      out.incomplete = true;
+      return out;
+    }
 
     const { calls, bad } = parseToolCalls(res.content);
     const badErrs = bad.map(raw => ({

@@ -447,6 +447,10 @@ select.ct-chip.on { background-image:
   font-size: 11px; color: var(--ink-faint); background: var(--chrome);
   border: 1px dotted var(--edge); border-radius: 6px; padding: 3px 8px; margin-bottom: 6px; cursor: help;
 }
+.chat-incomplete {
+  font-size: 11.5px; color: var(--warn-strong); background: var(--hover);
+  border: 1px solid var(--warn); border-radius: 6px; padding: 3px 8px; margin-top: 6px;
+}
 .cot-toggle {
   border: 0; background: none; color: var(--accent); font-size: 11.5px; cursor: pointer; padding: 0;
 }

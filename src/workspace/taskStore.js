@@ -52,6 +52,8 @@ export function trimMessages(list) {
     if (m.tool) out.tool = m.tool;
     if (m.args) out.args = clipArgs(m.args);
     if (typeof m.ok === 'boolean') out.ok = m.ok;
+    // 连接中途断开的标记要跟着会话落库，恢复后仍能看见“这条回答可能不完整”
+    if (m.incomplete) out.incomplete = true;
     if (m.ctxNote) out.ctxNote = clip(m.ctxNote, 200);
     if (m.count != null) out.count = m.count;
     if (m.fixId) out.fixId = m.fixId;

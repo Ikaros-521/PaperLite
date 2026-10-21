@@ -364,7 +364,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     abortRef.current = ac;
     publish(messages.concat([{ role: 'user', content: q }]));
     try {
-      const { usage, task, answer } = await runAgentLoop({
+      const { usage, task, answer, incomplete } = await runAgentLoop({
         channel,
         messages: messages.concat([{ role: 'user', content: q }]),
         system: agentSystemPrompt({ withTaskTools: plan }) + (plan ? t('agent.planRules') : ''),
@@ -387,14 +387,21 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
       if (task) {
         persistTask(task);
         // 评审是额外一整轮请求（实测 ~700 token），要能被「停止」掐掉：
-        // 复用本轮的 AbortController，它到 finally 才被清空
-        if (agentCfg && agentCfg.review) await runReview(task, answer, ac.signal);
+        // 复用本轮的 AbortController，它到 finally 才被清空。
+        // 流中途断掉时 answer 是半截，别再拿它跑一轮评审假装验收过。
+        if (agentCfg && agentCfg.review && !incomplete) await runReview(task, answer, ac.signal);
       }
     } catch (e) {
       if (e.name !== 'AbortError') {
-        setMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content
-          ? { ...m, content: t('chat.reqFailed', { msg: e.message || e }) }
-          : m));
+        // 同普通对话：半截回答要标记未完成，空消息才显示请求失败
+        setMessages(ms => {
+          let hit = -1;
+          for (let i = ms.length - 1; i >= 0; i--) if (ms[i] && ms[i].role === 'assistant') { hit = i; break; }
+          if (hit < 0) return ms;
+          return ms.map((m, i) => i === hit
+            ? (m.content ? { ...m, incomplete: true } : { ...m, content: t('chat.reqFailed', { msg: e.message || e }) })
+            : m);
+        });
       }
     } finally {
       setBusy(false); busyRef.current = false;
@@ -507,11 +514,23 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
         onReasoning: (d) => setMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, reasoning: (m.reasoning || '') + d } : m))
       });
       setRealUsage(res.usage || null);
+      // 网关/代理提前关掉 SSE 时，正文看起来和正常回答一样；把「没收到结束标记」钉在消息上，
+      // 历史恢复后也能看见，而不是只闪一次 toast
+      if (res.incomplete) {
+        setMessages(ms => ms.map((m, i) => i === ms.length - 1 ? { ...m, incomplete: true } : m));
+      }
     } catch (e) {
       if (e.name !== 'AbortError') {
-        setMessages(ms => ms.map((m, i) => i === ms.length - 1 && !m.content
-          ? { ...m, content: t('chat.reqFailed', { msg: e.message || e }) }
-          : m));
+        // 已经收到半截正文时不能只留一段看起来完整的回答：钉上 incomplete，
+        // 让用户知道这条回复在中途断了（空消息才用请求失败文案占位）
+        setMessages(ms => {
+          let hit = -1;
+          for (let i = ms.length - 1; i >= 0; i--) if (ms[i] && ms[i].role === 'assistant') { hit = i; break; }
+          if (hit < 0) return ms;
+          return ms.map((m, i) => i === hit
+            ? (m.content ? { ...m, incomplete: true } : { ...m, content: t('chat.reqFailed', { msg: e.message || e }) })
+            : m);
+        });
       }
     }
     } catch (e) {
@@ -843,6 +862,9 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
               )
             ) : null}
             {m.content ? renderWithTools(m.content, m.role === 'assistant') : busy && i === messages.length - 1 ? <span className="typing">{t('chat.thinking')}</span> : null}
+            {m.role === 'assistant' && m.incomplete ? (
+              <div className="chat-incomplete" role="status">⚠ {t('chat.streamIncomplete')}</div>
+            ) : null}
             {/* 每条气泡的快捷操作：复制正文（去掉工具块）、编辑重发（只给提问）、
                 从这里分一支到新会话、删除这一轮。流式进行中不给，避免边收边改列表 */}
             {!busy && (m.content || m.role === 'user') ? (

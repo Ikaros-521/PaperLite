@@ -447,8 +447,9 @@ function bodyOversize() {
 }
 
 // SSE 统一从这里读：字节数封顶 + 无论正常收尾还是抛错都 cancel 读流。
-// 旧写法在解析抛错时既不 cancel 也不 abort，连接就一直挂着
-async function* sseData(r) {
+// 旧写法在解析抛错时既不 cancel 也不 abort，连接就一直挂着。
+// state.done/aborted 由协议解析层补：流 EOF 不等于回答完整，缺结束标记要能提示用户。
+async function* sseData(r, state) {
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let buf = '', seen = 0;
@@ -465,11 +466,14 @@ async function* sseData(r) {
         const ln = line.trim();
         if (!ln.startsWith('data:')) continue;
         const payload = ln.slice(5).trim();
-        if (payload && payload !== '[DONE]') yield payload;
+        if (!payload) continue;
+        if (payload === '[DONE]') { if (state) state.done = true; continue; }
+        yield payload;
       }
     }
   } catch (e) {
-    if (e && e.name === 'AbortError') return;
+    // 用户点停止或超时都会走 AbortError；解析层据此不把「主动中止」报成连接中断
+    if (e && e.name === 'AbortError') { if (state) state.aborted = true; return; }
     throw e;
   } finally {
     try { reader.cancel(); } catch (e) { /* 已经关了 */ }
@@ -540,15 +544,19 @@ async function parseOpenAIStream(u, channel, body, opts) {
   }
 
   let content = '', reasoning = '', usage = null;
-  for await (const payload of sseData(r)) {
+  const state = { done: false, aborted: false };
+  for await (const payload of sseData(r, state)) {
     let j;
     try { j = JSON.parse(payload); } catch (e) { continue; }
-    const d = (j.choices && j.choices[0] && j.choices[0].delta) || {};
+    const choice = j.choices && j.choices[0];
+    if (choice && choice.finish_reason) state.done = true;
+    const d = (choice && choice.delta) || {};
     if (d.content) { content += d.content; opts.onDelta && opts.onDelta(d.content); }
     if (d.reasoning_content) { reasoning += d.reasoning_content; opts.onReasoning && opts.onReasoning(d.reasoning_content); }
     if (j.usage) usage = openAIUsage(j.usage) || usage;
   }
-  return { content, reasoning, usage };
+  // 兼容网关可能只发 finish_reason、只发 [DONE]，两者任一都算完整收尾
+  return { content, reasoning, usage, incomplete: !state.done && !state.aborted };
 }
 
 // ---- Anthropic：POST /v1/messages + 解析（SSE content_block_delta：text_delta / thinking_delta） ----
@@ -567,10 +575,12 @@ async function parseAnthropicStream(u, channel, body, opts) {
   }
 
   let content = '', reasoning = '', usage = null;
-  for await (const payload of sseData(r)) {
+  const state = { done: false, aborted: false };
+  for await (const payload of sseData(r, state)) {
     let j;
     try { j = JSON.parse(payload); } catch (e) { continue; }
     if (j.type === 'error') throw new Error((j.error && j.error.message) || t('llm.anthropicErr'));
+    if (j.type === 'message_stop') { state.done = true; continue; }
     // message_start 带输入计量，message_delta 带输出计量，需分别合并
     if (j.type === 'message_start') usage = anthropicUsage((j.message || {}).usage) || usage;
     else if (j.type === 'message_delta') {
@@ -583,7 +593,7 @@ async function parseAnthropicStream(u, channel, body, opts) {
     if (d.type === 'text_delta' && d.text) { content += d.text; opts.onDelta && opts.onDelta(d.text); }
     else if (d.type === 'thinking_delta' && d.thinking) { reasoning += d.thinking; opts.onReasoning && opts.onReasoning(d.thinking); }
   }
-  return { content, reasoning, usage };
+  return { content, reasoning, usage, incomplete: !state.done && !state.aborted };
 }
 
 // 压缩上下文：把较早的对话交给同一渠道生成摘要（失败由调用方回退本地裁剪）
