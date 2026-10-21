@@ -1,7 +1,13 @@
 import { downloadFile } from './exporter.js';
 
+// Windows 保留设备名：带不带扩展名都算（con.tex 照样落到 CON 这个设备对象上），
+// 不看大小写。旧校验放行后 createFile 会「成功」，UI 报已创建/已保存，
+// 内容却读不回一个普通文件——用户以为存了，其实没有。
+const WIN_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
 export function validName(name) {
-  return !!name && name !== '.' && name !== '..' && !/[\\/:*?"<>|\u0000-\u001f]/.test(name) && !/[. ]$/.test(name);
+  return !!name && name !== '.' && name !== '..' && !/[\\/:*?"<>|\u0000-\u001f]/.test(name) && !/[. ]$/.test(name)
+    && !WIN_RESERVED.test(name);
 }
 
 export function wordCount(text) {

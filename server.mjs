@@ -144,6 +144,28 @@ function parseLog(log) {
   return errors.slice(0, 30);
 }
 
+// 本机引擎走的是「只交一个 main.tex」的通道（useCompile.js:155-160 不上传子文件），
+// 所以带目录/绝对路径的输入参数不可能是一份正常工程里的 \input——它只能是伸手向
+// 临时目录外面拿东西。-no-shell-escape 关掉了 write18，但 kpathsea 默认 openin_any=a，
+// \input{C:/Users/…/.ssh/id_rsa} 照样读得到，内容会进日志与 PDF 一起回给页面。
+// 这里把「明写的越界路径」挡掉。挡不住的用宏拼出来的文件名，也挡不住 plain TeX 的
+// \openin15=…\relax 这类不带花括号的原语——真正的边界仍然是只监听 127.0.0.1 加
+// Origin 白名单（外部页面读不走响应），这条只是把本机文件内容进日志这扇门关上。
+const FILE_ARG_RE = /\\(?:input|include|subfile|subfileinclude|import|subimport|bibliography|addbibresource|includegraphics|VerbatimInput|verbatiminput|lstinputlisting|includepdf)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+function escapingPath(a) {
+  const s = String(a || '').trim();
+  return s.includes('..') || /^[/\\]/.test(s) || /^[A-Za-z]:[\\/]/.test(s) || s.startsWith('~');
+}
+function findEscapingArgs(source) {
+  const hits = [];
+  FILE_ARG_RE.lastIndex = 0;
+  let m;
+  while ((m = FILE_ARG_RE.exec(String(source || ''))) && hits.length < 3) {
+    if (escapingPath(m[1])) hits.push(m[1].slice(0, 40));
+  }
+  return hits;
+}
+
 async function compile(body) {
   const { engine, source } = body;
   // 必须查 own property：ENGINE_CMDS[engine] 对 'constructor'/'__proto__'/'toString'
@@ -153,6 +175,11 @@ async function compile(body) {
   if (!cmd) return { ok: false, error: '未知引擎：' + String(engine).slice(0, 40) };
   const avail = availableEngines();
   if (!Object.hasOwn(avail, engine) || !avail[engine]) return { ok: false, error: `本机未安装 ${engine}（请安装 MiKTeX 或 TeX Live 并加入 PATH）` };
+
+  const escaping = findEscapingArgs(source);
+  if (escaping.length) {
+    return { ok: false, error: '本机编译只交一个 main.tex，已拒绝越出临时目录的文件引用：' + escaping.join('、') + '；子文件请并入主文档，或改用「内置引擎」。' };
+  }
 
   const dir = path.join(os.tmpdir(), 'paperlite-' + crypto.randomBytes(6).toString('hex'));
   fs.mkdirSync(dir, { recursive: true });
@@ -496,7 +523,11 @@ function simpleVec(text) {
 function estTok(s) {
   const str = String(s || '');
   const cjk = (str.match(/[぀-ヿ㐀-䶿一-鿿가-힯＀-￯]/g) || []).length;
-  return Math.max(1, Math.round(cjk * 1.1 + (str.length - cjk) / 4));
+  const rest = str.length - cjk;
+  // 反斜杠密度过半时按 3 字符/token：与 src/context.js:79 同一条判据。
+  // 少了它，Mock 渠道显示的用量会比真实渠道乐观，而 LaTeX 文稿全是命令
+  const dense = (str.match(/\\/g) || []).length > rest / 24;
+  return Math.max(1, Math.round(cjk * 1.1 + rest / (dense ? 3 : 4)));
 }
 function reqTokens(body) {
   return estTok(JSON.stringify(body.messages || '')) + estTok(body.system || '') + estTok(body.model || '');

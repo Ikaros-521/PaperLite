@@ -10,6 +10,7 @@ spark-output/
 .agents/skills/
 .github/skills/
 artifacts/
+tmp-dict/
 .github/agents/
 skills-lock.json
 .gitignore

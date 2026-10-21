@@ -5,6 +5,11 @@ import { validName, wordCount, readHistory, recordVersion, sourceZip } from '../
 assert.equal(validName('../paper.tex'), false);
 assert.equal(validName('..'), false);
 assert.equal(validName('论文.tex'), true);
+// Windows 保留设备名：建得出来但内容读不回普通文件，界面不能报「已保存」
+['CON.tex', 'con', 'NUL.tex', 'nul.txt', 'AUX.log', 'PRN.txt', 'COM1.tex', 'LPT9.tex', 'CON.tar.gz'].forEach(n =>
+  assert.equal(validName(n), false, n + ' 是 Windows 保留名'));
+['main.tex', 'my.con', 'notes.txt', 'concrete.tex', 'LPT10.tex', 'com1x.tex'].forEach(n =>
+  assert.equal(validName(n), true, n + ' 不是保留名'));
 assert.deepEqual(wordCount('中文 hello world café'), { cjk: 2, words: 3, total: 5, characters: 16 });
 const data = new Map();
 globalThis.localStorage = { getItem: k => data.get(k), setItem: (k, v) => data.set(k, v) };
