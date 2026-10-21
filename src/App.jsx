@@ -767,7 +767,8 @@ export default function App() {
       ...folderIndex.bibFiles.map(f => ({ path: f.path, text: f.source })),
       ...folderIndex.textFiles.map(f => ({ path: f.path, text: f.source })),
     ];
-    const result = searchInFiles(collectSearchFiles(tabsList, disk), { query, regex, matchCase, wholeWord });
+    // 用户输入的正则同样可能在 UI 线程上灾难性回溯：与 Agent 搜索共用同一道墙钟预算
+    const result = searchInFiles(collectSearchFiles(tabsList, disk), { query, regex, matchCase, wholeWord, timeBudgetMs: 1200 });
     setGSearch(s => ({ ...s, busy: false, result }));
   }, [folderIndex, activeValue, activeId, tabPath]);
   const openSearchResult = useCallback(async (path, line) => {
