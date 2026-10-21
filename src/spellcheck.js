@@ -14,7 +14,12 @@ const MASK_ARG_COMMANDS = new Set([
   'cite', 'citep', 'citet', 'citealp', 'citeauthor', 'citeyear', 'parencite', 'textcite',
   'ref', 'eqref', 'autoref', 'cref', 'crefrange', 'pageref', 'label',
   'includegraphics', 'bibliography', 'bibliographystyle', 'input', 'include', 'url',
-  'author', 'affil', 'affiliation', 'email', 'thanks', 'orcid', 'address'
+  'author', 'affil', 'affiliation', 'email', 'thanks', 'orcid', 'address',
+  // IEEEtran / beamer / 学位论文模板把姓名与单位放在这些命令里，\author 之外的身份字段
+  // 同样不该随语法检查/AI 校对离开本机
+  'IEEEauthorblockN', 'IEEEauthorblockA', 'IEEEmembership', 'IEEEauthorrefmark',
+  'institute', 'school', 'department', 'faculty', 'college', 'university',
+  'supervisor', 'advisor', 'authormark', 'affiliationmark'
 ]);
 
 const VERBATIM_ENVS = /^(verbatim\*?|lstlisting|minted)$/;

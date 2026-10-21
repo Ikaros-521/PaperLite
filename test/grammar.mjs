@@ -64,6 +64,21 @@ ok(m4.split('\n')[0].trim() === '', '注释被遮蔽');
 ok(!m4.includes('body'), '数学环境被遮蔽');
 ok(!m4.includes('key2020x'), '引用键被遮蔽');
 
+console.log('== 身份字段遮罩：IEEEtran / beamer / 学位论文模板 ==');
+const idSrc = [
+  '\\author{Alice Zhang}',
+  '\\IEEEauthorblockN{Bob Li}',
+  '\\IEEEauthorblockA{Dept. of CS, Example University}',
+  '\\institute{Secret Lab, Example Corp}',
+  '\\school{Example School}',
+  '\\supervisor{Carol Wang}',
+  '\\email{bob@example.edu}',
+].join('\n');
+const idMasked = maskNonProse(idSrc);
+for (const secret of ['Alice Zhang', 'Bob Li', 'Example University', 'Secret Lab', 'Example School', 'Carol Wang', 'bob@example.edu']) {
+  ok(!idMasked.includes(secret), '身份字段不外发：' + secret);
+}
+
 console.log('== 新增文案双语完整 ==');
 import { DICT } from '../src/i18n.js';
 for (const key of ['m.citeSearch', 't.citeSearch', 'cite.title', 'cite.provider', 'cite.search', 'cite.searching', 'cite.placeholder', 'cite.empty', 'cite.error', 'cite.netNote', 'cite.insert', 'cite.inserted', 'cite.onlyTex', 'cite.noBibTarget', 'cite.etAl', 'cite.p_crossref', 'cite.p_openalex', 'cite.p_dblp', 'gm.suggest', 'file.grammar', 'file.grammarHint']) {
