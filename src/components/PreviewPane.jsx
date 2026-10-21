@@ -6,6 +6,12 @@ import { loadPdfLibrary, pdfOptions } from '../pdf.js';
 
 let mermaidInited = false;
 let mermaidSeq = 0;
+// mermaid 产物缓存的上限。两张闸都要：条数管住「一堆小图」，字节管住「几张巨图」——
+// 一张复杂流程图能到几百 KB。超上限时按插入顺序淘汰最老的（不是整张清空：
+// 实测 60 张图的文档一旦清空重来，每个打字节拍都要把超出条数的那些重新排版，
+// 等于把这次优化原地抹平）。淘汰后最老的那些图会重排一次，代价可控。
+const MAX_MMD_CACHE = 256;
+const MAX_MMD_BYTES = 12 * 1024 * 1024;
 
 // 错误消息要进 innerHTML，先转义（mermaid 报错常引用出错的图源码行）
 function escHtml(s) {
@@ -29,6 +35,9 @@ export default function PreviewPane({
   // 重渲（innerHTML 换掉全部 <img>），不缓存的话每键都重读磁盘重造 blob——
   // 签名不变时复用上次的 URL；资产真的变了（重传/换目录）才重新解析
   const imgCacheRef = useRef(null);
+  // Mermaid 的 SVG 按「块序号 + 图源码」缓存（同一份源码在不同块里要各拿一个元素 id，
+  // 所以键里必须带序号），命中就跳过 dagre 排版
+  const mmdCacheRef = useRef({ map: new Map(), bytes: 0 });
   useEffect(() => {
     let cancelled = false;
     const images = paperRef.current?.querySelectorAll('img.includegraphics') || [];
@@ -125,11 +134,47 @@ export default function PreviewPane({
     cache.tasks.forEach(task => task.destroy());
   }, []);
 
+  // 整图排版（dagre）是预览里最贵的一步。原来每次 result 变化——也就是每个打字节拍——
+  // 都把文档里所有 mermaid 块重排一遍；而且每张图 resolve 各自 setMmdTick 一次，
+  // 那两个依赖 [result, mmdTick] 的全量重放效应就成了 O(块数²)。
+  // 现在按「块序号 + 源码」缓存 SVG：源码没变的块直接把上次那串贴回去，只有变过的块进
+  // dagre；mmdTick 等这一批全部落定后只推一次。全命中时不必推——那两个效应本来就随
+  // result 重跑（依赖数组里加 t 会每次渲染都重跑这个效应，别动它）。
   useEffect(() => {
     const paper = paperRef.current;
     if (!paper) return;
-    const blocks = paper.querySelectorAll('.mermaid-block[data-code]:not([data-done])');
+    const blocks = Array.from(paper.querySelectorAll('.mermaid-block[data-code]'));
     if (!blocks.length) return;
+    const store = mmdCacheRef.current;
+    const putSvg = (key, svg) => {
+      store.map.set(key, svg);
+      store.bytes += svg.length;
+      // Map 保持插入顺序，从头淘汰就是「最先进来的先出去」
+      while ((store.map.size > MAX_MMD_CACHE || store.bytes > MAX_MMD_BYTES) && store.map.size) {
+        const oldest = store.map.keys().next().value;
+        store.bytes -= store.map.get(oldest).length;
+        store.map.delete(oldest);
+      }
+    };
+    const errHtml = (msg) => '<div class="render-error">' + t('prev.mermaidErr') + ' ' + escHtml(String(msg || '').slice(0, 160)) + '</div>';
+    const paint = (b, svg) => {
+      b.innerHTML = svg;
+      const el = b.querySelector('svg');
+      if (el) { el.style.maxWidth = '100%'; el.removeAttribute('height'); }
+    };
+    const todo = [];
+    blocks.forEach((b, i) => {
+      b.setAttribute('data-done', '1');
+      let code;
+      // 畸形百分号只是这一块的问题：抛出去会连带整批（包括已经贴好的）一起停摆
+      try { code = decodeURIComponent(b.getAttribute('data-code') || ''); }
+      catch (e) { b.innerHTML = errHtml('data-code'); return; }
+      const key = i + '\n' + code;
+      const hit = store.map.get(key);
+      if (hit !== undefined) paint(b, hit);
+      else todo.push({ b, code, key });
+    });
+    if (!todo.length) return;
     let cancelled = false;
     import('mermaid').then(mod => {
       if (cancelled) return;
@@ -146,19 +191,31 @@ export default function PreviewPane({
         });
         mermaidInited = true;
       }
-      blocks.forEach(b => {
-        b.setAttribute('data-done', '1');
-        const code = decodeURIComponent(b.getAttribute('data-code'));
+      let pending = todo.length;
+      const settle = () => {
+        pending--;
+        // 一批只推一次：选中高亮与自定义布局要在 innerHTML 换掉后重放，但重放是整篇扫的，
+        // 每张图各推一次就是把 O(N) 的扫描做成 O(N²)
+        if (!cancelled && pending === 0) setMmdTick(x => x + 1);
+      };
+      todo.forEach(({ b, code, key }) => {
         mermaid.render('mmd-' + (++mermaidSeq), code).then(r => {
-          b.innerHTML = r.svg;
-          const svg = b.querySelector('svg');
-          if (svg) { svg.style.maxWidth = '100%'; svg.removeAttribute('height'); }
-          setMmdTick(x => x + 1); // innerHTML 被替换，选中高亮需要重放
+          if (cancelled) return;
+          putSvg(key, r.svg);
+          paint(b, r.svg);
+          settle();
         }).catch(err => {
-          b.innerHTML = '<div class="render-error">' + t('prev.mermaidErr') + ' ' + escHtml(String(err && err.message || err).slice(0, 160)) + '</div>';
-          setMmdTick(x => x + 1);
+          if (cancelled) return;
+          b.innerHTML = errHtml(err && err.message || err);
+          settle();
         });
       });
+    }).catch(err => {
+      // mermaid 是个几百 KB 的动态 chunk，网络断了或磁盘上那份没了的时候不能让预览
+      // 只剩一堆「还在转圈」的空块，也不能留一条没人接的 rejection
+      if (cancelled) return;
+      blocks.forEach(b => { if (!b.querySelector('svg')) b.innerHTML = errHtml(err && err.message || err); });
+      setMmdTick(x => x + 1);
     });
     return () => { cancelled = true; };
   }, [result]);
