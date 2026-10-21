@@ -36,9 +36,14 @@ function ModelInput({ value, onChange, channel, suggestions, placeholder }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
-  // 卸载守卫：列表拉取是异步的，渠道行被删/弹窗关掉后 setState 不再打已卸载组件
+  // 卸载守卫：列表拉取是异步的，渠道行被删/弹窗关掉后 setState 不再打已卸载组件。
+  // 必须在 setup 里复位：StrictMode 双调用会把 cleanup 置的 false 留到第二次 setup 之后，
+  // 于是 dev 下「获取模型」永远卡在获取中、连错误都显示不出来
   const aliveRef = useRef(true);
-  useEffect(() => () => { aliveRef.current = false; }, []);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
   const safeSet = fn => { if (aliveRef.current) fn(); };
 
   const list = models || suggestions || [];
