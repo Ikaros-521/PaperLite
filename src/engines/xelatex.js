@@ -269,7 +269,15 @@ const inFlight = new Set();
 function call(w, label, send, match, timeoutMs) {
   const reqId = nextReqId++;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error(label + ' timeout')); }, timeoutMs || COMPILE_TIMEOUT);
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(label + ' timeout'));
+      // 超时说明 Worker 很可能卡在 wasm 死循环里。只 reject 不销毁的话，它会把
+      // 后续 writeproject/compile 永远堵在命令队列里，用户每点一次都要再等满超时。
+      if (w === texWorker || w === pdfWorker) {
+        try { cancelCompile(); } catch (e) { /* 取消流程失败不掩盖超时 */ }
+      }
+    }, timeoutMs || COMPILE_TIMEOUT);
     function onmsg(ev) {
       const d = ev.data || {};
       // Worker 回带 reqId 时只认自己这条：上一趟超时后的迟到回执不能喂给这一条命令。

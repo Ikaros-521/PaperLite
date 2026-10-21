@@ -63,16 +63,68 @@ function availableEngines() {
 }
 
 // ---------------- 编译 ----------------
+// 单次编译的输出要封顶：一个文档可以写任意多 \typeout，日志和 PDF 都不能无限回传
+const MAX_CAPTURE = 2 * 1024 * 1024;
+const MAX_LOG = 1024 * 1024;
+const MAX_PDF = 50 * 1024 * 1024;
+
+function killTree(p) {
+  if (process.platform === 'win32') {
+    // 只 kill 直接子进程在 Windows 上会留下 mktexpk / 字体子进程；/T 连同整棵树
+    if (!p.pid) return;
+    try { spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); }
+    catch (e) { try { p.kill(); } catch (e2) { /* 已经退出 */ } }
+  } else {
+    try { p.kill('SIGKILL'); } catch (e) { /* 已经退出 */ }
+  }
+}
+
 function runCmd(cmd, args, cwd, timeoutMs) {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { cwd, shell: process.platform === 'win32' });
-    let out = '';
-    const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) {} }, timeoutMs || 90000);
-    p.stdout.on('data', d => { out += d; });
-    p.stderr.on('data', d => { out += d; });
-    p.on('error', e => { clearTimeout(t); resolve({ code: -1, out: String(e) }); });
-    p.on('close', code => { clearTimeout(t); resolve({ code, out }); });
+    // 不用 shell：Windows 上 shell:true 时 p 是 cmd.exe，超时 kill 只杀掉壳，
+    // TeX 孙进程继续攥着 stdout 管道，close 永远不来，编译槽位就此泄漏。
+    const p = spawn(cmd, args, { cwd, shell: false, windowsHide: true });
+    let out = '', settled = false, truncated = false, timedOut = false, t;
+    const append = d => {
+      if (truncated) return;
+      const s = String(d);
+      const room = MAX_CAPTURE - out.length;
+      if (s.length > room) { out += s.slice(0, room); truncated = true; }
+      else out += s;
+    };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(t);
+      // 主动断开管道：超时被杀的子进程若仍握着 stdout，close 可能永远不触发
+      try { p.stdout.destroy(); } catch (e) { /* 已关闭 */ }
+      try { p.stderr.destroy(); } catch (e) { /* 已关闭 */ }
+      resolve({ ...result, timedOut, out: out + (truncated ? '\n[output truncated]' : '') });
+    };
+    t = setTimeout(() => {
+      timedOut = true;
+      killTree(p);
+      // 不把结算押在 close 上：杀不掉或管道没归还时，超时也必须有回执
+      const fallback = setTimeout(() => finish({ code: -1 }), 1500);
+      fallback.unref?.();
+    }, timeoutMs || 90000);
+    p.stdout.on('data', append);
+    p.stderr.on('data', append);
+    p.on('error', e => finish({ code: -1, out: String(e) }));
+    p.on('close', code => finish({ code }));
   });
+}
+
+// 只读日志尾部：TeX 的致命错误通常在最后几屏，既不把整份日志读进内存，也不丢错误上下文
+function readLogCapped(file, max) {
+  const stat = fs.statSync(file);
+  if (stat.size <= max) return { text: fs.readFileSync(file, 'utf8'), truncated: false };
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(max);
+    const read = fs.readSync(fd, buf, 0, max, Math.max(0, stat.size - max));
+    return { text: buf.toString('utf8', 0, read), truncated: true };
+  } finally { fs.closeSync(fd); }
 }
 
 function parseLog(log) {
@@ -110,13 +162,20 @@ async function compile(body) {
     // 跑两遍以解析目录/交叉引用
     let r1 = await runCmd(cmd, args, dir);
     if (r1.code === 0) r1 = await runCmd(cmd, args, dir);
-    let log = '';
-    try { log = fs.readFileSync(path.join(dir, 'main.log'), 'utf8'); } catch (e) { log = r1.out; }
+    let log = '', logTruncated = false;
+    try {
+      const read = readLogCapped(path.join(dir, 'main.log'), MAX_LOG);
+      log = read.text;
+      logTruncated = read.truncated;
+    } catch (e) { log = r1.out; }
+    if (logTruncated) log += '\n[log truncated]';
+    if (r1.timedOut) return { ok: false, log, errors: parseLog(log), error: '编译超时，已终止' };
 
     if (engine === 'latex') {
       if (r1.code !== 0) return { ok: false, log, errors: parseLog(log) };
       if (!avail.dvipdfmx) return { ok: false, log, errors: parseLog(log), error: '已生成 DVI，但未找到 dvipdfmx，无法转 PDF' };
       const r2 = await runCmd('dvipdfmx', ['main.dvi'], dir);
+      if (r2.timedOut) return { ok: false, log, errors: parseLog(log), error: 'dvipdfmx 超时，已终止' };
       if (r2.code !== 0) return { ok: false, log: log + '\n' + r2.out, errors: parseLog(log) };
     } else if (r1.code !== 0) {
       return { ok: false, log, errors: parseLog(log) };
@@ -124,6 +183,9 @@ async function compile(body) {
 
     const pdfPath = path.join(dir, 'main.pdf');
     if (!fs.existsSync(pdfPath)) return { ok: false, log, errors: parseLog(log), error: '未生成 PDF（查看日志）' };
+    if (fs.statSync(pdfPath).size > MAX_PDF) {
+      return { ok: false, log, errors: parseLog(log), error: `生成的 PDF 超过 ${MAX_PDF / 1048576}MB，已拒绝返回` };
+    }
     const pdf = fs.readFileSync(pdfPath).toString('base64');
     return { ok: true, pdf, log, errors: [], engine };
   } finally {
