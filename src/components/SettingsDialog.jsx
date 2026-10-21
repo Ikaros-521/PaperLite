@@ -257,10 +257,6 @@ export default function SettingsDialog({ open, onClose, channels, setChannels, a
                           placeholder={proto === 'anthropic' ? t('set.embedPhAnthropic') : t('set.embedPhOpenai')}
                         />
                       </label>
-                      <label className="inline">
-                        <input type="checkbox" checked={!!ch.cot} onChange={e => patch(ch.id, 'cot', e.target.checked)} />
-                        {t('set.cot')}
-                      </label>
                       <label className="inline ch-temp">
                         <span>{t('set.temp')}</span>
                         <NumInput min={0} max={2} step={0.1}

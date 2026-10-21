@@ -397,7 +397,7 @@ export default function ChatPanel({ open, onClose, channels, activeChannelId, se
     else if (!r.restored) flashNote(t('agent.rollbackFail'));
   };
 
-  // 思维链就地开关：改的是「这个渠道」的配置（与设置弹窗同一份存储），
+  // 思维链唯一开关：改的是「这个渠道」的配置，设置弹窗不再提供重复入口，
   // 关掉时对支持的渠道还会发显式关闭字段（见 llm.js 的 disableThinking）。
   // 切换后清掉用量：cot 影响输出预留比例，旧数字对新口径没有意义。
   const toggleCot = () => {
