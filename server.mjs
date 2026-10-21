@@ -26,7 +26,8 @@ const MIME = {
   '.wasm': 'application/wasm',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf',
-  '.json': 'application/json', '.map': 'application/json'
+  '.json': 'application/json', '.map': 'application/json',
+  '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8'
 };
 
 // 静态页与 API 共用的响应头。同源页面仍可能被别的站点用 iframe 套住（配合 localStorage
