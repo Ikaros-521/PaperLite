@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import {
   deriveTitle, newSession, touchSession, evictSessions, sortSessions, turnRange,
-  dropTurn, editResend, forkMessages, forkTitle, sessionBrief, isTurnStart,
+  dropTurn, editResend, regenerateFrom, forkMessages, forkTitle, sessionBrief, isTurnStart,
   MAX_SESSIONS,
 } from '../src/workspace/chatSessions.js';
 import { makeTaskStore } from '../src/workspace/taskStore.js';
@@ -73,6 +73,37 @@ const ask = (text) => ({ role: 'user', content: text });
   assert.ok(forkTitle({ title: '帮我把方法节写清楚' }).startsWith('分支：'), '分支标题带上来源');
   assert.deepEqual(sessionBrief({ id: 'a', messages: [ask('q'), mk('a')], updatedAt: 5 }),
     { id: 'a', title: 'q', updatedAt: 5, count: 2 });
+}
+
+/* ---------- 重新生成 ---------- */
+{
+  const list = [
+    ask('问题一'), mk('答一'),
+    { role: 'user', kind: 'tool-result', tool: 'read_file', content: '回执' }, mk('答一续'),
+    ask('问题二'), mk('答二'),
+  ];
+  // 重试最后一条回答：整轮撤掉，提问交回上层立即重发
+  const last = regenerateFrom(list, 5);
+  assert.equal(last.question, '问题二', '把这一轮的提问交回上层重发');
+  assert.deepEqual(last.list.map(m => m.content), ['问题一', '答一', '回执', '答一续'], '撤掉整轮而不是只撤回答');
+  assert.equal(last.agent, false, '没跑过工具就是普通对话轮');
+
+  // 中间那轮不给重发：重发是往末尾追加，点了等于把那段悄悄挪到最后
+  assert.equal(regenerateFrom(list, 1), null, '它之后还有新一轮提问');
+
+  // 最后一轮跑过工具 → 重跑会重新改盘，必须标出来让界面先问一句
+  const agentList = [ask('问题一'), mk('想想'), { role: 'user', kind: 'tool-result', tool: 'write_file', content: '回执' }, mk('改好了')];
+  const agentTurn = regenerateFrom(agentList, 3);
+  assert.equal(agentTurn.agent, true, '这一轮里有工具回执');
+  assert.equal(agentTurn.question, '问题一', '往前找到真正的提问，不是工具回执');
+  assert.deepEqual(agentTurn.list, [], '整轮清空');
+
+  assert.equal(regenerateFrom(list, 0), null, '提问条没有可重新生成的回答');
+  assert.equal(regenerateFrom(list, 2), null, '工具回执条不是「一次回答」');
+  assert.equal(regenerateFrom(list, 99), null, '越界不炸');
+  assert.equal(regenerateFrom([{ role: 'assistant', content: '孤儿回答' }], 0), null, '前面没有提问就无从重发');
+  assert.equal(regenerateFrom([ask('q'), mk('a', { kind: 'review' })], 1), null, '评审卡不能当回答重发');
+  assert.equal(regenerateFrom([ask('   '), mk('答')], 1).question, '   ', '空提问原样带回，由界面判掉');
 }
 
 /* ---------- 会话落库与旧数据升级 ---------- */

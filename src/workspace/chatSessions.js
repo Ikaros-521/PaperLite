@@ -87,6 +87,31 @@ export function editResend(messages, i) {
   return { list: dropTurn(messages, i), text: m && m.content ? String(m.content) : '' };
 }
 
+/**
+ * 重新生成的准备：截掉这一轮（提问 + 回答 + 工具回执），把提问交回上层立即重发。
+ * 与「编辑重发」的差别是它不经过输入框，所以要把「这一轮跑没跑过工具」带出来——
+ * 重跑 Agent 等于重新执行它写过的盘，不能静默进行。
+ * 只服务最后一轮：重发是往对话末尾追加，用在中间那轮等于悄悄把那段挪到最后，
+ * 想改历史里的中间一轮该用「编辑重发」或「从这里分支」。
+ * 摘要 / 评审 / 回执这类条不是「一次回答」，没有可重发的对象，返回 null。
+ */
+export function regenerateFrom(messages, i) {
+  const list = messages || [];
+  const m = list[i];
+  if (!m || m.role !== 'assistant' || m.kind) return null;
+  let start = -1;
+  for (let j = i; j >= 0; j--) if (isTurnStart(list[j])) { start = j; break; }
+  if (start < 0) return null;
+  if (list.slice(start + 1).some(isTurnStart)) return null;
+  const r = turnRange(list, start);
+  const turn = list.slice(r.start, r.end);
+  return {
+    list: [...list.slice(0, r.start), ...list.slice(r.end)],
+    question: String(list[r.start].content || ''),
+    agent: turn.some(x => x && (x.kind === 'tool-result' || x.tool)),
+  };
+}
+
 /** 分支：取到该条为止的前缀（含该条） */
 export function forkMessages(messages, i) {
   const list = messages || [];
