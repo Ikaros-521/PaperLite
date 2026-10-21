@@ -4,31 +4,348 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='5' fill='%23b3432e'/%3E%3Ctext x='16' y='22' font-family='Georgia,serif' font-size='17' font-weight='700' fill='%23fdf8ef' text-anchor='middle'%3E%E8%AE%BA%3C/text%3E%3C/svg%3E" />
-    <title>PaperLite · 论文速写编辑器</title>
+    <title>PaperLite · 论文速写编辑器｜浏览器里的开源 LaTeX 编辑器</title>
+    <meta name="description" content="PaperLite 是开源、本地优先的 LaTeX 论文编辑器：浏览器内实时预览、可视化编辑 TikZ 与表格、内置 XeLaTeX 真编译无需安装 TeX，支持多文件项目、AI 助手、文献检索与移动端。文档默认不上传服务器。" />
+    <meta name="keywords" content="PaperLite, LaTeX 编辑器, 在线 LaTeX, Overleaf 替代, 论文写作, 学术写作, XeLaTeX, TikZ, LaTeX 实时预览, 开源, 本地优先" />
+    <meta name="author" content="Ikaros-521" />
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
+    <meta name="theme-color" content="#f7f2e8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141a24" media="(prefers-color-scheme: dark)" />
+
+    <link rel="canonical" href="https://ikaros-521.github.io/PaperLite/" />
+    <link rel="sitemap" type="application/xml" title="Sitemap" href="./sitemap.xml" />
+    <link rel="llms" type="text/plain" href="./llms.txt" title="PaperLite llms.txt" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="PaperLite" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:url" content="https://ikaros-521.github.io/PaperLite/" />
+    <meta property="og:title" content="PaperLite · 浏览器里的开源 LaTeX 论文编辑器" />
+    <meta property="og:description" content="实时预览、TikZ 与表格可视化编辑、内置 XeLaTeX 真编译，无需安装 TeX。开源、本地优先，文档默认不上传服务器。" />
+    <meta property="og:image" content="https://ikaros-521.github.io/PaperLite/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="PaperLite 论文速写编辑器：在浏览器里写论文，实时预览，真 LaTeX 编译" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="PaperLite · 浏览器里的开源 LaTeX 论文编辑器" />
+    <meta name="twitter:description" content="实时预览、TikZ 与表格可视化编辑、内置 XeLaTeX 真编译，无需安装 TeX。开源、本地优先。" />
+    <meta name="twitter:image" content="https://ikaros-521.github.io/PaperLite/og.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebApplication",
+            "@id": "https://ikaros-521.github.io/PaperLite/#app",
+            "name": "PaperLite",
+            "alternateName": ["PaperLite 论文速写编辑器", "PaperLite LaTeX Editor"],
+            "url": "https://ikaros-521.github.io/PaperLite/",
+            "description": "PaperLite 是开源、本地优先的 LaTeX 论文编辑器：浏览器内实时预览、可视化编辑 TikZ 与表格、内置 XeLaTeX 真编译无需安装 TeX，支持多文件项目、AI 助手、文献检索与移动端。文档默认不上传服务器。",
+            "applicationCategory": "EducationalApplication",
+            "applicationSubCategory": "LaTeX 论文编辑器",
+            "operatingSystem": "Web",
+            "browserRequirements": "需要 JavaScript；打开本地文件夹需 Chrome 或 Edge。",
+            "isAccessibleForFree": true,
+            "inLanguage": ["zh-CN", "en"],
+            "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+            "codeRepository": "https://github.com/Ikaros-521/PaperLite",
+            "softwareVersion": "2.0.0",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+            "featureList": [
+              "LaTeX 实时预览与语法高亮编辑",
+              "内置 XeLaTeX WebAssembly 引擎，无需安装 TeX",
+              "TikZ 流程图与表格的可视化编辑，改动写回源码",
+              "多文件项目、主文档探测与自动编译",
+              "PDF 与源码双向近似跳转",
+              "AI 修复、对话与 Agent 工具调用",
+              "Crossref / OpenAlex / DBLP 文献检索与 BibTeX 插入",
+              "LanguageTool 语法检查与 AI 用词检测",
+              "打开本地文件夹、多标签、版本历史",
+              "移动端入口 #/m，与桌面共享同一套内核"
+            ],
+            "sameAs": ["https://github.com/Ikaros-521/PaperLite"],
+            "publisher": {
+              "@type": "Organization",
+              "name": "Ikaros-521",
+              "url": "https://github.com/Ikaros-521"
+            }
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://ikaros-521.github.io/PaperLite/#website",
+            "url": "https://ikaros-521.github.io/PaperLite/",
+            "name": "PaperLite",
+            "alternateName": "论文速写编辑器",
+            "inLanguage": "zh-CN"
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://ikaros-521.github.io/PaperLite/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "PaperLite 是什么？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PaperLite 是一款开源、本地优先的 LaTeX 论文编辑器，在浏览器里提供类似 Overleaf 的实时预览、TikZ 与表格可视化编辑，以及内置 XeLaTeX 真实编译，无需注册账号。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "使用 PaperLite 需要安装 TeX 吗？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "不需要。PaperLite 内置 XeLaTeX WebAssembly 引擎，首次编译会下载约 98 MB 的宏包与字体资源并缓存；也可以连接本机的 MiKTeX 或 TeX Live 获得完整发行版能力。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "PaperLite 免费吗？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "免费且开源，源码以 GPL-3.0-or-later 发布。AI 对话、AI 修复等功能需要自行配置兼容渠道的 API Key，费用由对应服务商收取。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "文档会上传到服务器吗？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "不会。文档默认保存在浏览器或你打开的本地文件夹中。只有主动使用文献检索、LanguageTool 语法检查、AI 对话等联网功能时，相关请求才会由浏览器直接发送到对应服务。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "PaperLite 和 Overleaf 有什么区别？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PaperLite 无需账号、本地优先、开源，支持浏览器内真实编译和可视化图/表编辑；实时预览是论文常用子集的近似排版，复杂宏包、双栏分页与 bibtex 以编译出的 PDF 为准。PaperLite 不是 Overleaf 官方产品。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "支持中文和手机吗？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "支持。内置引擎可编译 ctexart 中文文档；手机访问站点路径加 #/m 即可使用移动版，复用同一套编辑器、编译与 AI 能力，草稿保存在当前浏览器。"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
     <style>
-      /* React 挂载前的骨架：慢网下不该是一段纯白屏（挂载后由 createRoot 清掉） */
-      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px; background: #f7f2e8; }
-      #boot .boot-bar { height: 34px; border-radius: 6px; background: rgba(0, 0, 0, .07); }
-      #boot .boot-cols { flex: 1; display: grid; grid-template-columns: 180px 1fr 1fr; gap: 10px; }
-      #boot .boot-cols i { border-radius: 6px; background: rgba(0, 0, 0, .05); }
-      #boot .boot-note { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font: 600 13px/1 Georgia, "Times New Roman", serif; letter-spacing: .18em; color: rgba(0, 0, 0, .28); }
+      /* React 挂载前的启动页：慢网下不是纯白屏，也给不执行 JS 的 AI 爬虫一份可读的产品介绍与 FAQ（挂载后由 createRoot 清掉） */
+      :root {
+        --boot-bg: #f7f2e8;
+        --boot-ink: #241f1a;
+        --boot-muted: #6b6157;
+        --boot-accent: #b3432e;
+        --boot-accent-soft: rgba(179, 67, 46, .1);
+        --boot-line: rgba(74, 55, 40, .16);
+        --boot-card: rgba(255, 252, 245, .78);
+        --boot-shadow: 0 24px 60px rgba(74, 55, 40, .1);
+      }
       @media (prefers-color-scheme: dark) {
-        #boot { background: #141a24; }
-        #boot .boot-bar { background: rgba(255, 255, 255, .07); }
-        #boot .boot-cols i { background: rgba(255, 255, 255, .05); }
-        #boot .boot-note { color: rgba(255, 255, 255, .25); }
+        :root {
+          --boot-bg: #141a24;
+          --boot-ink: #ece5d8;
+          --boot-muted: #a79c8d;
+          --boot-accent: #e0785f;
+          --boot-accent-soft: rgba(224, 120, 95, .13);
+          --boot-line: rgba(255, 255, 255, .12);
+          --boot-card: rgba(27, 35, 48, .8);
+          --boot-shadow: 0 24px 60px rgba(0, 0, 0, .28);
+        }
+      }
+      html, body { margin: 0; background: var(--boot-bg); }
+      #boot {
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        display: flex;
+        overflow-y: auto;
+        padding: clamp(18px, 4vw, 48px);
+        color: var(--boot-ink);
+        background:
+          radial-gradient(70rem 36rem at 8% -12%, var(--boot-accent-soft), transparent 62%),
+          radial-gradient(56rem 30rem at 108% 112%, rgba(99, 120, 90, .1), transparent 62%),
+          var(--boot-bg);
+        font: 15px/1.65 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      #boot .boot-wrap { margin: auto; width: min(780px, 100%); }
+      #boot .boot-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+      #boot .boot-mark {
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        border-radius: 9px;
+        background: var(--boot-accent);
+        color: #fdf8ef;
+        font: 700 22px/1 Georgia, "Times New Roman", serif;
+        box-shadow: 0 6px 18px var(--boot-accent-soft);
+      }
+      #boot .boot-name { font: 700 17px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .04em; }
+      #boot .boot-tag { margin-top: 3px; color: var(--boot-muted); font-size: 12.5px; letter-spacing: .08em; }
+      #boot h1 {
+        margin: 0 0 14px;
+        font: 600 clamp(27px, 4.2vw, 40px)/1.22 Georgia, "Songti SC", "SimSun", serif;
+        letter-spacing: -.01em;
+        text-wrap: balance;
+      }
+      #boot .nowrap { white-space: nowrap; }
+      #boot .boot-lead { max-width: 64ch; margin: 0; color: var(--boot-ink); font-size: 15.5px; }
+      #boot .boot-en { max-width: 68ch; margin: 10px 0 0; color: var(--boot-muted); font-size: 13.5px; font-style: italic; }
+      #boot .boot-features {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 24px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      #boot .boot-features li {
+        position: relative;
+        padding: 8px 12px 8px 30px;
+        border: 1px solid var(--boot-line);
+        border-radius: 8px;
+        background: var(--boot-card);
+        font-size: 13.5px;
+        white-space: nowrap;
+      }
+      #boot .boot-features li::before {
+        content: "✓";
+        position: absolute;
+        left: 11px;
+        top: 8px;
+        color: var(--boot-accent);
+        font-weight: 700;
+      }
+      #boot .boot-faq {
+        margin-top: 26px;
+        padding: 6px 20px;
+        border: 1px solid var(--boot-line);
+        border-radius: 12px;
+        background: var(--boot-card);
+        box-shadow: var(--boot-shadow);
+      }
+      #boot .boot-faq h2 { margin: 14px 0 4px; font: 600 15px/1.4 Georgia, "Songti SC", serif; letter-spacing: .02em; }
+      #boot details { border-top: 1px solid var(--boot-line); }
+      #boot details:first-of-type { border-top: 0; }
+      #boot summary {
+        padding: 10px 0;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        list-style-position: outside;
+      }
+      #boot summary::marker { color: var(--boot-accent); }
+      #boot summary:focus-visible { outline: 2px solid var(--boot-accent); outline-offset: 3px; border-radius: 3px; }
+      #boot details p { margin: 0 0 12px; padding-right: 8px; color: var(--boot-muted); font-size: 13.5px; }
+      #boot .boot-foot {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 18px;
+        margin-top: 22px;
+        color: var(--boot-muted);
+        font-size: 13px;
+      }
+      #boot .boot-loading { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+      #boot .boot-noscript { margin: 0; color: var(--boot-accent); font-size: 13px; }
+      #boot .boot-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--boot-accent);
+        animation: boot-pulse 1.4s ease-in-out infinite;
+      }
+      #boot a { color: var(--boot-accent); text-decoration: underline; text-underline-offset: 2px; }
+      #boot a:focus-visible { outline: 2px solid var(--boot-accent); outline-offset: 3px; border-radius: 3px; }
+      @keyframes boot-pulse {
+        0%, 100% { opacity: .35; transform: scale(.85); }
+        50% { opacity: 1; transform: scale(1); }
+      }
+      @media (max-width: 560px) {
+        #boot .boot-faq { padding: 4px 14px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot .boot-dot { animation: none; opacity: 1; }
       }
     </style>
+    <noscript><style>#boot .boot-loading { display: none; }</style></noscript>
   </head>
   <body>
     <div id="root">
-      <div id="boot" aria-hidden="true">
-        <div class="boot-bar"></div>
-        <div class="boot-cols"><i></i><i></i><i></i></div>
-        <div class="boot-note">PaperLite</div>
+      <div id="boot">
+        <div class="boot-wrap">
+          <div class="boot-brand">
+            <span class="boot-mark" aria-hidden="true">论</span>
+            <div>
+              <div class="boot-name">PaperLite</div>
+              <div class="boot-tag">论文速写编辑器 · 开源 LaTeX 编辑器</div>
+            </div>
+          </div>
+
+          <h1>在浏览器里写论文：<span class="nowrap">实时预览</span>，<span class="nowrap">真 LaTeX 编译</span></h1>
+          <p class="boot-lead">PaperLite 是本地优先的开源 LaTeX 论文编辑器。打开即写，内置 <strong>XeLaTeX WebAssembly 引擎</strong>，无需安装 TeX；TikZ 图和表格可以点着改样式，文档直接保存到本地文件夹，默认不上传服务器。</p>
+          <p class="boot-en" lang="en">PaperLite is a local-first, open-source LaTeX editor with live preview and real XeLaTeX compilation in your browser.</p>
+
+          <ul class="boot-features">
+            <li>实时预览与语法高亮</li>
+            <li>内置 XeLaTeX，免装&nbsp;TeX</li>
+            <li>TikZ 图与表格可视化</li>
+            <li>多文件 · 主文档 · 自动编译</li>
+            <li>PDF ⇄ 源码双向跳转</li>
+            <li>AI 修复 · 对话 · Agent</li>
+            <li>文献检索与 BibTeX 插入</li>
+            <li>本地文件 · 版本历史 · 移动端</li>
+          </ul>
+
+          <section class="boot-faq" aria-labelledby="boot-faq-title">
+            <h2 id="boot-faq-title">常见问题（FAQ）</h2>
+            <details>
+              <summary>PaperLite 是什么？</summary>
+              <p>PaperLite 是一款开源、本地优先的 LaTeX 论文编辑器，在浏览器里提供类似 Overleaf 的实时预览、TikZ 与表格可视化编辑，以及内置 XeLaTeX 真实编译，无需注册账号。</p>
+            </details>
+            <details>
+              <summary>使用 PaperLite 需要安装 TeX 吗？</summary>
+              <p>不需要。PaperLite 内置 XeLaTeX WebAssembly 引擎，首次编译会下载约 98 MB 的宏包与字体资源并缓存；也可以连接本机的 MiKTeX 或 TeX Live 获得完整发行版能力。</p>
+            </details>
+            <details>
+              <summary>PaperLite 免费吗？</summary>
+              <p>免费且开源，源码以 GPL-3.0-or-later 发布。AI 对话、AI 修复等功能需要自行配置兼容渠道的 API Key，费用由对应服务商收取。</p>
+            </details>
+            <details>
+              <summary>文档会上传到服务器吗？</summary>
+              <p>不会。文档默认保存在浏览器或你打开的本地文件夹中。只有主动使用文献检索、LanguageTool 语法检查、AI 对话等联网功能时，相关请求才会由浏览器直接发送到对应服务。</p>
+            </details>
+            <details>
+              <summary>PaperLite 和 Overleaf 有什么区别？</summary>
+              <p>PaperLite 无需账号、本地优先、开源，支持浏览器内真实编译和可视化图/表编辑；实时预览是论文常用子集的近似排版，复杂宏包、双栏分页与 bibtex 以编译出的 PDF 为准。PaperLite 不是 Overleaf 官方产品。</p>
+            </details>
+            <details>
+              <summary>支持中文和手机吗？</summary>
+              <p>支持。内置引擎可编译 ctexart 中文文档；手机访问站点路径加 #/m 即可使用移动版，复用同一套编辑器、编译与 AI 能力，草稿保存在当前浏览器。</p>
+            </details>
+          </section>
+
+          <div class="boot-foot">
+            <p class="boot-loading" role="status"><span class="boot-dot" aria-hidden="true"></span>编辑器正在加载…</p>
+            <noscript><p class="boot-noscript">编辑器需要 JavaScript，请启用后刷新本页；上面的介绍与 FAQ 无需 JavaScript 即可阅读。</p></noscript>
+            <a href="https://github.com/Ikaros-521/PaperLite">GitHub 源码</a>
+            <a href="./llms.txt">llms.txt</a>
+            <a href="./llms-full.txt">完整说明</a>
+          </div>
+        </div>
       </div>
     </div>
-    <noscript><p style="padding:24px;font:14px/1.6 system-ui,sans-serif">PaperLite 全部功能都在浏览器里运行，请启用 JavaScript 后刷新本页。</p></noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

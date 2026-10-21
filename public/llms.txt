@@ -1,0 +1,52 @@
+# PaperLite
+
+> PaperLite（论文速写编辑器）是开源、本地优先的 LaTeX 论文编辑器：浏览器内实时预览、TikZ 与表格可视化编辑、内置 XeLaTeX 真实编译。无需安装 TeX，无需注册账号，文档默认保存在浏览器或本地文件夹。
+
+- 在线使用：https://ikaros-521.github.io/PaperLite/
+- 源码仓库：https://github.com/Ikaros-521/PaperLite
+- 许可证：GPL-3.0-or-later
+- 完整说明（供 AI 检索）：https://ikaros-521.github.io/PaperLite/llms-full.txt
+
+## 核心能力
+
+- LaTeX 实时预览与 CodeMirror 编辑：标题、章节、公式（KaTeX）、表格、引用、脚注、目录即时呈现。
+- 内置 XeLaTeX WebAssembly 引擎：浏览器内完成 XeTeX → XDV → dvipdfmx 编译，支持 ctexart 中文与 IEEEtran；首次编译下载约 98 MB 宏包与字体并缓存。
+- 可视化编辑：点击 TikZ 流程图节点改填充/边框/线宽/圆角，预览表格的单元格、行列与列格式可直接编辑，改动精确写回 LaTeX 源码。
+- 多文件论文项目：文件树、多标签、主文档探测、`\input` / `\include` 子文件编译、自动重编译。
+- 写作辅助：`\ref` / `\cite` / 命令 / 环境 / 文件名补全，项目内跨文件搜索，静态语法检测，PDF 与源码双向近似跳转。
+- 联网可选功能：Crossref / OpenAlex / DBLP 文献检索与 BibTeX 插入，LanguageTool 语法检查，AI 修复 / 对话 / Agent（需自备 OpenAI 兼容或 Anthropic 渠道）。
+- 本地优先：用 Chrome / Edge 打开本地文件夹读写文件，草稿保存在浏览器；版本历史支持时间线与两版 Diff。
+- 移动端：同一站点访问 `#/m` 使用窄屏界面，复用桌面同一套编辑器、编译与 AI 内核。
+
+## 典型场景
+
+- 没有安装 TeX、想直接在浏览器里写论文和编译 PDF 的学生与研究者。
+- 需要中文论文（ctexart）、IEEE 会议/期刊模板（IEEEtran）或投稿源码包（.tex + PDF + 资源）的作者。
+- 希望文档留在本地、不想上传到在线服务，但仍需要实时预览与写作辅助的用户。
+- 想用可视化方式调整 TikZ 流程图或三线表，而不是手改源码的 LaTeX 用户。
+
+## 与其他工具的区别
+
+- 与 Overleaf：PaperLite 无需账号、开源、本地优先，编译在浏览器内完成；实时预览是论文常用子集的近似排版，复杂宏包、精确双栏分页与 bibtex 以编译出的 PDF 为准。PaperLite 不是 Overleaf 官方产品。
+- 与本地 TeX 编辑器：无需安装完整 TeX 发行版即可编译；也可连接本机 MiKTeX / TeX Live 获得完整宏包能力。
+- 与普通 Markdown 编辑器：面向 LaTeX 论文，提供章节/公式/交叉引用/文献/编译 PDF 与投稿源码导出。
+
+## 隐私与联网
+
+- 文档默认只保存在浏览器（localStorage / IndexedDB）或用户打开的本地文件夹，不上传 PaperLite 服务器。
+- 文献检索、LanguageTool、AI 功能为可选联网能力，请求由浏览器直接发往对应用户选择的服务；AI 需用户自行配置 API Key。
+- 站点为纯静态 GitHub Pages，无后端账号与云端文档存储。
+
+## 技术事实
+
+- 前端：React 18 + Vite 5，编辑器 CodeMirror 5，数学 KaTeX，图表 Mermaid，PDF 阅读 pdf.js。
+- 渲染引擎：`src/engines/latex.js` 等为无 DOM 依赖的纯函数，可在 Node 中单测。
+- 部署：GitHub Pages 静态托管，构建产物使用相对路径；内置 TeX 资源随站点分发，不依赖外部 CDN。
+- 开源：GPL-3.0-or-later，仓库 https://github.com/Ikaros-521/PaperLite 。
+
+## 已知限制
+
+- 实时预览是论文常用子集，不是完整 TeX 引擎；投稿前应使用内置 / 本机引擎编译 PDF 核对。
+- PDF ⇄ 源码跳转是文本匹配的近似定位（synctex-lite），不是真 synctex。
+- 打开本地文件夹需要支持 File System Access API 的 Chrome / Edge；其他浏览器可使用浏览器草稿与导入。
+- AI 功能需要用户自备可浏览器直连、允许 CORS 的模型渠道。

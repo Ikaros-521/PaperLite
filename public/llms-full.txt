@@ -1,0 +1,179 @@
+# PaperLite 完整说明
+
+> 面向 AI 搜索与问答引擎的项目资料。PaperLite 是一款开源、本地优先的 LaTeX 论文编辑器，在浏览器内提供实时预览、TikZ / 表格可视化编辑与真实 TeX 编译。
+
+- 在线使用：https://ikaros-521.github.io/PaperLite/
+- 移动端：https://ikaros-521.github.io/PaperLite/#/m
+- 源码：https://github.com/Ikaros-521/PaperLite
+- 许可证：GPL-3.0-or-later
+- 版本：2.0.0
+
+## 1. PaperLite 是什么
+
+PaperLite（中文名「论文速写编辑器」）是一个仿 Overleaf 的本地论文工具，但不需要账号、不依赖云端文档存储。它把 LaTeX 编辑、近似实时预览、可视化图/表编辑、真实 PDF 编译、文献检索与 AI 写作辅助放进一个纯前端应用里。
+
+主要面向：
+
+- 想直接写 LaTeX、但不想安装 TeX 发行版的用户；
+- 需要中文论文、IEEE 模板或投稿源码包的研究者与学生；
+- 希望文档留在本地、同时对预览和写作效率有要求的用户。
+
+PaperLite 不是 Overleaf 官方产品，也不提供云端协作、账号体系或在线文档托管。
+
+## 2. 快速事实
+
+| 项目 | 说明 |
+| --- | --- |
+| 产品形态 | 纯前端 Web 应用，GitHub Pages 静态部署 |
+| 编辑器 | CodeMirror 5，LaTeX / Markdown / 代码语法高亮 |
+| 实时预览 | React 渲染 LaTeX 常用子集，KaTeX 数学，Mermaid 图 |
+| 真实编译 | 内置 XeLaTeX WebAssembly 引擎；可选本机 MiKTeX / TeX Live |
+| 中文支持 | ctexart 中文排版；内置引擎可编译中文 PDF；界面中英双语 |
+| 文件能力 | 打开本地文件夹、多标签、文件树、版本历史、Diff |
+| 联网能力 | 文献检索、LanguageTool、AI（均需用户主动触发） |
+| 移动端 | `#/m` 窄屏入口，复用桌面内核 |
+| 开源许可 | GPL-3.0-or-later |
+| 价格 | 免费；AI 功能需自备渠道 API Key |
+
+## 3. 核心功能
+
+### 3.1 编辑与实时预览
+
+- LaTeX 标题、章节、摘要、公式、表格、引用、脚注、目录即时呈现。
+- 行内 `$...$`、行间 `\[...\]`、`equation / align / gather / cases` 等环境由 KaTeX 渲染。
+- Markdown 文件支持表格、数学、Mermaid 与代码高亮。
+- 编辑器提供代码折叠、括号匹配、活动行、Vim 键位（可选）与自定义片段。
+- 预览与编辑器支持同步滚动、沉浸模式、打字机滚动。
+
+### 3.2 内置 XeLaTeX 编译（免安装 TeX）
+
+- 使用 XeTeX / dvipdfmx 的 WebAssembly 构建，浏览器内完成真实 PDF 编译。
+- 随站点分发 TeX 宏包与字体镜像，首次使用约需下载 98 MB，之后由浏览器缓存。
+- 支持 ctexart 中文文档、IEEEtran（V1.8b）与 cite.sty 等常用类/包，可跑 bibtex 通路。
+- 应用空闲时会预热引擎；移动端不自动预拉，首次编译前会提示流量消耗。
+- 也支持连接本机 MiKTeX / TeX Live，获得完整发行版、任意宏包与精确双栏排版。
+- 编译两遍以解析目录与引用；错误日志中的 `!` 与 `l.NN` 可点击跳回源码行。
+
+### 3.3 多文件项目与主文档
+
+- 支持 `\input` / `\include` 拆章的多文件论文。
+- 自动探测编译入口（当前标签 / `main`、`paper`、`root` / 文件夹扫描），也可在设置中固定主文档。
+- 自动编译可选「保存时 / 停顿 6 秒后 / 手动」，自动编译为静默模式。
+
+### 3.4 可视化编辑（TikZ 与表格）
+
+- 点击预览中的 TikZ 节点修改填充、边框、文字色、线宽、虚线、圆角、形状与字号，并精确写回源码；改 `tikzset` 可批量生效。
+- 表格预览悬浮「✎」打开网格面板：单元格文字、行列增删、列格式（colspec）均可编辑，写回时保留 `\multicolumn` 与 booktabs 规则线。
+- 支持三线表、booktabs、multicolumn。
+
+### 3.5 写作辅助
+
+- `\ref` / `\cite` 跨文件补全，LaTeX 命令（90+ 常用命令与文档内 `\newcommand`）、环境名、文件名补全。
+- 项目内跨文件搜索（打开标签实时内容 + 文件夹扫描），点击命中跳行。
+- 静态语法检测：环境未闭合、花括号不配对、未定义 `\ref` / `\cite` 等，编辑区内联波浪线。
+- PDF 与源码双向跳转：Ctrl+点击源码定位 PDF，双击 PDF 文本回到源码行。该功能是文本匹配的近似定位，不是真 synctex。
+- 字数统计、版本历史（时间线与两版 Diff）、历史容量与清理策略。
+
+### 3.6 文献与语法检查
+
+- 「文献检索」直连 Crossref / OpenAlex / DBLP 公共 API，生成 BibTeX 键并追加到 `.bib` 文件，再插入 `\cite{key}`。
+- 可选 LanguageTool 联网语法检查：发送前对注释、公式、命令做等长遮罩；紫色波浪线标记。
+- 可选 AI 用词检测：把遮罩后的正文交给用户配置的 AI 渠道，检查公共语法规则覆盖不到的搭配与用词问题。
+
+### 3.7 AI（自备渠道）
+
+- 支持 OpenAI 兼容（`/chat/completions`）与 Anthropic（`/v1/messages`）两种协议，可配置多个渠道。
+- 平台预设包括 OpenAI、Anthropic、DeepSeek、智谱 GLM、通义千问、Kimi、硅基流动、OpenRouter、Ollama、LM Studio 等。
+- 能力包括：AI 修复问题清单、流式对话、选区/段落/全文/检索增强上下文、划词润色与中英翻译、Agent 工具调用（读写项目文件、搜索、诊断、精确替换等）。
+- 所有文档修改前自动保存版本快照，可撤销；Agent 有步数上限与工具结果渐进式披露。
+- AI 功能需要用户自备 API Key；费用由对应服务商收取，PaperLite 不代收。
+
+### 3.8 本地文件、版本历史与导出
+
+- 使用 File System Access API 打开本地文件夹（Chrome / Edge），支持文件树、多标签、重命名、删除、新建。
+- 支持导入文件、浏览器草稿、草稿转存为文件；多窗口草稿自动合并。
+- 版本历史：编辑停顿 3 秒、切换文件或保存时记录；每文件最多 20 版，全部最多 200 版；支持命名、比较、回滚（回滚前自动备份）。
+- 导出：编译 PDF、源码 ZIP、当前 `.tex`、独立 HTML、打印 PDF、单图 SVG / PNG。
+- 插入图片支持按钮、拖拽、粘贴；打开文件夹时写入项目并补 `\usepackage{graphicx}`。
+
+### 3.9 界面与移动端
+
+- 6 套配色皮肤，深色皮肤同时切换 `color-scheme`；论文纸面与导出 PDF 始终黑字白页。
+- 界面中英双语，随浏览器语言自动选择。
+- 窄屏（≤900px）自动单栏；`#/m` 提供移动端三 Tab 界面，草稿按浏览器隔离。
+- 移动端不使用 File System Access，改用导入；编译、AI、文献检索、搜索、片段库与桌面共享内核。
+
+## 4. 隐私与数据
+
+- 文档默认保存在浏览器或本地文件夹，不上传 PaperLite 服务器。
+- 站点是纯静态 GitHub Pages，没有账号、后端数据库或云端文档存储。
+- 以下功能会把必要数据直接发送到第三方（由用户主动触发）：
+  - 文献检索：查询词发送到 Crossref / OpenAlex / DBLP；
+  - LanguageTool：遮罩后的正文发送到 languagetool.org 公共接口；
+  - AI：请求发送到用户配置的模型渠道。
+- 本地文件夹句柄保存在 IndexedDB，重开浏览器后需重新授权（浏览器安全策略）。
+
+## 5. 常见问题（FAQ）
+
+### PaperLite 是什么？
+
+PaperLite 是一款开源、本地优先的 LaTeX 论文编辑器，在浏览器里提供类似 Overleaf 的实时预览、TikZ 与表格可视化编辑，以及内置 XeLaTeX 真实编译，无需注册账号。
+
+### 使用 PaperLite 需要安装 TeX 吗？
+
+不需要。PaperLite 内置 XeLaTeX WebAssembly 引擎，首次编译会下载约 98 MB 的宏包与字体资源并缓存；也可以连接本机的 MiKTeX 或 TeX Live 获得完整发行版能力。
+
+### PaperLite 免费吗？
+
+免费且开源，源码以 GPL-3.0-or-later 发布。AI 对话、AI 修复等功能需要自行配置兼容渠道的 API Key，费用由对应服务商收取。
+
+### 文档会上传到服务器吗？
+
+不会。文档默认保存在浏览器或你打开的本地文件夹中。只有主动使用文献检索、LanguageTool 语法检查、AI 对话等联网功能时，相关请求才会由浏览器直接发送到对应服务。
+
+### PaperLite 和 Overleaf 有什么区别？
+
+PaperLite 无需账号、本地优先、开源，支持浏览器内真实编译和可视化图/表编辑；实时预览是论文常用子集的近似排版，复杂宏包、双栏分页与 bibtex 以编译出的 PDF 为准。PaperLite 不是 Overleaf 官方产品。
+
+### 支持中文和手机吗？
+
+支持。内置引擎可编译 ctexart 中文文档；手机访问站点路径加 `#/m` 即可使用移动版，复用同一套编辑器、编译与 AI 能力，草稿保存在当前浏览器。
+
+### 支持哪些 TeX 引擎？
+
+内置 XeLaTeX（默认，无需安装）；本机服务模式（`node server.mjs`）下还会出现本机 pdfLaTeX / LaTeX / XeLaTeX / LuaLaTeX，取决于本机 TeX 发行版。
+
+### 如何本地运行或自行部署？
+
+```bash
+npm install
+npm run dev        # 开发：http://localhost:5173
+npm run build      # 构建 → dist/
+node server.mjs    # 静态托管 + TeX 编译 API + LLM Mock → http://localhost:8788
+```
+
+GitHub Pages：推送到 `main` 后由内置 Actions 构建并发布 `dist/`，纯静态托管即可使用内置 XeLaTeX。
+
+## 6. 已知限制
+
+- 实时预览是论文常用子集，不是完整 TeX 引擎；复杂宏包、精确双栏分页、自定义 TikZ 以编译出的 PDF 为准，投稿前应编译核对。
+- PDF ⇄ 源码跳转靠文本匹配（synctex-lite），数学环境与重复文本可能失手。
+- 打开本地文件夹需要 Chrome / Edge 的 File System Access API；其他浏览器可使用浏览器草稿、导入与下载。
+- 自动编译在尚未手动编译过时不会启动内置引擎，因为首次需下载约 98 MB 资源。
+- AI 功能需要浏览器可直连且允许 CORS 的渠道；官方云端 API 若不允许跨域，需使用网关或本地模型。
+- 移动端草稿只存在当前浏览器，清理站点数据或系统回收可能导致丢失。
+
+## 7. 技术架构（简）
+
+- React 18 + Vite 5；编辑器 CodeMirror 5；数学 KaTeX；图 Mermaid；PDF pdf.js。
+- 纯函数渲染引擎：`src/engines/latex.js`（LaTeX → HTML）、`src/engines/tikz.js`（TikZ 子集 → SVG）、`src/engines/markdown.js`，均可在 Node 中单测。
+- 内置 XeLaTeX 资源位于 `public/xelatex/`，构建时随站点分发；PDF 字体资源本地化到 `dist/pdfjs/`。
+- 部署使用相对路径 `base: './'`，支持 GitHub Pages 子路径与 Electron / `file://` 预留。
+- 测试：`npm test`（模块与回归测试）、`npm run test:xelatex`（真实引擎编译回归）。
+
+## 8. 链接
+
+- 在线使用：https://ikaros-521.github.io/PaperLite/
+- 源码仓库：https://github.com/Ikaros-521/PaperLite
+- 许可证：https://www.gnu.org/licenses/gpl-3.0.html
+- 简洁版 llms.txt：https://ikaros-521.github.io/PaperLite/llms.txt
