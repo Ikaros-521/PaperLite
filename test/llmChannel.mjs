@@ -167,6 +167,24 @@ assert.equal(seen.length, 0, '校验失败不该已经发出请求');
   assert.equal(m.body.thinking, undefined, '测试连接不能启用 thinking 预算');
 }
 
+// ---- /models 200 + 空列表不能当成功：再真打一次最小对话 ----
+{
+  let chatCalls = 0;
+  globalThis.fetch = async (u) => {
+    if (String(u).endsWith('/models')) return okJson({ data: [] });
+    chatCalls++;
+    return okJson({ choices: [{ message: { content: 'pong' } }] });
+  };
+  const r = await testConnection({ ...openaiCh, baseUrl: 'https://x.test/v1' });
+  assert.equal(r.ok, true);
+  assert.equal(chatCalls, 1, '空模型列表必须真打一次对话');
+  globalThis.fetch = async (u) => String(u).endsWith('/models')
+    ? okJson({ data: [] })
+    : { ok: false, status: 500, headers: new Map(), text: async () => 'boom' };
+  const bad = await testConnection({ ...openaiCh, baseUrl: 'https://x.test/v1' });
+  assert.equal(bad.ok, false, '列表为空且对话失败时必须报红');
+}
+
 // ---- 200 里裹着业务错误也要报出来（智谱 Anthropic /models 实测行为） ----
 {
   globalThis.fetch = async () => okJson({ code: 401, msg: '令牌已过期或验证不正确', success: false });

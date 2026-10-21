@@ -231,7 +231,8 @@ function apiErrorMessage(j) {
 
 // Anthropic 的 /models 只证明列表接口可达，真正对话走 /v1/messages；
 // 网关可能只给列表配了 CORS（智谱就是这样），所以必须真发一次最小对话。
-// OpenAI 兼容路径仍优先 /models，失败再发一条极短对话。
+// OpenAI 兼容路径优先 /models，失败或返回空列表时再发一条极短对话：
+// 无效 Key 被网关包成 200 + data:[] 时，只看列表会把测试连接判绿。
 export async function testConnection(channel, opts = {}) {
   try {
     if (protocolOf(channel) === 'anthropic') {
@@ -251,7 +252,12 @@ export async function testConnection(channel, opts = {}) {
       await chat(channel, [{ role: 'user', content: 'ping' }], { maxTokens: 5, signal: timeoutSignal(opts.signal) });
       return { ok: true, msg: t('llm.okChatOnly', { msg: e.message || e }) };
     }
-    return { ok: true, msg: ids.length ? t('llm.ok', { models: t('llm.okModels', { models: ids.join(getLang() === 'en' ? ', ' : '、') }) }) : t('llm.ok', { models: '' }) };
+    if (!ids.length) {
+      // 200 + 空列表不等于可用：真发一条最小对话，失败会走外层 catch 判红
+      await chat(channel, [{ role: 'user', content: 'ping' }], { maxTokens: 5, signal: timeoutSignal(opts.signal) });
+      return { ok: true, msg: t('llm.ok', { models: '' }) };
+    }
+    return { ok: true, msg: t('llm.ok', { models: t('llm.okModels', { models: ids.join(getLang() === 'en' ? ', ' : '、') }) }) };
   } catch (e) {
     return { ok: false, msg: t('llm.fail', { msg: e.message || e }) };
   }
