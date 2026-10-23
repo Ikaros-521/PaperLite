@@ -492,6 +492,25 @@ ok(regTabCap.html.indexOf('<figcaption') < regTabCap.html.indexOf('<table'), '�
 const regFloatSpan = renderLatex('\\begin{figure*}\\caption{F}\\end{figure*}\\begin{table*}\\caption{T}\\end{table*}\\begin{algorithm*}\\caption{A}\\end{algorithm*}');
 ok(regFloatSpan.html.includes('fig float-span') && regFloatSpan.html.includes('tab float-span') && regFloatSpan.html.includes('algorithm float-span'), '宏包回归: figure*/table*/algorithm* 挂载 float-span 跨栏类');
 
+// 8. 第四轮宏包审查缺陷回归验证
+const regCapStar = renderLatex('\\begin{figure}\\caption*{无编号主图题注}\\end{figure}\\begin{figure}\\begin{subfigure}{0.4\\textwidth}\\subcaption*{无编号子图}\\end{subfigure}\\end{figure}');
+ok(regCapStar.html.includes('<figcaption>无编号主图题注</figcaption>') && regCapStar.html.includes('class="subfig-cap">无编号子图</div>'), '宏包回归: caption* 与 subcaption* 无编号题注完整保留且无图号前缀');
+
+const regColor = renderLatex('\\textcolor{red}{红字} 与 \\colorbox{yellow}{黄底}');
+ok(regColor.warnings.length === 0 && regColor.html.includes('style="color:red"') && regColor.html.includes('background-color:yellow'), '宏包回归: textcolor 与 colorbox 正常着色零警告');
+
+const regResize = renderLatex('\\begin{table}\\resizebox{\\textwidth}{!}{\\begin{tabular}{c}X\\end{tabular}}\\end{table}');
+ok(regResize.warnings.length === 0 && regResize.html.includes('class="resizebox"') && !regResize.html.includes('\\resizebox'), '宏包回归: resizebox 与 \\textwidth 正常包装零警告');
+
+const regSi = renderLatex('\\SI{10}{m/s} 与 \\num{1.23} 与 \\si{kg/m^3} 与 \\ang{45}');
+ok(regSi.warnings.length === 0 && regSi.html.includes('si-quantity') && regSi.html.includes('45&deg;'), '宏包回归: siunitx 核心宏零警告正常格式化');
+
+const regTabFn = renderLatex('\\begin{tabular}{c}A\\tablefootnote{表注}\\end{tabular}');
+ok(regTabFn.warnings.length === 0 && regTabFn.html.includes('fnref') && regTabFn.html.includes('表注'), '宏包回归: tablefootnote 正常渲染进脚注列表');
+
+const regUrlEsc = renderLatex('\\url{https://foo.com/a\\_b}');
+ok(regUrlEsc.html.includes('href="https://foo.com/a_b"'), '宏包回归: url 包含转义下划线时反转义');
+
 // ---------- 排版语法的静态检测 ----------
 console.log('== 排版语法检测 ==');
 const dupCls = lintLaTeX('\\documentclass{IEEEtran}\n\\begin{document}\n\\documentclass[conference]{IEEEtran}\n\\end{document}');

@@ -1077,7 +1077,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'sout': case 'striked': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<s>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</s>' };
     case 'textsuperscript': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<sup>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</sup>' };
     case 'textsubscript': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<sub>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</sub>' };
-    case 'footnote': {
+    case 'footnote': case 'tablefootnote': {
       g1 = G(afterName); if (!g1) return null;
       ctx.counters.footnote++;
       var fn = ctx.counters.footnote;
@@ -1118,10 +1118,11 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     }
     case 'url': {
       g1 = G(afterName); if (!g1) return null;
-      var uUrl = safeUrl(g1.text);
+      var cleanUrl = g1.text.replace(/\\([{}%#&_$])/g, '$1');
+      var uUrl = safeUrl(cleanUrl);
       return { next: g1.end + 1, html: uUrl
-        ? '<a href="' + esc(uUrl) + '" target="_blank" rel="noopener">' + esc(g1.text) + '</a>'
-        : esc(g1.text) };
+        ? '<a href="' + esc(uUrl) + '" target="_blank" rel="noopener">' + esc(cleanUrl) + '</a>'
+        : esc(cleanUrl) };
     }
     case 'email': {
       g1 = G(afterName); if (!g1) return null;
@@ -1223,7 +1224,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
 
     // ---- 版面（忽略类） ----
     case 'centering': case 'raggedright': case 'raggedleft': case 'noindent': case 'indent':
-    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'floatname': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal':
+    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'floatname': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal': case 'textwidth': case 'columnwidth': case 'linewidth':
       // usepackage/setlength/definecolor 可能带参数，吞掉参数避免显示
       if (name === 'usepackage' || name === 'RequirePackage') { var po = readOpt(str, afterName); var pg = G(po ? po.closeIdx + 1 : afterName); return pg ? pg.end + 1 : afterName; }
       if (name === 'setlength' || name === 'addtolength' || name === 'setcounter' || name === 'addtocounter' || name === 'definecolor' || name === 'graphicspath' || name === 'captionsetup' || name === 'renewcommand' || name === 'providecommand' || name === 'newcommand' || name === 'def' || name === 'bibliographystyle' || name === 'bibliography' || name === 'captionof' || name === 'floatname') {
@@ -1415,6 +1416,91 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
         html: '<span class="alg-proc">' + esc(g1.text.trim()) + '</span>(' + renderFlow(g2.text, ctx, base + g2.start, false, true) + ')'
       };
     }
+    // ---- 缩放容器 (graphicx: resizebox / scalebox) ----
+    case 'resizebox': {
+      var p1 = afterName;
+      var gw = G(p1);
+      if (!gw) return null;
+      var gh = G(gw.end + 1);
+      if (!gh) return null;
+      var gc = G(gh.end + 1);
+      if (!gc) return null;
+      var resHtml = renderFlow(gc.text, ctx, base + gc.start, false);
+      return { next: gc.end + 1, block: true, html: '<div class="resizebox" style="max-width:100%;overflow-x:auto;">' + resHtml + '</div>' };
+    }
+    case 'scalebox': {
+      var p1 = afterName;
+      var gs = G(p1);
+      if (!gs) return null;
+      var pos2 = gs.end + 1;
+      var oOpt = readOpt(str, pos2);
+      if (oOpt) pos2 = oOpt.closeIdx + 1;
+      var gc2 = G(pos2);
+      if (!gc2) return null;
+      var scaleNum = parseFloat(gs.text.trim());
+      var scaleStyle = isFinite(scaleNum) && scaleNum > 0 && scaleNum <= 2 ? 'transform:scale(' + scaleNum + ');transform-origin:top left;' : '';
+      var resHtml2 = renderFlow(gc2.text, ctx, base + gc2.start, false);
+      return { next: gc2.end + 1, block: true, html: '<div class="scalebox" style="max-width:100%;overflow-x:auto;' + scaleStyle + '">' + resHtml2 + '</div>' };
+    }
+
+    // ---- 文本颜色与高亮 (xcolor: textcolor / colorbox) ----
+    case 'textcolor': {
+      o1 = readOpt(str, afterName);
+      var colPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(colPos);
+      if (!g1) return null;
+      g2 = G(g1.end + 1);
+      if (!g2) return null;
+      var colName = g1.text.trim();
+      var txtHtml = renderFlow(g2.text, ctx, base + g2.start, false, true);
+      return { next: g2.end + 1, html: '<span style="color:' + esc(colName) + '">' + txtHtml + '</span>' };
+    }
+    case 'colorbox': {
+      o1 = readOpt(str, afterName);
+      var cbPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(cbPos);
+      if (!g1) return null;
+      g2 = G(g1.end + 1);
+      if (!g2) return null;
+      var bgCol = g1.text.trim();
+      var cbHtml = renderFlow(g2.text, ctx, base + g2.start, false, true);
+      return { next: g2.end + 1, html: '<span style="background-color:' + esc(bgCol) + ';padding:.1em .3em;border-radius:2px;">' + cbHtml + '</span>' };
+    }
+
+    // ---- 物理量与国际单位 (siunitx: \SI, \num, \si, \ang) ----
+    case 'SI': {
+      o1 = readOpt(str, afterName);
+      var siPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(siPos);
+      if (!g1) return null;
+      g2 = G(g1.end + 1);
+      if (!g2) return null;
+      var numPart = renderFlow(g1.text, ctx, base + g1.start, false, true);
+      var unitPart = renderFlow(g2.text, ctx, base + g2.start, false, true);
+      return { next: g2.end + 1, html: '<span class="si-quantity"><span class="si-num">' + numPart + '</span>&nbsp;<span class="si-unit">' + unitPart + '</span></span>' };
+    }
+    case 'num': {
+      o1 = readOpt(str, afterName);
+      var nmPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(nmPos);
+      if (!g1) return null;
+      return { next: g1.end + 1, html: '<span class="si-num">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</span>' };
+    }
+    case 'si': {
+      o1 = readOpt(str, afterName);
+      var uPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(uPos);
+      if (!g1) return null;
+      return { next: g1.end + 1, html: '<span class="si-unit">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</span>' };
+    }
+    case 'ang': {
+      o1 = readOpt(str, afterName);
+      var angPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(angPos);
+      if (!g1) return null;
+      return { next: g1.end + 1, html: '<span class="si-num">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '&deg;</span>' };
+    }
+
     case 'gets':
       return { next: afterName, html: '&larr;' };
     case 'to':
@@ -1832,7 +1918,7 @@ function renderEnv(env, ctx, absInnerStart) {
 
     case 'figure': case 'figure*': case 'table': case 'table*': {
       var isFig = env.name.indexOf('figure') === 0;
-      var cap = null, capSt = {}, m;
+      var cap = null, capSt = {}, capStarred = false, m;
       // 提取 \caption{...}（括号配平）：必须排除嵌套子环境（subfigure/subtable）内部的 \caption
       var subZones = [];
       var subRe = /\\begin\s*\{(subfigure|subtable)\}/g, sm;
@@ -1843,10 +1929,11 @@ function renderEnv(env, ctx, absInnerStart) {
         var em = endRe.exec(inner);
         subZones.push([sm.index, em ? em.index + em[0].length : inner.length]);
       }
-      var capRe = /\\caption(?![A-Za-z])/g;
+      var capRe = /\\caption(\*?)(?![A-Za-z])/g;
       while ((m = capRe.exec(inner))) {
         var inSub = subZones.some(function (z) { return m.index >= z[0] && m.index < z[1]; });
         if (inSub) continue;
+        capStarred = m[1] === '*';
         var cg = optGroup(inner, m.index + m[0].length, capSt);
         if (!cg) { if (capSt.noClose >= 0) break; continue; }
         cap = cg.text;
@@ -1868,7 +1955,14 @@ function renderEnv(env, ctx, absInnerStart) {
       // content 相对 inner 截去了前导 [..]，base 需同步平移，否则子环境（tikzpicture）的源码偏移会错位
       var contentHtml = renderFlow(content, ctx, base + (inner.length - content.length), false);
       var capName = esc(t(isFig ? 'render.figure' : 'render.table'));
-      var figCapHtml = cap !== null ? '<figcaption>' + capName + '&nbsp;' + n2 + esc(t('render.captionSeparator')) + capHtml + '</figcaption>' : '';
+      var figCapHtml = '';
+      if (cap !== null) {
+        if (capStarred) {
+          figCapHtml = '<figcaption>' + capHtml + '</figcaption>';
+        } else {
+          figCapHtml = '<figcaption>' + capName + '&nbsp;' + n2 + esc(t('render.captionSeparator')) + capHtml + '</figcaption>';
+        }
+      }
       return '<figure class="float ' + (isFig ? 'fig' : 'tab') + (hasSub ? ' has-subfigures' : '') + (isStarred ? ' float-span' : '') + '">' +
         (isFig ? contentHtml + figCapHtml : figCapHtml + contentHtml) + '</figure>';
     }
@@ -1894,12 +1988,13 @@ function renderEnv(env, ctx, absInnerStart) {
       var subLetter = String.fromCharCode(96 + ctx.subfigCounter);
       var subLabel = '(' + subLetter + ')';
 
-      var scap = null, scapSt = {}, sm;
-      var scapRe = /\\(?:sub)?caption(?![A-Za-z])/g;
+      var scap = null, scapSt = {}, scapStarred = false, sm;
+      var scapRe = /\\(?:sub)?caption(\*?)(?![A-Za-z])/g;
       while ((sm = scapRe.exec(sbody))) {
         var scg = optGroup(sbody, sm.index + sm[0].length, scapSt);
         if (!scg) { if (scapSt.noClose >= 0) break; continue; }
         scap = scg.text;
+        scapStarred = sm[1] === '*';
         break;
       }
       var slabels = labelsOf(sbody);
@@ -1915,7 +2010,11 @@ function renderEnv(env, ctx, absInnerStart) {
       } finally {
         ctx.inSubfigure = false;
       }
-      var scapHtml = scap !== null ? '<div class="subfig-cap">' + subLabel + ' ' + renderFlow(scap, ctx, base + spos, false, true) + '</div>' : '';
+      var scapHtml = '';
+      if (scap !== null) {
+        var scapText = renderFlow(scap, ctx, base + spos, false, true);
+        scapHtml = '<div class="subfig-cap">' + (scapStarred ? '' : subLabel + ' ') + scapText + '</div>';
+      }
       return '<div class="subfigure"' + (widthCss ? ' style="' + widthCss + '"' : '') + '>' + sContentHtml + scapHtml + '</div>';
     }
 
