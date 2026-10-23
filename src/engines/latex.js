@@ -309,7 +309,7 @@ export function scanMacros(src) {
   // 无原型字典：定义查不到时 ctx.macros[name] 会从原型链上取到 Function，
   // 于是 \toString 被当成宏、mrec.body 是 undefined、渲染整页抛错
   var macros = Object.create(null);
-  var re = /\\(?:re)?newcommand/g;
+  var re = /\\(?:re|provide)?newcommand/g;
   var noRb = -1;              // 水位线：此处之后已无 ']'，可选参数组不再扫串尾
   var m;
   while ((m = re.exec(src))) {
@@ -353,6 +353,16 @@ export function scanMacros(src) {
     var be2 = braceEnd(src, m.index + m[0].length - 1);
     if (be2 < 0) continue;
     macros[name2] = { argc: 0, opt: null, body: src.slice(m.index + m[0].length, be2) };
+  }
+  // \DeclareMathOperator{\argmax}{arg\,max} / \DeclareMathOperator*{\argmax}{arg\,max}
+  var reOp = /\\DeclareMathOperator(\*?)\s*\{\s*\\([A-Za-z]+)\s*\}\s*\{/g;
+  while ((m = reOp.exec(src))) {
+    var star = m[1] === '*';
+    var opName = m[2];
+    var beOp = braceEnd(src, m.index + m[0].length - 1);
+    if (beOp < 0) continue;
+    var opBody = src.slice(m.index + m[0].length, beOp);
+    macros[opName] = { argc: 0, opt: null, body: (star ? '\\operatorname*{' : '\\operatorname{') + opBody + '}' };
   }
   return macros;
 }
@@ -1022,10 +1032,10 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
 
   switch (name) {
     // ---- 结构 ----
-    case 'section': case 'subsection': case 'subsubsection': case 'paragraph': {
+    case 'section': case 'subsection': case 'subsubsection': case 'paragraph': case 'subparagraph': {
       g1 = G(afterName);
       if (!g1) return null;
-      var lvl = name === 'section' ? 1 : name === 'subsection' ? 2 : name === 'subsubsection' ? 3 : 4;
+      var lvl = name === 'section' ? 1 : name === 'subsection' ? 2 : name === 'subsubsection' ? 3 : name === 'paragraph' ? 4 : 5;
       var num = '';
       // IEEEtran 的编号体系：I. / A) / 1)，与其他类的 1 / 1.1 / 1.1.1 不同
       var ieee = ctx.meta.layout.family === 'ieee';
@@ -1042,7 +1052,7 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       // 标题内的 \label
       labelsOf(g1.text).forEach(function (k) { ctx.labels[k] = num || ''; });
       var tag = lvl <= 3 ? 'h' + (lvl + 1) : 'p';
-      var cls = lvl === 1 ? 'sec1' : lvl === 2 ? 'sec2' : lvl === 3 ? 'sec3' : 'parag';
+      var cls = lvl === 1 ? 'sec1' : lvl === 2 ? 'sec2' : lvl === 3 ? 'sec3' : lvl === 4 ? 'parag' : 'subparag';
       var secHtml = '<' + tag + ' id="' + hid + '" class="' + cls + '">' + (num ? '<span class="secnum">' + num + '</span> ' : '') + inner + '</' + tag + '>';
       // IEEE 期刊版式：标题/摘要/术语跨栏，正文从第一个 \section 起进入双栏
       if (ctx.meta.layout.spanHead && !ctx._colsMarked) { ctx._colsMarked = true; secHtml = '\x00COLS\x00' + secHtml; }
@@ -1060,9 +1070,12 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'par': flushP(); return afterName;
 
     // ---- 文本格式 ----
-    case 'textbf': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<strong>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</strong>' };
+    case 'textbf': case 'bm': case 'boldsymbol': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<strong>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</strong>' };
     case 'textit': case 'emph': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<em>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</em>' };
-    case 'underline': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<u>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</u>' };
+    case 'underline': case 'uline': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<u>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</u>' };
+    case 'uuline': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<u style="text-decoration-style:double;">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</u>' };
+    case 'dashuline': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<u style="text-decoration-style:dashed;">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</u>' };
+    case 'dotuline': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<u style="text-decoration-style:dotted;">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</u>' };
     case 'texttt': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<code>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</code>' };
     case 'mbox': case 'hbox': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<span class="mbox">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</span>' };
     case 'fbox': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<span class="fbox">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</span>' };
@@ -1074,20 +1087,23 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       var cv = name === 'MakeLowercase' ? g1.text.toLowerCase() : g1.text.toUpperCase();
       return { next: g1.end + 1, html: renderFlow(cv, ctx, base + g1.start, false, true) };
     }
-    case 'sout': case 'striked': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<s>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</s>' };
+    case 'sout': case 'striked': case 'xout': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<s>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</s>' };
+    case 'hl': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<mark style="background-color:#ff0;padding:.1em .2em;border-radius:2px;">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</mark>' };
     case 'textsuperscript': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<sup>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</sup>' };
     case 'textsubscript': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<sub>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</sub>' };
     case 'footnote': case 'tablefootnote': {
-      g1 = G(afterName); if (!g1) return null;
-      ctx.counters.footnote++;
-      var fn = ctx.counters.footnote;
+      o1 = readOpt(str, afterName);
+      var fnPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(fnPos); if (!g1) return null;
+      var customFn = o1 ? o1.text.trim() : null;
+      var fn = customFn || (++ctx.counters.footnote);
       ctx.footnotes.push({ n: fn, html: renderFlow(g1.text, ctx, base + g1.start, false, true) });
       return { next: g1.end + 1, html: '<sup class="fnref" id="fnr' + fn + '">' + fn + '</sup>' };
     }
     case 'underlinebar': return null;
 
     // ---- 引用 ----
-    case 'ref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: refPlaceholder(ctx, base + i, g1.text.trim()) };
+    case 'ref': case 'pageref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: refPlaceholder(ctx, base + i, g1.text.trim()) };
     case 'autoref': case 'cref': case 'Cref': {
       g1 = G(afterName); if (!g1) return null;
       var pre2 = name === 'Cref' ? esc(t('render.figure')) + ' ' : '';
@@ -1099,13 +1115,29 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       return { next: g1.end + 1, html: esc(t(name === 'figref' ? 'render.figure' : 'render.table')) + '&nbsp;' + refPlaceholder(ctx, base + i, g1.text.trim()) };
     }
     case 'eqref': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: esc(t('render.equation')) + '&nbsp;(' + refPlaceholder(ctx, base + i, g1.text.trim()) + ')' };
-    case 'cite': case 'citep': case 'citet': case 'citealp': case 'parencite': case 'autocite': case 'textcite': {
-      o1 = readOpt(str, afterName);
-      var pos = o1 ? o1.closeIdx + 1 : afterName;
-      g1 = G(pos); if (!g1) return null;
+    case 'cite': case 'citep': case 'citet': case 'citealp': case 'parencite': case 'autocite': case 'textcite': case 'citeauthor': case 'citeyear': case 'citeyearpar': case 'citealt': {
+      var cpos = afterName;
+      var oFirst = readOpt(str, cpos);
+      var prenote = '', postnote = '';
+      if (oFirst) {
+        cpos = oFirst.closeIdx + 1;
+        var oSecond = readOpt(str, cpos);
+        if (oSecond) {
+          prenote = oFirst.text.trim();
+          postnote = oSecond.text.trim();
+          cpos = oSecond.closeIdx + 1;
+        } else {
+          postnote = oFirst.text.trim();
+        }
+      }
+      g1 = G(cpos); if (!g1) return null;
       var keys = g1.text.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
       var parts = keys.map(function (k) { return '\x00C:' + encodeURIComponent(k) + '\x00'; });
-      return { next: g1.end + 1, html: '<span class="cite">[' + parts.join(',') + ']</span>' };
+      var notePre = prenote ? esc(prenote) + ' ' : '';
+      var notePost = postnote ? ', ' + esc(postnote) : '';
+      var citeBody = notePre + parts.join(',') + notePost;
+      var isAuthorOnly = (name === 'citeauthor');
+      return { next: g1.end + 1, html: isAuthorOnly ? '<span class="cite">' + citeBody + '</span>' : '<span class="cite">[' + citeBody + ']</span>' };
     }
     case 'label': g1 = G(afterName); if (g1) { /* 编号由所属环境处理，单独出现忽略 */ return g1.end + 1; } return afterName;
     case 'caption': case 'caption*': {
@@ -1174,6 +1206,13 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       }
       return g1.end + 1;
     }
+    case 'affil': {
+      o1 = readOpt(str, afterName);
+      var afPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(afPos); if (!g1) return null;
+      var markHtml = o1 ? '<sup class="affil-mark">' + esc(o1.text.trim()) + '</sup> ' : '';
+      return { next: g1.end + 1, block: true, html: '<div class="doc-affil">' + markHtml + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</div>' };
+    }
 
     // ---- IEEEtran 版式 ----
     case 'IEEEPARstart': {
@@ -1224,16 +1263,49 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
 
     // ---- 版面（忽略类） ----
     case 'centering': case 'raggedright': case 'raggedleft': case 'noindent': case 'indent':
-    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'floatname': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal': case 'textwidth': case 'columnwidth': case 'linewidth':
-      // usepackage/setlength/definecolor 可能带参数，吞掉参数避免显示
-      if (name === 'usepackage' || name === 'RequirePackage') { var po = readOpt(str, afterName); var pg = G(po ? po.closeIdx + 1 : afterName); return pg ? pg.end + 1 : afterName; }
-      if (name === 'setlength' || name === 'addtolength' || name === 'setcounter' || name === 'addtocounter' || name === 'definecolor' || name === 'graphicspath' || name === 'captionsetup' || name === 'renewcommand' || name === 'providecommand' || name === 'newcommand' || name === 'def' || name === 'bibliographystyle' || name === 'bibliography' || name === 'captionof' || name === 'floatname') {
-        var na = (name === 'setcounter' || name === 'addtocounter' || name === 'bibliographystyle' || name === 'bibliography') ? 1 : 2;
+    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'addtolength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'floatname': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal': case 'textwidth': case 'columnwidth': case 'linewidth': case 'DeclareMathOperator': {
+      if (name === 'usepackage' || name === 'RequirePackage') {
+        var po = readOpt(str, afterName);
+        var pg = G(po ? po.closeIdx + 1 : afterName);
+        return pg ? pg.end + 1 : (po ? po.closeIdx + 1 : afterName);
+      }
+      // 宏定义：消费宏名、可选参数及宏体，防止定义语法源码泄漏到正文
+      if (name === 'newcommand' || name === 'renewcommand' || name === 'providecommand' || name === 'def') {
+        var pDef = afterName;
+        var gName = G(pDef);
+        if (gName) pDef = gName.end + 1;
+        else {
+          var wsP = skipWs(str, pDef);
+          if (str.charAt(wsP) === '\\') {
+            var mId = str.slice(wsP).match(/^\\([A-Za-z]+)/);
+            if (mId) pDef = wsP + mId[0].length;
+          }
+        }
+        var oArg = readOpt(str, pDef);
+        if (oArg) {
+          pDef = oArg.closeIdx + 1;
+          var oDefVal = readOpt(str, pDef);
+          if (oDefVal) pDef = oDefVal.closeIdx + 1;
+        }
+        var gBody = G(pDef);
+        if (gBody) pDef = gBody.end + 1;
+        return pDef;
+      }
+      // 2 参数宏（或 1 可选 + 2 必选）：例如 setlength, definecolor, captionof, DeclareMathOperator
+      if (name === 'setlength' || name === 'addtolength' || name === 'definecolor' || name === 'captionof' || name === 'floatname' || name === 'DeclareMathOperator') {
         var p2 = afterName;
-        for (var k2 = 0; k2 < na + 1; k2++) { var gg = G(p2); if (!gg) break; p2 = gg.end + 1; }
+        var op2 = readOpt(str, p2); if (op2) p2 = op2.closeIdx + 1;
+        var gA = G(p2); if (gA) { p2 = gA.end + 1; var gB = G(p2); if (gB) p2 = gB.end + 1; }
         return p2;
       }
+      // 1 参数宏（可能带可选参数）：例如 vspace, hspace, linespread, pagestyle, usetikzlibrary, input, setcounter, bibliography 等
+      if (name === 'vspace' || name === 'hspace' || name === 'vspace*' || name === 'hspace*' || name === 'linespread' || name === 'pagestyle' || name === 'thispagestyle' || name === 'usetikzlibrary' || name === 'input' || name === 'include' || name === 'graphicspath' || name === 'captionsetup' || name === 'setcounter' || name === 'addtocounter' || name === 'bibliographystyle' || name === 'bibliography') {
+        var po1 = readOpt(str, afterName);
+        var pg1 = G(po1 ? po1.closeIdx + 1 : afterName);
+        return pg1 ? pg1.end + 1 : (po1 ? po1.closeIdx + 1 : afterName);
+      }
       return afterName;
+    }
 
     // ---- 表格横线 ----
     // 行首的 \hline/\toprule/… 由 renderTabular 提取成 tr 类名；出现在别处（单元格内、
@@ -1517,6 +1589,26 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       return { next: afterName, html: '<span class="alg-kw">not</span>' };
     case 'NULL': case 'NIL': case 'None':
       return { next: afterName, html: '<span class="alg-kw">null</span>' };
+    case 'phantom': case 'hphantom': case 'vphantom': {
+      g1 = G(afterName); if (!g1) return null;
+      return { next: g1.end + 1, html: '<span class="tex-phantom" style="visibility:hidden;">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</span>' };
+    }
+    case 'tnote': {
+      g1 = G(afterName); if (!g1) return null;
+      return { next: g1.end + 1, html: '<sup class="tnote">' + esc(g1.text.trim()) + '</sup>' };
+    }
+    case 'xspace':
+      return { next: afterName, html: ' ' };
+    case 'etal':
+      return { next: afterName, html: '<em>et&nbsp;al.</em>' };
+    case 'eg':
+      return { next: afterName, html: '<em>e.g.</em>' };
+    case 'ie':
+      return { next: afterName, html: '<em>i.e.</em>' };
+    case 'cf':
+      return { next: afterName, html: '<em>cf.</em>' };
+    case 'etc':
+      return { next: afterName, html: '<em>etc.</em>' };
   }
   return null;
 }
@@ -2019,24 +2111,31 @@ function renderEnv(env, ctx, absInnerStart) {
     }
 
     case 'algorithm': case 'algorithm*': {
-      var acap = null, acapSt = {}, am;
-      var acapRe = /\\caption(?![A-Za-z])/g;
+      var acap = null, acapStarred = false, acapSt = {}, am;
+      var acapRe = /\\caption(\*?)(?![A-Za-z])/g;
       while ((am = acapRe.exec(inner))) {
         var acg = optGroup(inner, am.index + am[0].length, acapSt);
         if (!acg) { if (acapSt.noClose >= 0) break; continue; }
         acap = acg.text;
+        acapStarred = am[1] === '*';
         break;
       }
       var isAlgStarred = env.name.endsWith('*');
       var alabels = labelsOf(inner);
       var acontent = inner.replace(/^\s*\[[^\]]*\]/, '');
-      ctx.counters.alg = (ctx.counters.alg || 0) + 1;
-      var algN = ctx.counters.alg;
-      alabels.forEach(function (k) { ctx.labels[k] = String(algN); });
-
-      var acapHtml = acap !== null ? renderFlow(acap, ctx, base, false, true) : '';
+      var aTitle = '';
+      if (acap !== null) {
+        var acapHtml = renderFlow(acap, ctx, base, false, true);
+        if (acapStarred) {
+          aTitle = acapHtml;
+        } else {
+          ctx.counters.alg = (ctx.counters.alg || 0) + 1;
+          var algN = ctx.counters.alg;
+          alabels.forEach(function (k) { ctx.labels[k] = String(algN); });
+          aTitle = esc(t('render.algorithm')) + '&nbsp;' + algN + esc(t('render.captionSeparator')) + acapHtml;
+        }
+      }
       var acontentHtml = renderFlow(acontent, ctx, base + (inner.length - acontent.length), false);
-      var aTitle = esc(t('render.algorithm')) + '&nbsp;' + algN + (acap !== null ? esc(t('render.captionSeparator')) + acapHtml : '');
       return '<figure class="float algorithm' + (isAlgStarred ? ' float-span' : '') + '">' +
         (acap !== null ? '<div class="alg-caption">' + aTitle + '</div>' : '') +
         '<div class="alg-body">' + acontentHtml + '</div></figure>';
@@ -2110,20 +2209,37 @@ function renderEnv(env, ctx, absInnerStart) {
         lt = chars.join('');
       }
       // longtable 自带题注（不套在 table 浮动体里），按表编号
-      var ltCap = null, ltSt = {}, ltLabels = labelsOf(lt);
-      var ltCapRe = /\\caption(?![A-Za-z])/g, lcm;
+      var ltCap = null, ltCapStarred = false, ltSt = {}, ltLabels = labelsOf(lt);
+      var ltCapRe = /\\caption(\*?)(?![A-Za-z])/g, lcm;
       while ((lcm = ltCapRe.exec(lt))) {
         var lg = optGroup(lt, lcm.index + lcm[0].length, ltSt);
         if (!lg) { if (ltSt.noClose >= 0) break; continue; }
         ltCap = lg.text;
+        ltCapStarred = lcm[1] === '*';
         break;
       }
       var tableHtml = renderTabular(lt, ctx, ltBase, false, 'width:100%');
       if (ltCap === null) return tableHtml;
+      var capText = renderFlow(ltCap, ctx, base, false, true);
+      if (ltCapStarred) {
+        return '<figure class="float tab">' + tableHtml + '<figcaption>' + capText + '</figcaption></figure>';
+      }
       var ltN = ++ctx.counters.tab;
       ltLabels.forEach(function (k) { ctx.labels[k] = String(ltN); });
       return '<figure class="float tab">' + tableHtml + '<figcaption>' + esc(t('render.table')) + '&nbsp;' + ltN +
-        esc(t('render.captionSeparator')) + renderFlow(ltCap, ctx, base, false, true) + '</figcaption></figure>';
+        esc(t('render.captionSeparator')) + capText + '</figcaption></figure>';
+    }
+
+    case 'threeparttable':
+      return '<div class="threeparttable">' + renderFlow(inner, ctx, base, false) + '</div>';
+
+    case 'tablenotes': {
+      var notesItems = splitItems(inner);
+      var notesHtml = notesItems.map(function (it) {
+        var itLabel = it.label !== undefined ? '<sup class="tnote">' + esc(it.label) + '</sup> ' : '';
+        return '<div class="tablenote-item">' + itLabel + renderFlow(it.text, ctx, base + it.start, false, true) + '</div>';
+      }).join('');
+      return '<div class="tablenotes">' + notesHtml + '</div>';
     }
 
     case 'appendix':

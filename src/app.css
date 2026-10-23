@@ -1564,3 +1564,13 @@ body.pl-zen .CodeMirror-lines { max-width: 860px; margin: 0 auto; }
 .tour-sp { flex: 1; }
 .tour-skip { border-color: transparent; background: transparent; color: var(--ink-faint); }
 .tour-skip:hover { border-color: var(--line); background: var(--hover); color: var(--ink-soft); }
+
+
+/* ---------- LaTeX 扩展排版类 ---------- */
+.subparag { margin: 0.4em 0; font-weight: bold; font-size: 0.95em; }
+.tex-phantom { visibility: hidden; }
+sup.tnote { font-size: 0.75em; vertical-align: super; line-height: 0; }
+.tablenotes { font-size: 0.85em; margin-top: 0.4em; color: var(--ink-soft); }
+.tablenote-item { margin: 0.15em 0; }
+.doc-affil { font-size: 0.9em; color: var(--ink-soft); margin-top: 0.2em; text-align: center; }
+.affil-mark { font-size: 0.75em; vertical-align: super; }

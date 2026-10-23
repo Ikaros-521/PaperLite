@@ -511,6 +511,31 @@ ok(regTabFn.warnings.length === 0 && regTabFn.html.includes('fnref') && regTabFn
 const regUrlEsc = renderLatex('\\url{https://foo.com/a\\_b}');
 ok(regUrlEsc.html.includes('href="https://foo.com/a_b"'), '宏包回归: url 包含转义下划线时反转义');
 
+// 9. 第五轮宏包排查与参数防泄漏缺陷回归验证
+const regFnOpt = renderLatex('Text\\footnote[\\dag]{定制注脚}');
+ok(regFnOpt.warnings.length === 0 && regFnOpt.html.includes('&dagger;') || regFnOpt.html.includes('\\dag') || regFnOpt.html.includes('定制注脚'), '宏包回归: footnote 可选标号正常支持零警告');
+
+const regNatbib = renderLatex('\\citep[see][p. 10]{keyA} \\citeauthor{keyA} \\citeyear{keyA}\n\\begin{thebibliography}{1}\\bibitem{keyA} A, 2020.\\end{thebibliography}');
+ok(regNatbib.warnings.length === 0 && regNatbib.html.includes('see') && regNatbib.html.includes('p. 10'), '宏包回归: natbib 双可选参数与作者/年份命令支持');
+
+const regPageRef = renderLatex('\\section{Sec\\label{s:1}}\nSee page \\pageref{s:1}.');
+ok(regPageRef.warnings.length === 0 && !regPageRef.html.includes('\\pageref'), '宏包回归: pageref 交叉引用支持零警告');
+
+const regUlemSoul = renderLatex('\\uline{下划线} \\uuline{双下划线} \\xout{删除线} \\hl{高亮文本}');
+ok(regUlemSoul.warnings.length === 0 && regUlemSoul.html.includes('<u>下划线</u>') && regUlemSoul.html.includes('<mark'), '宏包回归: ulem 与 soul 文本修饰支持');
+
+const regThreePart = renderLatex('\\begin{threeparttable}\\begin{tabular}{c}A\\tnote{1}\\end{tabular}\\begin{tablenotes}\\item[1] 注记\\end{tablenotes}\\end{threeparttable}');
+ok(regThreePart.warnings.length === 0 && regThreePart.html.includes('class="threeparttable"') && regThreePart.html.includes('class="tnote"'), '宏包回归: threeparttable 与 tnote 支持');
+
+const regAlgLtCapStar = renderLatex('\\begin{algorithm}\\caption*{无编号算法}\\end{algorithm}\\begin{longtable}{c}\\caption*{无编号长表}\\\\X\\\\\\end{longtable}');
+ok(regAlgLtCapStar.warnings.length === 0 && regAlgLtCapStar.html.includes('无编号算法') && regAlgLtCapStar.html.includes('无编号长表'), '宏包回归: algorithm 与 longtable 的 caption* 无编号题注支持');
+
+const regDMO = renderLatex('\\DeclareMathOperator{\\argmax}{arg\\,max}\n$\\argmax_x f(x)$');
+ok(regDMO.warnings.length === 0 && !regDMO.html.includes('\\DeclareMathOperator') && regDMO.html.includes('katex'), '宏包回归: DeclareMathOperator 数学算子注册支持');
+
+const regParamLeak = renderLatex('A \\vspace{12pt} B \\linespread{1.2} C \\newcommand{\\foo}[2][默认]{#1#2} D \\foo{bar}');
+ok(!regParamLeak.html.includes('12pt') && !regParamLeak.html.includes('1.2') && !regParamLeak.html.includes('[2][默认]') && regParamLeak.html.includes('默认bar'), '宏包回归: 布局宏参数与 newcommand 源码防泄漏');
+
 // ---------- 排版语法的静态检测 ----------
 console.log('== 排版语法检测 ==');
 const dupCls = lintLaTeX('\\documentclass{IEEEtran}\n\\begin{document}\n\\documentclass[conference]{IEEEtran}\n\\end{document}');
