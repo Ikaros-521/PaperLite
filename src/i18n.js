@@ -27,7 +27,7 @@ export function getLang() { return currentLang; }
 
 export const DICT = {
   zh: {
-    'render.abstract': '摘要', 'render.figure': '图', 'render.table': '表',
+    'render.abstract': '摘要', 'render.figure': '图', 'render.table': '表', 'render.algorithm': '算法',
     'render.references': '参考文献', 'render.contents': '目录', 'render.untitled': '无标题文档',
     'render.captionSeparator': '：', 'render.equation': '式',
     'render.indexTerms': '索引术语', 'render.termsSep': '：', 'render.proof': '证明。',
@@ -842,7 +842,7 @@ export const DICT = {
   },
 
   en: {
-    'render.abstract': 'Abstract', 'render.figure': 'Figure', 'render.table': 'Table',
+    'render.abstract': 'Abstract', 'render.figure': 'Figure', 'render.table': 'Table', 'render.algorithm': 'Algorithm',
     'render.references': 'References', 'render.contents': 'Contents', 'render.untitled': 'Untitled document',
     'render.captionSeparator': ': ', 'render.equation': 'Eq.',
     'render.indexTerms': 'Index Terms', 'render.termsSep': '\u2014', 'render.proof': 'Proof.',

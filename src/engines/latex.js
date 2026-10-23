@@ -357,6 +357,52 @@ export function scanMacros(src) {
   return macros;
 }
 
+// ---------------- 定理环境扫描 (\newtheorem) ----------------
+export function scanTheorems(src, isZh) {
+  var thms = Object.create(null);
+  var defaults = {
+    theorem: { title: isZh ? '定理' : 'Theorem', numbered: true },
+    lemma: { title: isZh ? '引理' : 'Lemma', numbered: true },
+    definition: { title: isZh ? '定义' : 'Definition', numbered: true },
+    corollary: { title: isZh ? '推论' : 'Corollary', numbered: true },
+    proposition: { title: isZh ? '命题' : 'Proposition', numbered: true },
+    example: { title: isZh ? '例' : 'Example', numbered: true },
+    remark: { title: isZh ? '注' : 'Remark', numbered: false },
+    conjecture: { title: isZh ? '猜想' : 'Conjecture', numbered: true },
+    axiom: { title: isZh ? '公理' : 'Axiom', numbered: true },
+    property: { title: isZh ? '性质' : 'Property', numbered: true }
+  };
+  Object.keys(defaults).forEach(function (k) {
+    thms[k] = defaults[k];
+    thms[k + '*'] = { title: defaults[k].title, numbered: false, sibling: null, parent: null };
+  });
+
+  var re = /\\newtheorem(\*?)\s*\{([^}]+)\}/g, m;
+  while ((m = re.exec(src))) {
+    var starred = m[1] === '*';
+    var name = m[2].trim();
+    var pos = m.index + m[0].length;
+    var sibling = null, parent = null, title = name;
+    var opt1 = readOpt(src, pos);
+    if (opt1) {
+      sibling = opt1.text.trim();
+      pos = opt1.closeIdx + 1;
+    }
+    var tg = readGroup(src, pos);
+    if (tg) {
+      title = tg.text.trim();
+      pos = tg.end + 1;
+      var opt2 = readOpt(src, pos);
+      if (opt2) parent = opt2.text.trim();
+    }
+    thms[name] = { title: title, numbered: !starred, sibling: sibling, parent: parent };
+    if (!starred) {
+      thms[name + '*'] = { title: title, numbered: false, sibling: null, parent: null };
+    }
+  }
+  return thms;
+}
+
 // 在 text 上展开宏（返回新串）。args 从 text 中宏名后依次抓取 {} 组。
 // 展开上限：\a → x\a 这类自增长的宏体能在 12 层递归里把正文撑到内存耗尽，
 // 次数与长度各封一道（与 readOpt 的 OPT_MAX、colspec 的 MAX_COLSPEC_COLS 同一套路）。
@@ -506,7 +552,7 @@ function renderLatex(srcRaw, opts) {
     // refPos['constructor'].push 更是直接抛错，整页预览只剩一条渲染异常横幅
     macros: Object.create(null),
     headings: [],
-    counters: { sec: 0, subsec: 0, subsubsec: 0, fig: 0, tab: 0, eq: 0, footnote: 0, bib: 0 },
+    counters: { sec: 0, subsec: 0, subsubsec: 0, fig: 0, tab: 0, eq: 0, footnote: 0, bib: 0, alg: 0, thm: Object.create(null) },
     appendix: false,   // \appendix 之后一级章节改用字母编号
     labels: Object.create(null),        // key -> 显示编号
     cites: Object.create(null),         // key -> 序号
@@ -554,6 +600,7 @@ function renderLatex(srcRaw, opts) {
   }
 
   parsePreamble(preamble, ctx, src);
+  ctx.theorems = scanTheorems(src, ctx.meta.ctex || getLang() === 'zh');
 
   var html = renderFlow(body, ctx, bodyBase, true);
   // 导言里的 \keywords 没有摘要块承接时，紧跟标题带显示，避免内容被丢掉
@@ -1176,10 +1223,10 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
 
     // ---- 版面（忽略类） ----
     case 'centering': case 'raggedright': case 'raggedleft': case 'noindent': case 'indent':
-    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal':
+    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'floatname': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal':
       // usepackage/setlength/definecolor 可能带参数，吞掉参数避免显示
       if (name === 'usepackage' || name === 'RequirePackage') { var po = readOpt(str, afterName); var pg = G(po ? po.closeIdx + 1 : afterName); return pg ? pg.end + 1 : afterName; }
-      if (name === 'setlength' || name === 'addtolength' || name === 'setcounter' || name === 'addtocounter' || name === 'definecolor' || name === 'graphicspath' || name === 'captionsetup' || name === 'renewcommand' || name === 'providecommand' || name === 'newcommand' || name === 'def' || name === 'bibliographystyle' || name === 'bibliography' || name === 'captionof') {
+      if (name === 'setlength' || name === 'addtolength' || name === 'setcounter' || name === 'addtocounter' || name === 'definecolor' || name === 'graphicspath' || name === 'captionsetup' || name === 'renewcommand' || name === 'providecommand' || name === 'newcommand' || name === 'def' || name === 'bibliographystyle' || name === 'bibliography' || name === 'captionof' || name === 'floatname') {
         var na = (name === 'setcounter' || name === 'addtocounter' || name === 'bibliographystyle' || name === 'bibliography') ? 1 : 2;
         var p2 = afterName;
         for (var k2 = 0; k2 < na + 1; k2++) { var gg = G(p2); if (!gg) break; p2 = gg.end + 1; }
@@ -1234,6 +1281,156 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'LaTeX': return { next: afterName, html: 'LaTeX' };
     case 'TeX': return { next: afterName, html: 'TeX' };
     case 'text': { g1 = G(afterName); if (g1) return { next: g1.end + 1, html: esc(g1.text) }; return null; }
+
+    // ---- 定理与证明辅助 ----
+    case 'newtheorem': {
+      var npos = afterName;
+      var ng1 = G(npos);
+      if (ng1) {
+        npos = ng1.end + 1;
+        var no1 = readOpt(str, npos);
+        if (no1) npos = no1.closeIdx + 1;
+        var ng2 = G(npos);
+        if (ng2) {
+          npos = ng2.end + 1;
+          var no2 = readOpt(str, npos);
+          if (no2) npos = no2.closeIdx + 1;
+        }
+      }
+      return npos;
+    }
+    case 'theoremstyle': {
+      var tg = G(afterName);
+      return tg ? tg.end + 1 : afterName;
+    }
+    case 'qed': case 'qedhere': {
+      var qedSym = ctx.inIeeeProof ? '&#8718;' : '&#9633;';
+      return { next: afterName, html: '<span class="proof-qed">' + qedSym + '</span>' };
+    }
+
+    // ---- 表格进阶 (makecell / thead / diagbox) ----
+    case 'makecell': case 'thead': {
+      o1 = readOpt(str, afterName);
+      var mcPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(mcPos);
+      if (!g1) return null;
+      var mcAlign = '';
+      if (o1) {
+        var al = o1.text.trim();
+        if (al.indexOf('l') >= 0) mcAlign = 'text-align:left;';
+        else if (al.indexOf('r') >= 0) mcAlign = 'text-align:right;';
+        else if (al.indexOf('c') >= 0) mcAlign = 'text-align:center;';
+      }
+      var mcInner = renderFlow(g1.text, ctx, base + g1.start, false, true);
+      var isTh = name === 'thead';
+      return {
+        next: g1.end + 1,
+        html: '<span class="makecell"' + (mcAlign ? ' style="' + mcAlign + '"' : '') + '>' +
+          (isTh ? '<strong>' + mcInner + '</strong>' : mcInner) + '</span>'
+      };
+    }
+    case 'diagbox': case 'slashbox': {
+      o1 = readOpt(str, afterName);
+      var dgPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(dgPos);
+      if (!g1) return null;
+      g2 = G(g1.end + 1);
+      if (!g2) return null;
+      var leftText = renderFlow(g1.text, ctx, base + g1.start, false, true);
+      var rightText = renderFlow(g2.text, ctx, base + g2.start, false, true);
+      return {
+        next: g2.end + 1,
+        html: '<span class="diagbox"><span class="diag-top-right">' + rightText + '</span><span class="diag-bot-left">' + leftText + '</span></span>'
+      };
+    }
+
+    // ---- 子图与题注 (subfigure / subcaption) ----
+    case 'subcaption': {
+      o1 = readOpt(str, afterName);
+      var scPos = o1 ? o1.closeIdx + 1 : afterName;
+      g1 = G(scPos);
+      if (!g1) return null;
+      if (ctx.inSubfigure) {
+        // 在 subfigure/subtable 环境内部，题注由外层环境统一抽取并在底部编号渲染，此处吞掉避免重复
+        return g1.end + 1;
+      }
+      ctx.subfigCounter = (ctx.subfigCounter || 0) + 1;
+      var scLetter = String.fromCharCode(96 + ctx.subfigCounter);
+      var scLabel = '(' + scLetter + ')';
+      return {
+        next: g1.end + 1,
+        html: '<div class="subfig-cap">' + scLabel + ' ' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</div>'
+      };
+    }
+    case 'subfigure': case 'subcaptionbox': case 'subfloat': {
+      var oMain = null;
+      var spos = afterName;
+      var oFirst = readOpt(str, spos);
+      if (oFirst) {
+        oMain = oFirst;
+        spos = oFirst.closeIdx + 1;
+        var oSecond = readOpt(str, spos);
+        if (oSecond) {
+          oMain = oSecond;
+          spos = oSecond.closeIdx + 1;
+        }
+      }
+      g1 = G(spos);
+      if (!g1) return null;
+      ctx.subfigCounter = (ctx.subfigCounter || 0) + 1;
+      var sbLetter = String.fromCharCode(96 + ctx.subfigCounter);
+      var sbLabel = '(' + sbLetter + ')';
+      var parentNum = (ctx.counters.fig || ctx.counters.tab || '') + '';
+      var subNum = parentNum ? parentNum + sbLetter : sbLabel;
+
+      var subTextForLabels = (oMain ? oMain.text : '') + ' ' + g1.text;
+      labelsOf(subTextForLabels).forEach(function (k) { ctx.labels[k] = subNum; });
+
+      var sbBody = renderFlow(g1.text, ctx, base + g1.start, false, true);
+      var sbCap = oMain ? '<div class="subfig-cap">' + sbLabel + ' ' + renderFlow(oMain.text, ctx, base + oMain.openIdx + 1, false, true) + '</div>' : '';
+      return {
+        next: g1.end + 1,
+        html: '<div class="subfigure">' + sbBody + sbCap + '</div>'
+      };
+    }
+
+    // ---- 算法伪代码指令 ----
+    case 'Return': case 'RETURN':
+      return { next: afterName, html: '<span class="alg-kw">return</span> ' };
+    case 'Comment': case 'COMMENT': {
+      g1 = G(afterName);
+      if (!g1) return null;
+      return {
+        next: g1.end + 1,
+        html: '<span class="alg-comment">&#9655;&nbsp;' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</span>'
+      };
+    }
+    case 'Call': case 'CALL': {
+      g1 = G(afterName);
+      if (!g1) return null;
+      g2 = G(g1.end + 1);
+      if (!g2) return null;
+      return {
+        next: g2.end + 1,
+        html: '<span class="alg-proc">' + esc(g1.text.trim()) + '</span>(' + renderFlow(g2.text, ctx, base + g2.start, false, true) + ')'
+      };
+    }
+    case 'gets':
+      return { next: afterName, html: '&larr;' };
+    case 'to':
+      return { next: afterName, html: '&rarr;' };
+    case 'TRUE': case 'true':
+      return { next: afterName, html: '<span class="alg-kw">true</span>' };
+    case 'FALSE': case 'false':
+      return { next: afterName, html: '<span class="alg-kw">false</span>' };
+    case 'AND':
+      return { next: afterName, html: '<span class="alg-kw">and</span>' };
+    case 'OR':
+      return { next: afterName, html: '<span class="alg-kw">or</span>' };
+    case 'NOT':
+      return { next: afterName, html: '<span class="alg-kw">not</span>' };
+    case 'NULL': case 'NIL': case 'None':
+      return { next: afterName, html: '<span class="alg-kw">null</span>' };
   }
   return null;
 }
@@ -1297,6 +1494,276 @@ function zhToday() {
   var d = new Date();
   if (getLang() === 'en') return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   return d.getFullYear() + ' 年 ' + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日';
+}
+
+// ---------------- 算法伪代码 (algorithmic / algpseudocode) ----------------
+function renderAlgorithmic(inner, ctx, base) {
+  var pos = 0;
+  var opt = readOpt(inner, 0);
+  var numbered = false;
+  if (opt) {
+    pos = opt.closeIdx + 1;
+    numbered = /^\d+$/.test(opt.text.trim());
+  }
+  var rawCode = inner.slice(pos);
+  var baseOff = base + pos;
+
+  var rawLines = rawCode.split('\n');
+  var curOff = baseOff;
+  var indent = 0;
+  var lineNo = 1;
+  var out = [];
+
+  function splitAlgLine(ln) {
+    // 关键字匹配：支持 PascalCase 与全大写，排除数学全称量词 \forall（必须全大写 FORALL 或 PascalCase ForAll）
+    var kwRe = /\\(?:Statex|State|STATE|Require|REQUIRE|Ensure|ENSURE|KwIn|KwOut|KwData|KwResult|If|IF|ElsIf|ELSIF|Else|ELSE|EndIf|ENDIF|For|FOR|ForAll|FORALL|EndFor|ENDFOR|While|WHILE|EndWhile|ENDWHILE|Repeat|REPEAT|Until|UNTIL|Loop|LOOP|EndLoop|ENDLOOP|Function|FUNCTION|EndFunction|ENDFUNCTION|Procedure|PROCEDURE|EndProcedure|ENDPROCEDURE|Print|PRINT)(?![A-Za-z])/g;
+    var inMath = false, depth = 0, matches = [];
+    for (var j = 0; j < ln.length; j++) {
+      var c = ln.charAt(j);
+      if (c === '$') { inMath = !inMath; continue; }
+      if (c === '\\') {
+        if (ln.substr(j, 2) === '\\(') { inMath = true; j++; continue; }
+        if (ln.substr(j, 2) === '\\)') { inMath = false; j++; continue; }
+        if (!inMath && depth === 0) {
+          kwRe.lastIndex = j;
+          var km = kwRe.exec(ln);
+          if (km && km.index === j) {
+            matches.push(j);
+            j += km[0].length - 1;
+            continue;
+          }
+        }
+        j++; continue;
+      }
+      if (c === '{') depth++;
+      else if (c === '}') { if (depth > 0) depth--; }
+    }
+    if (!matches.length || (matches.length === 1 && matches[0] === 0)) return [ln];
+    var res = [];
+    if (matches[0] > 0) res.push(ln.slice(0, matches[0]));
+    for (var k = 0; k < matches.length; k++) {
+      var nxt = k + 1 < matches.length ? matches[k + 1] : ln.length;
+      res.push(ln.slice(matches[k], nxt));
+    }
+    return res;
+  }
+
+  var stmts = [];
+  rawLines.forEach(function (ln) {
+    var lnLen = ln.length + 1;
+    var trimmed = ln.trim();
+    if (!trimmed) {
+      curOff += lnLen;
+      return;
+    }
+    var parts = splitAlgLine(ln);
+    var pOff = curOff;
+    parts.forEach(function (p) {
+      var pTrim = p.trim();
+      if (pTrim) {
+        stmts.push({ text: pTrim, off: pOff + (p.length - p.replace(/^\s+/, '').length) });
+      }
+      pOff += p.length;
+    });
+    curOff += lnLen;
+  });
+
+  stmts.forEach(function (st) {
+    var txt = st.text;
+    var off = st.off;
+    var lineIndent = indent;
+    var isNumberedLine = numbered;
+
+    var cmdM = txt.match(/^\\([A-Za-z]+)\*?/);
+    var cmdName = cmdM ? cmdM[1].toLowerCase() : '';
+    var afterCmd = cmdM ? cmdM[0].length : 0;
+    var rest = txt.slice(afterCmd).trim();
+
+    var lineHtml = '';
+
+    function formatExpr(s) {
+      return renderFlow(s, ctx, off, false, true);
+    }
+
+    switch (cmdName) {
+      case 'state':
+        lineHtml = formatExpr(rest);
+        break;
+
+      case 'statex':
+        isNumberedLine = false;
+        lineHtml = formatExpr(rest);
+        break;
+
+      case 'require': case 'kwin': case 'kwdata': {
+        isNumberedLine = false;
+        var g = readGroup(txt, afterCmd);
+        var reqText = g ? g.text : rest;
+        var extraReq = g ? txt.slice(g.end + 1).trim() : '';
+        lineHtml = '<span class="alg-kw">' + (cmdName === 'require' ? 'Require:' : 'Input:') + '</span> ' +
+          formatExpr(reqText) + (extraReq ? ' ' + formatExpr(extraReq) : '');
+        break;
+      }
+
+      case 'ensure': case 'kwout': case 'kwresult': {
+        isNumberedLine = false;
+        var g2 = readGroup(txt, afterCmd);
+        var ensText = g2 ? g2.text : rest;
+        var extraEns = g2 ? txt.slice(g2.end + 1).trim() : '';
+        lineHtml = '<span class="alg-kw">' + (cmdName === 'ensure' ? 'Ensure:' : 'Output:') + '</span> ' +
+          formatExpr(ensText) + (extraEns ? ' ' + formatExpr(extraEns) : '');
+        break;
+      }
+
+      case 'if': {
+        var gCond = readGroup(txt, afterCmd);
+        var condText = gCond ? gCond.text : rest;
+        var extra = gCond ? txt.slice(gCond.end + 1).trim() : '';
+        lineHtml = '<span class="alg-kw">if</span> ' + formatExpr(condText) + ' <span class="alg-kw">then</span>' + (extra ? ' ' + formatExpr(extra) : '');
+        lineIndent = indent;
+        indent++;
+        break;
+      }
+
+      case 'elsif': case 'elseif': {
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        var gCond2 = readGroup(txt, afterCmd);
+        var condText2 = gCond2 ? gCond2.text : rest;
+        var extra2 = gCond2 ? txt.slice(gCond2.end + 1).trim() : '';
+        lineHtml = '<span class="alg-kw">else if</span> ' + formatExpr(condText2) + ' <span class="alg-kw">then</span>' + (extra2 ? ' ' + formatExpr(extra2) : '');
+        indent++;
+        break;
+      }
+
+      case 'else': {
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        lineHtml = '<span class="alg-kw">else</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        indent++;
+        break;
+      }
+
+      case 'endif':
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        lineHtml = '<span class="alg-kw">end if</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        break;
+
+      case 'for': case 'forall': {
+        var isAll = cmdName === 'forall';
+        var gFor = readGroup(txt, afterCmd);
+        var forCond = gFor ? gFor.text : rest;
+        var extraFor = gFor ? txt.slice(gFor.end + 1).trim() : '';
+        lineHtml = '<span class="alg-kw">' + (isAll ? 'for all' : 'for') + '</span> ' + formatExpr(forCond) + ' <span class="alg-kw">do</span>' + (extraFor ? ' ' + formatExpr(extraFor) : '');
+        lineIndent = indent;
+        indent++;
+        break;
+      }
+
+      case 'endfor':
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        lineHtml = '<span class="alg-kw">end for</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        break;
+
+      case 'while': {
+        var gWh = readGroup(txt, afterCmd);
+        var whCond = gWh ? gWh.text : rest;
+        var extraWh = gWh ? txt.slice(gWh.end + 1).trim() : '';
+        lineHtml = '<span class="alg-kw">while</span> ' + formatExpr(whCond) + ' <span class="alg-kw">do</span>' + (extraWh ? ' ' + formatExpr(extraWh) : '');
+        lineIndent = indent;
+        indent++;
+        break;
+      }
+
+      case 'endwhile':
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        lineHtml = '<span class="alg-kw">end while</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        break;
+
+      case 'repeat':
+        lineHtml = '<span class="alg-kw">repeat</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        lineIndent = indent;
+        indent++;
+        break;
+
+      case 'until': {
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        var gUn = readGroup(txt, afterCmd);
+        var unCond = gUn ? gUn.text : rest;
+        var extraUn = gUn ? txt.slice(gUn.end + 1).trim() : '';
+        lineHtml = '<span class="alg-kw">until</span> ' + formatExpr(unCond) + (extraUn ? ' ' + formatExpr(extraUn) : '');
+        break;
+      }
+
+      case 'loop':
+        lineHtml = '<span class="alg-kw">loop</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        lineIndent = indent;
+        indent++;
+        break;
+
+      case 'endloop':
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        lineHtml = '<span class="alg-kw">end loop</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        break;
+
+      case 'function': case 'procedure': {
+        var isFn = cmdName === 'function';
+        var gName = readGroup(txt, afterCmd);
+        var pName = gName ? gName.text : '';
+        var nextP = gName ? gName.end + 1 : afterCmd;
+        var gArgs = readGroup(txt, nextP);
+        var pArgs = gArgs ? gArgs.text : '';
+        var extraFn = gArgs ? txt.slice(gArgs.end + 1).trim() : (gName ? txt.slice(gName.end + 1).trim() : rest);
+        lineHtml = '<span class="alg-kw">' + (isFn ? 'function' : 'procedure') + '</span> <span class="alg-proc">' +
+          esc(pName) + '</span>(' + renderFlow(pArgs, ctx, off, false, true) + ')' + (extraFn ? ' ' + formatExpr(extraFn) : '');
+        lineIndent = indent;
+        indent++;
+        break;
+      }
+
+      case 'endfunction':
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        lineHtml = '<span class="alg-kw">end function</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        break;
+
+      case 'endprocedure':
+        indent = Math.max(0, indent - 1);
+        lineIndent = indent;
+        lineHtml = '<span class="alg-kw">end procedure</span>' + (rest ? ' ' + formatExpr(rest) : '');
+        break;
+
+      case 'return':
+        lineHtml = '<span class="alg-kw">return</span> ' + formatExpr(rest);
+        break;
+
+      case 'print':
+        lineHtml = '<span class="alg-kw">print</span> ' + formatExpr(rest);
+        break;
+
+      default:
+        lineHtml = formatExpr(txt);
+        break;
+    }
+
+    var noHtml = '';
+    if (numbered) {
+      if (isNumberedLine) {
+        noHtml = '<span class="alg-lineno">' + (lineNo++) + ':</span>';
+      } else {
+        noHtml = '<span class="alg-lineno">&nbsp;</span>';
+      }
+    }
+
+    out.push('<div class="alg-line" style="--alg-indent:' + lineIndent + '">' + noHtml + '<span class="alg-text">' + lineHtml + '</span></div>');
+  });
+
+  return out.join('\n');
 }
 
 // ---------------- 环境渲染 ----------------
@@ -1366,9 +1833,20 @@ function renderEnv(env, ctx, absInnerStart) {
     case 'figure': case 'figure*': case 'table': case 'table*': {
       var isFig = env.name.indexOf('figure') === 0;
       var cap = null, capSt = {}, m;
-      // 提取 \caption{...}（括号配平）：候选定位交给 optGroup，缺 ] / } 时不再逐个重扫余文
+      // 提取 \caption{...}（括号配平）：必须排除嵌套子环境（subfigure/subtable）内部的 \caption
+      var subZones = [];
+      var subRe = /\\begin\s*\{(subfigure|subtable)\}/g, sm;
+      while ((sm = subRe.exec(inner))) {
+        var subName = sm[1];
+        var endRe = new RegExp('\\\\end\\s*\\{' + subName + '\\}', 'g');
+        endRe.lastIndex = sm.index;
+        var em = endRe.exec(inner);
+        subZones.push([sm.index, em ? em.index + em[0].length : inner.length]);
+      }
       var capRe = /\\caption(?![A-Za-z])/g;
       while ((m = capRe.exec(inner))) {
+        var inSub = subZones.some(function (z) { return m.index >= z[0] && m.index < z[1]; });
+        if (inSub) continue;
         var cg = optGroup(inner, m.index + m[0].length, capSt);
         if (!cg) { if (capSt.noClose >= 0) break; continue; }
         cap = cg.text;
@@ -1379,16 +1857,94 @@ function renderEnv(env, ctx, absInnerStart) {
       // 浮动体位置选项（[h]/[!htbp] 等）不参与排版，吞掉避免渲染成正文
       var content = inner.replace(/^\s*\[[^\]]*\]/, '');
 
+      var isStarred = env.name.endsWith('*');
       var n2 = isFig ? ++ctx.counters.fig : ++ctx.counters.tab;
       labels.forEach(function (k) { ctx.labels[k] = String(n2); });
+
+      ctx.subfigCounter = 0;
+      var hasSub = /\\begin\s*\{(?:subfigure|subtable)\}|\\(?:subfigure|subfloat|subcaptionbox)(?![A-Za-z])/.test(inner);
 
       var capHtml = cap !== null ? renderFlow(cap, ctx, base, false, true) : '';
       // content 相对 inner 截去了前导 [..]，base 需同步平移，否则子环境（tikzpicture）的源码偏移会错位
       var contentHtml = renderFlow(content, ctx, base + (inner.length - content.length), false);
       var capName = esc(t(isFig ? 'render.figure' : 'render.table'));
-      return '<figure class="float ' + (isFig ? 'fig' : 'tab') + '">' + contentHtml +
-        (cap !== null ? '<figcaption>' + capName + '&nbsp;' + n2 + esc(t('render.captionSeparator')) + capHtml + '</figcaption>' : '') + '</figure>';
+      var figCapHtml = cap !== null ? '<figcaption>' + capName + '&nbsp;' + n2 + esc(t('render.captionSeparator')) + capHtml + '</figcaption>' : '';
+      return '<figure class="float ' + (isFig ? 'fig' : 'tab') + (hasSub ? ' has-subfigures' : '') + (isStarred ? ' float-span' : '') + '">' +
+        (isFig ? contentHtml + figCapHtml : figCapHtml + contentHtml) + '</figure>';
     }
+
+    case 'subfigure': case 'subtable': {
+      var spos = 0, so;
+      while ((so = readOpt(inner, spos))) spos = so.closeIdx + 1;
+      var sw = readGroup(inner, spos);
+      var widthCss = '';
+      if (sw) {
+        var wm = sw.text.match(/([\d.]*)\\(?:textwidth|linewidth|columnwidth)/);
+        if (wm) {
+          var f = wm[1] === '' ? 1 : parseFloat(wm[1]);
+          if (isFinite(f)) widthCss = 'width:' + Math.min(100, Math.max(10, f * 100)) + '%;';
+        } else {
+          var dim = texDimCss(sw.text);
+          if (dim) widthCss = 'width:' + dim + ';';
+        }
+        spos = sw.end + 1;
+      }
+      var sbody = inner.slice(spos);
+      ctx.subfigCounter = (ctx.subfigCounter || 0) + 1;
+      var subLetter = String.fromCharCode(96 + ctx.subfigCounter);
+      var subLabel = '(' + subLetter + ')';
+
+      var scap = null, scapSt = {}, sm;
+      var scapRe = /\\(?:sub)?caption(?![A-Za-z])/g;
+      while ((sm = scapRe.exec(sbody))) {
+        var scg = optGroup(sbody, sm.index + sm[0].length, scapSt);
+        if (!scg) { if (scapSt.noClose >= 0) break; continue; }
+        scap = scg.text;
+        break;
+      }
+      var slabels = labelsOf(sbody);
+      slabels.forEach(function (k) {
+        var parentNum = (env.name === 'subtable' ? ctx.counters.tab : ctx.counters.fig) || '';
+        ctx.labels[k] = parentNum ? parentNum + subLetter : subLabel;
+      });
+
+      var sContentHtml;
+      ctx.inSubfigure = true;
+      try {
+        sContentHtml = renderFlow(sbody, ctx, base + spos, false);
+      } finally {
+        ctx.inSubfigure = false;
+      }
+      var scapHtml = scap !== null ? '<div class="subfig-cap">' + subLabel + ' ' + renderFlow(scap, ctx, base + spos, false, true) + '</div>' : '';
+      return '<div class="subfigure"' + (widthCss ? ' style="' + widthCss + '"' : '') + '>' + sContentHtml + scapHtml + '</div>';
+    }
+
+    case 'algorithm': case 'algorithm*': {
+      var acap = null, acapSt = {}, am;
+      var acapRe = /\\caption(?![A-Za-z])/g;
+      while ((am = acapRe.exec(inner))) {
+        var acg = optGroup(inner, am.index + am[0].length, acapSt);
+        if (!acg) { if (acapSt.noClose >= 0) break; continue; }
+        acap = acg.text;
+        break;
+      }
+      var isAlgStarred = env.name.endsWith('*');
+      var alabels = labelsOf(inner);
+      var acontent = inner.replace(/^\s*\[[^\]]*\]/, '');
+      ctx.counters.alg = (ctx.counters.alg || 0) + 1;
+      var algN = ctx.counters.alg;
+      alabels.forEach(function (k) { ctx.labels[k] = String(algN); });
+
+      var acapHtml = acap !== null ? renderFlow(acap, ctx, base, false, true) : '';
+      var acontentHtml = renderFlow(acontent, ctx, base + (inner.length - acontent.length), false);
+      var aTitle = esc(t('render.algorithm')) + '&nbsp;' + algN + (acap !== null ? esc(t('render.captionSeparator')) + acapHtml : '');
+      return '<figure class="float algorithm' + (isAlgStarred ? ' float-span' : '') + '">' +
+        (acap !== null ? '<div class="alg-caption">' + aTitle + '</div>' : '') +
+        '<div class="alg-body">' + acontentHtml + '</div></figure>';
+    }
+
+    case 'algorithmic': case 'algpseudocode':
+      return renderAlgorithmic(inner, ctx, base);
 
     case 'tikzpicture': return renderTikzEnv(env, ctx, absInnerStart);
     case 'mermaid': {
@@ -1495,8 +2051,26 @@ function renderEnv(env, ctx, absInnerStart) {
         '<div class="bio-text">' + renderFlow(bbody, ctx, base + bstart, false) + '</div></figure>';
     }
 
-    case 'IEEEproof':
-      return '<div class="proof"><span class="proof-label">' + esc(t('render.proof')) + '</span>' + renderFlow(inner, ctx, base, false) + '<span class="qed">&#8718;</span></div>';
+    case 'proof': case 'IEEEproof': {
+      var isIeee = env.name === 'IEEEproof';
+      var popt = readOpt(inner, 0);
+      var ppos = popt ? popt.closeIdx + 1 : 0;
+      var pbody = inner.slice(ppos);
+      var defTitle = esc(t('render.proof'));
+      var head = popt ? renderFlow(popt.text, ctx, base + popt.openIdx + 1, false, true) + (popt.text.trim().endsWith('.') || popt.text.trim().endsWith('。') ? '' : '.') : defTitle;
+      var prevIeee = ctx.inIeeeProof;
+      ctx.inIeeeProof = isIeee;
+      var bodyHtml;
+      try {
+        bodyHtml = renderFlow(pbody, ctx, base + ppos, false);
+      } finally {
+        ctx.inIeeeProof = prevIeee;
+      }
+      var qedSymbol = isIeee ? '&#8718;' : '&#9633;';
+      var hasQed = /\\qed(?:here)?(?![A-Za-z])|class="proof-qed"/.test(pbody);
+      return '<div class="proof-block' + (isIeee ? ' ieee-proof' : '') + '"><span class="proof-head">' + head + '</span>' +
+        bodyHtml + (hasQed ? '' : '<span class="proof-qed">' + qedSymbol + '</span>') + '</div>';
+    }
 
     case 'IEEEeqnarray': case 'IEEEeqnarray*': {
       // 第一组是列格式（rCl 之类），不参与渲染；其余按 align 近似
@@ -1505,6 +2079,39 @@ function renderEnv(env, ctx, absInnerStart) {
     }
 
     default: {
+      if (ctx.theorems && ctx.theorems[env.name]) {
+        var thm = ctx.theorems[env.name];
+        var topt = readOpt(inner, 0);
+        var tpos = topt ? topt.closeIdx + 1 : 0;
+        var tbody = inner.slice(tpos);
+        var numStr = '';
+        if (thm.numbered) {
+          var cntKey = thm.sibling || env.name;
+          var parent = thm.parent || (thm.sibling && ctx.theorems[thm.sibling] ? ctx.theorems[thm.sibling].parent : null);
+          if (!ctx.counters.thm) ctx.counters.thm = Object.create(null);
+          if (!ctx.counters.thmSec) ctx.counters.thmSec = Object.create(null);
+          if (parent === 'section') {
+            var curSec = ctx.counters.sec || 0;
+            if (ctx.counters.thmSec[cntKey] !== curSec) {
+              ctx.counters.thm[cntKey] = 0;
+              ctx.counters.thmSec[cntKey] = curSec;
+            }
+          }
+          ctx.counters.thm[cntKey] = (ctx.counters.thm[cntKey] || 0) + 1;
+          var curNum = ctx.counters.thm[cntKey];
+          if (parent === 'section' && ctx.counters.sec) {
+            numStr = ctx.counters.sec + '.' + curNum;
+          } else {
+            numStr = String(curNum);
+          }
+          labelsOf(inner).forEach(function (k) { ctx.labels[k] = numStr; });
+        }
+        var headHtml = esc(thm.title) + (numStr ? '&nbsp;' + numStr : '');
+        var optHtml = topt ? '<span class="thm-opt">(' + renderFlow(topt.text, ctx, base + topt.openIdx + 1, false, true) + ')</span>' : '';
+        var thmBodyHtml = renderFlow(tbody, ctx, base + tpos, false);
+        return '<div class="theorem-block" data-thm="' + esc(env.name) + '"><strong class="thm-head">' + headHtml + '</strong>' +
+          optHtml + '<div class="thm-body">' + thmBodyHtml + '</div></div>';
+      }
       ctx.warn(t('render.environmentFallback', { name: env.name }), base, 'env');
       return '<div class="env-unknown" data-env="' + esc(env.name) + '">' + renderFlow(inner, ctx, base, false) + '</div>';
     }
@@ -1659,6 +2266,8 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
   // 可视化编辑元数据：行的内容区间 + 每个单元格去空白后的源码区间与原文
   var tblId = ctx.tables.length;
   var tblRows = [];
+  var skipGrid = Object.create(null);
+  var curRowIdx = -1;
   // 处理行内规则线
   var trs = [];
   var lastTrIdx = -1;
@@ -1682,11 +2291,32 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
       pendingRule = (pendingRule || '') + ruleClass;
       return;
     }
+    curRowIdx++;
     var rowInfo = { contentStart: base + bodyStart + rr.start + consumed, contentEnd: base + bodyStart + rr.start + consumed + t.length, cells: [] };
-    var cells = splitTopLevel(t, '&').map(function (c2, ci) {
+    var colCursor = 0;
+    var cellsHtml = [];
+    var rawCells = splitTopLevel(t, '&');
+    rawCells.forEach(function (c2) {
       var lead = c2.text.length - c2.text.replace(/^\s+/, '').length;  // trim 掉的前导空白要补进偏移，回跳才落得到单元格行
       var raw = c2.text.trim();
-      var orig = raw;   // multicolumn 剥壳前的源码原文（面板按原文编辑）
+      var orig = raw;   // multicolumn / multirow 剥壳前的源码原文（面板按原文编辑）
+
+      var cellStart = base + bodyStart + rr.start + consumed + c2.start + lead;
+      rowInfo.cells.push({ start: cellStart, end: cellStart + orig.length, raw: orig });
+
+      // 如果当前列已被前序行 rowspan 覆盖且当前格为空（LaTeX 标准占位写法 &），跳过生成 <td>
+      while (skipGrid[curRowIdx] && skipGrid[curRowIdx][colCursor]) {
+        if (!raw) {
+          // 当前空单元格匹配到了被覆盖列，直接消费
+          break;
+        }
+        colCursor++;
+      }
+      if (skipGrid[curRowIdx] && skipGrid[curRowIdx][colCursor] && !raw) {
+        colCursor++;
+        return;
+      }
+
       var span = 1;
       var mcIdx = raw.indexOf('\\multicolumn');
       if (mcIdx >= 0) {
@@ -1702,20 +2332,60 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
           }
         }
       }
-      var cellStart = base + bodyStart + rr.start + consumed + c2.start + lead;
-      rowInfo.cells.push({ start: cellStart, end: cellStart + orig.length, raw: orig });
+
+      var rowSpan = 1;
+      var mrIdx = raw.indexOf('\\multirow');
+      if (mrIdx >= 0) {
+        var mrPos = mrIdx + 9;
+        var mrOpt1 = readOpt(raw, mrPos);
+        if (mrOpt1) mrPos = mrOpt1.closeIdx + 1;
+        var mrg1 = readGroup(raw, mrPos);
+        if (mrg1 && /^-?\d+$/.test(mrg1.text.trim())) {
+          var rspanNum = parseInt(mrg1.text.trim(), 10);
+          var mrg2Pos = mrg1.end + 1;
+          var p2 = skipWs(raw, mrg2Pos);
+          if (raw.charAt(p2) === '{') {
+            var mrg2 = readGroup(raw, p2);
+            mrg2Pos = mrg2 ? mrg2.end + 1 : p2;
+          } else if (raw.charAt(p2) === '*') {
+            mrg2Pos = p2 + 1;
+          }
+          var mrOpt2 = readOpt(raw, mrg2Pos);
+          if (mrOpt2) mrg2Pos = mrOpt2.closeIdx + 1;
+          var mrg3 = readGroup(raw, mrg2Pos);
+          if (mrg3) {
+            if (rspanNum > 1) rowSpan = rspanNum;
+            raw = raw.slice(0, mrIdx) + mrg3.text + raw.slice(mrg3.end + 1);
+          }
+        }
+      }
+
+      if (rowSpan > 1) {
+        for (var rs = 1; rs < rowSpan; rs++) {
+          var rIdx = curRowIdx + rs;
+          if (!skipGrid[rIdx]) skipGrid[rIdx] = Object.create(null);
+          for (var cs = 0; cs < span; cs++) {
+            skipGrid[rIdx][colCursor + cs] = true;
+          }
+        }
+      }
+
       var cell = renderFlow(raw, ctx, cellStart, false);
       var cls = [];
-      if (cols.rules[ci]) cls.push('vline');
-      if (cols.align[ci] === 'l') cls.push('ta-l');
-      if (cols.align[ci] === 'r') cls.push('ta-r');
-      var w = cols.widths[ci] ? ' style="width:' + cols.widths[ci] + '"' : '';
-      return '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + (cls.length ? ' class="' + cls.join(' ') + '"' : '') + w + '>' + cell + '</td>';
-    }).join('');
+      if (cols.rules[colCursor]) cls.push('vline');
+      if (cols.align[colCursor] === 'l') cls.push('ta-l');
+      if (cols.align[colCursor] === 'r') cls.push('ta-r');
+      var w = cols.widths[colCursor] ? ' style="width:' + cols.widths[colCursor] + '"' : '';
+      var td = '<td' + (span > 1 ? ' colspan="' + span + '"' : '') +
+        (rowSpan > 1 ? ' rowspan="' + rowSpan + '"' : '') +
+        (cls.length ? ' class="' + cls.join(' ') + '"' : '') + w + '>' + cell + '</td>';
+      cellsHtml.push(td);
+      colCursor += span;
+    });
     tblRows.push(rowInfo);
     var trCls = (pendingRule || '') + ruleClass;
     pendingRule = null;
-    trs.push('<tr class="' + trCls.trim() + '"' + (rr.gap ? ' style="--rg:' + rr.gap + '"' : '') + '>' + cells + '</tr>');
+    trs.push('<tr class="' + trCls.trim() + '"' + (rr.gap ? ' style="--rg:' + rr.gap + '"' : '') + '>' + cellsHtml.join('') + '</tr>');
     lastTrIdx = trs.length - 1;
   });
   // 末尾独立规则线（如 ... \\ \bottomrule）附加到最后一行

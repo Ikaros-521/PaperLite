@@ -314,6 +314,185 @@ const brkOffset = renderLatex(String.raw`\documentclass{ctexart}\begin{document}
 ok(brkOffset.warnings.length === 0, '带间距的表格不产生渲染警告: ' + brkOffset.warnings.map(w => w.msg).join(' | '));
 
 // ---------- 排版语法的静态检测 ----------
+// ---------- 高校论文常用 LaTeX 宏包支持 ----------
+console.log('== 宏包支持：算法伪代码 / 高级表格 / 定理证明 / 子图 ==');
+
+// 1. 算法与伪代码
+const algDoc = String.raw`\documentclass{article}
+\usepackage{algorithm,algpseudocode}
+\begin{document}
+\begin{algorithm}[h]
+  \caption{Euclid's algorithm}
+  \label{alg:euclid}
+  \begin{algorithmic}[1]
+    \Require $a, b \ge 0$
+    \Ensure $\gcd(a, b)$
+    \State $r \gets a \bmod b$ \Comment{init remainder}
+    \While{$r \ne 0$}
+      \State $a \gets b$
+      \State $b \gets r$
+      \State $r \gets a \bmod b$
+    \EndWhile
+    \State \Return $b$
+  \end{algorithmic}
+\end{algorithm}
+引用算法：\ref{alg:euclid}
+\end{document}`;
+const algRes = renderLatex(algDoc);
+ok(algRes.html.includes('class="float algorithm"'), '渲染 algorithm 浮动容器');
+ok(algRes.html.includes('Euclid'), '包含算法题注标题');
+ok(algRes.html.includes('class="alg-line"'), '生成算法行');
+ok(algRes.html.includes('class="alg-lineno"'), '生成行号标签');
+ok(algRes.html.includes('1:</span>') && algRes.html.includes('6:</span>'), '行号连续递增');
+ok(algRes.html.includes('--alg-indent:1'), 'While 循环内部存在缩进');
+ok(algRes.html.includes('class="alg-comment"'), '渲染算法注释');
+ok(algRes.html.includes('引用算法：1'), '算法引用 \\ref 成功回填对应编号: ' + algRes.html);
+
+// 2. 高级表格（multirow, makecell, diagbox）
+const tabDoc = String.raw`\documentclass{article}
+\usepackage{multirow,makecell,diagbox}
+\begin{document}
+\begin{tabular}{|c|c|c|}
+\hline
+\multirow{2}{*}{合并两行} & \makecell{第一行\\第二行} & \diagbox{行}{列} \\
+\cline{2-3}
+& \thead{表头A\\副标题} & 普通格 \\
+\hline
+\end{tabular}
+\end{document}`;
+const tabRes = renderLatex(tabDoc);
+ok(tabRes.html.includes('rowspan="2"'), '表格支持 rowspan 属性');
+ok(tabRes.html.includes('class="makecell"'), '生成 makecell 行内换行容器');
+ok(tabRes.html.includes('第一行<br/>第二行'), 'makecell 内部 \\ 转换为 <br/>');
+ok(tabRes.html.includes('<strong>表头A<br/>副标题</strong>'), 'thead 自动加粗换行表头');
+ok(tabRes.html.includes('class="diagbox"'), '支持 diagbox 对角表头');
+const tabTrs = tabRes.html.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || [];
+ok(tabTrs.length === 2, '生成 2 行数据');
+const r2Tds = (tabTrs[1].match(/<td/g) || []).length;
+ok(r2Tds === 2, '第二行正确跳过占位空单元格，保持列数对齐 (2 tds): ' + tabTrs[1]);
+
+// 3. 定理与证明
+const thmDoc = String.raw`\documentclass{article}
+\usepackage{amsthm}
+\newtheorem{mythm}{引申定理}[section]
+\begin{document}
+\section{基础理论}
+\begin{theorem}[勾股定理]
+\label{thm:pyth}
+直角三角形斜边平方等于两直角边平方和。
+\end{theorem}
+\begin{mythm}
+这是自定义并按章节编号的定理。
+\end{mythm}
+\begin{proof}[勾股定理的证明]
+通过面积分割法显然成立。\qed
+\end{proof}
+定理编号引用：\ref{thm:pyth}
+\end{document}`;
+const thmRes = renderLatex(thmDoc);
+ok(thmRes.html.includes('class="theorem-block"'), '渲染 theorem-block');
+ok(thmRes.html.includes('thm-head') && thmRes.html.includes('thm-opt'), '渲染定理头与可选名');
+ok(thmRes.html.includes('勾股定理'), '包含定理自定义名称');
+ok(thmRes.html.includes('class="proof-block"'), '渲染 proof-block');
+ok(thmRes.html.includes('勾股定理的证明.'), '自定义证明标题');
+ok(thmRes.html.includes('class="proof-qed"'), '包含 QED 证明结束符号 □');
+ok(thmRes.html.includes('定理编号引用：1'), '定理 label/ref 正确绑定');
+
+// 4. 子图与子题注
+const subDoc = String.raw`\documentclass{article}
+\usepackage{subcaption,graphicx}
+\begin{document}
+\begin{figure}[htbp]
+  \begin{subfigure}[b]{0.45\textwidth}
+    \caption{子图 A}
+    \label{sub:a}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.45\textwidth}
+    \caption{子图 B}
+    \label{sub:b}
+  \end{subfigure}
+  \caption{总图}
+  \label{fig:main}
+\end{figure}
+引用主图：\ref{fig:main}，引用子图：\ref{sub:a}
+\end{document}`;
+const subRes = renderLatex(subDoc);
+ok(subRes.html.includes('has-subfigures'), '主图 figure 自动挂上 has-subfigures 类');
+ok(subRes.html.includes('class="subfigure"'), '渲染 subfigure 子容器');
+ok(subRes.html.includes('width:45%;'), '宽度百分比正确折算');
+ok(subRes.html.includes('(a)') && subRes.html.includes('(b)'), '子图编号 (a) (b) 自动生成');
+ok(subRes.html.includes('引用主图：1'), '主图编号绑定');
+ok(subRes.html.includes('引用子图：1a'), '子图引用绑定主图+字母序号');
+
+// 5. 宏包扩展审查缺陷回归验证
+const regCap = renderLatex('\\begin{figure}\\begin{subfigure}{0.45\\textwidth}\\caption{子图 A}\\end{subfigure}\\caption{总图标题}\\end{figure}');
+ok(regCap.html.includes('总图标题') && regCap.html.includes('<figcaption>图&nbsp;1：总图标题</figcaption>'), '宏包回归: 主图题注不被子图劫持');
+
+const regMath = renderLatex('\\begin{algorithmic}\\State $x \\in S, \\forall y$\\end{algorithmic}');
+ok(!regMath.html.includes('for all') && regMath.html.includes('x \\in S, \\forall y'), '宏包回归: 数学量词 \\forall 不被错误切断');
+
+const regRet = renderLatex('\\begin{algorithmic}\\State \\Return x\\end{algorithmic}');
+ok(regRet.html.includes('<span class="alg-kw">return</span>') && !regRet.html.includes('&lt;span'), '宏包回归: \\Return 正常高亮无二次实体转义');
+
+const regSubcap = renderLatex('\\begin{figure}\\begin{subfigure}{0.5\\textwidth}\\subcaption{说明}\\end{subfigure}\\end{figure}');
+const subCount = (regSubcap.html.match(/subfig-cap/g) || []).length;
+ok(subCount === 1, '宏包回归: \\subcaption 在子图内不重复渲染');
+
+const regSecThm = renderLatex('\\newtheorem{mythm}{Theorem}[section]\\begin{document}\\section{A}\\begin{mythm}T1\\end{mythm}\\section{B}\\begin{mythm}T2\\end{mythm}\\end{document}');
+ok(regSecThm.html.includes('Theorem&nbsp;2.1'), '宏包回归: 定理跨 section 计数器归零重置');
+
+const regFnCom = renderLatex('\\begin{algorithmic}\\Function{Calc}{$x$} \\Comment{注释}\\State x\\EndFunction\\end{algorithmic}');
+ok(regFnCom.html.includes('注释') && regFnCom.html.includes('alg-comment'), '宏包回归: Function 行末 \\Comment 正常保留');
+
+const regThmDiv = renderLatex('\\begin{theorem}T\\end{theorem}');
+ok(regThmDiv.html.includes('<div class="thm-body">'), '宏包回归: thm-body 为 div 语义块');
+
+// 6. 第二轮宏包审查缺陷回归验证
+const regThmSib = renderLatex('\\newtheorem{thm}{Theorem}[section]\n\\newtheorem{lem}[thm]{Lemma}\n\\begin{document}\n\\section{Sec 1}\\begin{thm}T1\\end{thm}\n\\section{Sec 2}\\begin{lem}L1\\end{lem}\\begin{thm}T2\\end{thm}\n\\end{document}');
+ok(regThmSib.html.includes('Lemma&nbsp;2.1') && regThmSib.html.includes('Theorem&nbsp;2.2'), '宏包回归: 共享计数器的从属定理继承 parent 章节重置与编号');
+
+const regSubTab = renderLatex('\\begin{figure}\\caption{F1}\\end{figure}\\begin{figure}\\caption{F2}\\end{figure}\\begin{table}\\begin{subtable}{0.4\\textwidth}\\caption{ST}\\label{st1}\\end{subtable}\\caption{T1}\\end{table}引用：\\ref{st1}');
+ok(regSubTab.html.includes('引用：1a'), '宏包回归: subtable 引用正确绑定 table 编号而非先前 figure 编号');
+
+const regQedHere = renderLatex('\\begin{proof}Step 1. \\qedhere\\end{proof}');
+const qedCount = (regQedHere.html.match(/proof-qed/g) || []).length;
+ok(qedCount === 1, '宏包回归: \\qedhere 证明环境不重复生成双重 QED 符号');
+
+const regIeeeQed = renderLatex('\\begin{IEEEproof}Step 1. \\qedhere\\end{IEEEproof}');
+ok(regIeeeQed.html.includes('&#8718;'), '宏包回归: IEEEproof 中的 \\qedhere 使用实心方块');
+
+const regReqEnsCom = renderLatex('\\begin{algorithmic}\\Require{data} \\Comment{req c}\\Ensure{res} \\Comment{ens c}\\State x\\end{algorithmic}');
+ok(regReqEnsCom.html.includes('req c') && regReqEnsCom.html.includes('ens c'), '宏包回归: \\Require/\\Ensure 带花括号保留行末注释');
+
+const regEndSubSpace = renderLatex('\\begin{figure}\\begin{subfigure}{0.4\\textwidth}\\caption{Sub}\\end {subfigure}\\caption{Main}\\end{figure}');
+ok(regEndSubSpace.html.includes('图&nbsp;1：Main'), '宏包回归: \\end {subfigure} 带空格不吞掉主图题注');
+
+const regDiagCss = renderLatex('\\begin{tabular}{c}\\diagbox{R}{C}\\end{tabular}');
+ok(regDiagCss.html.includes('diag-top-right') && regDiagCss.html.includes('diag-bot-left'), '宏包回归: diagbox 生成对角表头语义结构');
+
+const regThmStar = renderLatex('\\begin{document}\\begin{theorem*}无编号定理\\end{theorem*}\\begin{lemma*}无编号引理\\end{lemma*}\\end{document}');
+ok(regThmStar.warnings.length === 0 && regThmStar.html.includes('无编号定理') && !regThmStar.html.includes('定理&nbsp;'), '宏包回归: 自动支持 theorem* 与 lemma* 无编号定理变体且无降级警告');
+
+// 7. 第三轮宏包审查缺陷回归验证
+const regAlgCaps = renderLatex('\\begin{algorithmic}\\STATE \\RETURN x\\STATE \\CALL{Calc}{y}\\STATE \\PRINT z\\COMMENT{note}\\end{algorithmic}');
+ok(regAlgCaps.warnings.length === 0 && regAlgCaps.html.includes('return') && regAlgCaps.html.includes('Calc') && regAlgCaps.html.includes('print'), '宏包回归: 全大写算法宏 \\RETURN \\CALL \\PRINT \\COMMENT 正常解析零警告');
+
+const regSubfloat = renderLatex('\\begin{figure}\\subfloat[子图 A\\label{suba}]{图像A}\\subfloat[子图 B\\label{subb}]{图像B}\\caption{总图}\\end{figure}引用：\\ref{suba}, \\ref{subb}');
+ok(regSubfloat.warnings.length === 0 && regSubfloat.html.includes('has-subfigures') && regSubfloat.html.includes('引用：1a, 1b'), '宏包回归: \\subfloat 支持及题注 \\label 绑定 1a 1b');
+
+const regMultiOpt = renderLatex('\\begin{figure}\\begin{subfigure}[t][b]{0.45\\textwidth}\\caption{A}\\end{subfigure}\\caption{Main}\\end{figure}');
+ok(regMultiOpt.html.includes('width:45%;') && !regMultiOpt.html.includes('[b]0.45'), '宏包回归: subfigure 多可选参数 [t][b] 正常消化不泄露');
+
+const regAlgOps = renderLatex('\\begin{algorithmic}\\State x \\gets y\\For{i = 1 \\to n}\\State \\Return \\TRUE \\AND \\NOT \\FALSE\\EndFor\\end{algorithmic}');
+ok(regAlgOps.warnings.length === 0 && regAlgOps.html.includes('&larr;') && regAlgOps.html.includes('&rarr;') && regAlgOps.html.includes('true'), '宏包回归: 算法文本态 \\gets \\to \\TRUE 符号正常渲染零警告');
+
+const regTabCap = renderLatex('\\begin{table}\\caption{表头}\\begin{tabular}{c}A\\end{tabular}\\end{table}');
+ok(regTabCap.html.indexOf('<figcaption') < regTabCap.html.indexOf('<table'), '宏包回归: 表格题注置于表格上方');
+
+const regFloatSpan = renderLatex('\\begin{figure*}\\caption{F}\\end{figure*}\\begin{table*}\\caption{T}\\end{table*}\\begin{algorithm*}\\caption{A}\\end{algorithm*}');
+ok(regFloatSpan.html.includes('fig float-span') && regFloatSpan.html.includes('tab float-span') && regFloatSpan.html.includes('algorithm float-span'), '宏包回归: figure*/table*/algorithm* 挂载 float-span 跨栏类');
+
+// ---------- 排版语法的静态检测 ----------
 console.log('== 排版语法检测 ==');
 const dupCls = lintLaTeX('\\documentclass{IEEEtran}\n\\begin{document}\n\\documentclass[conference]{IEEEtran}\n\\end{document}');
 ok(dupCls.some(d => d.kind === 'class' && d.line === 2 && d.severity === 'error'), '重复 \\documentclass 定位到第 3 行: ' + JSON.stringify(dupCls.filter(d => d.kind === 'class')));
