@@ -1070,7 +1070,11 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     case 'par': flushP(); return afterName;
 
     // ---- 文本格式 ----
-    case 'textbf': case 'bm': case 'boldsymbol': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<strong>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</strong>' };
+    case 'textbf': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<strong>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</strong>' };
+    case 'bm': case 'boldsymbol': {
+      g1 = G(afterName); if (!g1) return null;
+      return { next: g1.end + 1, html: renderMath('\\boldsymbol{' + g1.text + '}', false, ctx, katexMacrosOf(ctx), base + g1.start) };
+    }
     case 'textit': case 'emph': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<em>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</em>' };
     case 'underline': case 'uline': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<u>' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</u>' };
     case 'uuline': g1 = G(afterName); if (!g1) return null; return { next: g1.end + 1, html: '<u style="text-decoration-style:double;">' + renderFlow(g1.text, ctx, base + g1.start, false, true) + '</u>' };
@@ -1095,10 +1099,11 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       o1 = readOpt(str, afterName);
       var fnPos = o1 ? o1.closeIdx + 1 : afterName;
       g1 = G(fnPos); if (!g1) return null;
-      var customFn = o1 ? o1.text.trim() : null;
+      var rawMark = o1 ? o1.text.trim() : null;
+      var customFn = rawMark ? rawMark.replace(/^\\(?:star|ast)$/, '★').replace(/^\\(?:dag|dagger)$/, '†').replace(/^\\(?:ddag|ddagger)$/, '‡') : null;
       var fn = customFn || (++ctx.counters.footnote);
       ctx.footnotes.push({ n: fn, html: renderFlow(g1.text, ctx, base + g1.start, false, true) });
-      return { next: g1.end + 1, html: '<sup class="fnref" id="fnr' + fn + '">' + fn + '</sup>' };
+      return { next: g1.end + 1, html: '<sup class="fnref" id="fnr' + esc(fn) + '">' + esc(fn) + '</sup>' };
     }
     case 'underlinebar': return null;
 
@@ -1263,8 +1268,8 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
 
     // ---- 版面（忽略类） ----
     case 'centering': case 'raggedright': case 'raggedleft': case 'noindent': case 'indent':
-    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'addtolength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'floatname': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal': case 'textwidth': case 'columnwidth': case 'linewidth': case 'DeclareMathOperator': {
-      if (name === 'usepackage' || name === 'RequirePackage') {
+    case 'small': case 'large': case 'Large': case 'LARGE': case 'huge': case 'Huge': case 'footnotesize': case 'scriptsize': case 'normalsize': case 'linespread': case 'setlength': case 'addtolength': case 'vspace': case 'hspace': case 'hspace*': case 'vspace*': case 'graphicspath': case 'captionsetup': case 'pagestyle': case 'thispagestyle': case 'usetikzlibrary': case 'usepackage': case 'RequirePackage': case 'documentclass': case 'definecolor': case 'input': case 'include': case 'renewcommand': case 'newcommand': case 'providecommand': case 'def': case 'bibliographystyle': case 'bibliography': case 'setcounter': case 'addtocounter': case 'captionof': case 'floatname': case 'nolinebreak': case 'linebreak': case 'pagebreak': case 'nopagebreak': case 'kern': case 'hfill': case 'vfill': case 'strut': case 'obeyspaces': case 'ttfamily': case 'bfseries': case 'itshape': case 'normalfont': case 'textnormal': case 'textwidth': case 'columnwidth': case 'linewidth': case 'DeclareMathOperator': {
+      if (name === 'usepackage' || name === 'RequirePackage' || name === 'documentclass') {
         var po = readOpt(str, afterName);
         var pg = G(po ? po.closeIdx + 1 : afterName);
         return pg ? pg.end + 1 : (po ? po.closeIdx + 1 : afterName);
@@ -1577,6 +1582,10 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
       return { next: afterName, html: '&larr;' };
     case 'to':
       return { next: afterName, html: '&rarr;' };
+    case 'TO':
+      return { next: afterName, html: '<span class="alg-kw">to</span> ' };
+    case 'downto': case 'DOWNTO':
+      return { next: afterName, html: '<span class="alg-kw">downto</span> ' };
     case 'TRUE': case 'true':
       return { next: afterName, html: '<span class="alg-kw">true</span>' };
     case 'FALSE': case 'false':

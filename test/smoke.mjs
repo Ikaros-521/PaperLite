@@ -536,6 +536,9 @@ ok(regDMO.warnings.length === 0 && !regDMO.html.includes('\\DeclareMathOperator'
 const regParamLeak = renderLatex('A \\vspace{12pt} B \\linespread{1.2} C \\newcommand{\\foo}[2][默认]{#1#2} D \\foo{bar}');
 ok(!regParamLeak.html.includes('12pt') && !regParamLeak.html.includes('1.2') && !regParamLeak.html.includes('[2][默认]') && regParamLeak.html.includes('默认bar'), '宏包回归: 布局宏参数与 newcommand 源码防泄漏');
 
+const regDocClassAndMath = renderLatex('\\documentclass{article}\n\\bm{\\beta} \\begin{algorithmic}\\FOR{i=1 \\TO 10}\\ENDFOR\\end{algorithmic} \\footnote[\\star]{Note}');
+ok(regDocClassAndMath.warnings.length === 0 && !regDocClassAndMath.html.includes('\\documentclass') && regDocClassAndMath.html.includes('★'), '宏包回归: 裸 documentclass 吞噬、bm 数学符号、TO 循环关键词与符号注脚正常解析');
+
 // ---------- 排版语法的静态检测 ----------
 console.log('== 排版语法检测 ==');
 const dupCls = lintLaTeX('\\documentclass{IEEEtran}\n\\begin{document}\n\\documentclass[conference]{IEEEtran}\n\\end{document}');
