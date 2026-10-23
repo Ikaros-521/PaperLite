@@ -1580,25 +1580,67 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
   var rulesBefore = [];
   var pendingRule = null;
   function depth0Split(s) {
-    var depth = 0, out = [], cur = '', curStart = 0, curGap = null;
+    var depth = 0, envDepth = 0, out = [], cur = '', curStart = 0, curGap = null;
     for (var j = 0; j < s.length; j++) {
       var c = s.charAt(j);
+      if (c === '$') {
+        if (s.charAt(j + 1) === '$') {
+          var me = findMathEnd(s, j + 2, '$$');
+          if (me > 0) { cur += s.slice(j, me + 2); j = me + 1; continue; }
+        } else {
+          var me2 = findMathEnd(s, j + 1, '$');
+          if (me2 > 0) { cur += s.slice(j, me2 + 1); j = me2; continue; }
+        }
+      }
       if (c === '\\') {
-        if (s.substr(j, 2) === '\\\\') {
-          out.push({ text: cur, start: curStart, gap: curGap });
-          var bs = breakSpace(s, j + 2);   // \\[<dim>]：行间距，不吞掉会让 "[3pt]" 落到下一行首格
-          cur = ''; curStart = bs ? bs.next : j + 2;
-          curGap = bs ? bs.css : null;
-          if (bs) j = bs.next - 2;         // 连同 [<dim>] 一起跳过（下面 j++ 与 for 的 j++ 共两步）
-          j++; continue;
+        if (s.substr(j, 2) === '\\(') {
+          var me3 = findMathEnd(s, j + 2, '\\)');
+          if (me3 > 0) { cur += s.slice(j, me3 + 2); j = me3 + 1; continue; }
+        }
+        if (s.substr(j, 2) === '\\[') {
+          var me4 = findMathEnd(s, j + 2, '\\]');
+          if (me4 > 0) { cur += s.slice(j, me4 + 2); j = me4 + 1; continue; }
+        }
+        // \begin / \end 环境保护（如内联 matrix / tabular 等）
+        if (s.substr(j, 6) === '\\begin') {
+          var bg = readGroup(s, j + 6);
+          if (bg && s.indexOf('\\end{' + bg.text + '}', bg.end) >= 0) {
+            envDepth++;
+            cur += s.slice(j, bg.end + 1);
+            j = bg.end;
+            continue;
+          }
+        }
+        if (s.substr(j, 4) === '\\end') {
+          var eg = readGroup(s, j + 4);
+          if (eg) {
+            if (envDepth > 0) envDepth--;
+            cur += s.slice(j, eg.end + 1);
+            j = eg.end;
+            continue;
+          }
         }
         // \verb 定界符里的 & 与 \\ 不是分隔符，整段照抄
         var vb = verbAt(s, j);
         if (vb) { cur += s.slice(j, vb.next); j = vb.next - 1; continue; }
+        if (depth === 0 && envDepth === 0) {
+          var isNl = s.substr(j, 2) === '\\\\';
+          var isTn = !isNl && s.substr(j, 15) === '\\tabularnewline';
+          if (isNl || isTn) {
+            var step = isNl ? 2 : 15;
+            out.push({ text: cur, start: curStart, gap: curGap });
+            var bs = breakSpace(s, j + step);   // \\[<dim>]：行间距，不吞掉会让 "[3pt]" 落到下一行首格
+            cur = ''; curStart = bs ? bs.next : j + step;
+            curGap = bs ? bs.css : null;
+            if (bs) j = bs.next - 1;
+            else j += step - 1;
+            continue;
+          }
+        }
         cur += c + (s.charAt(j + 1) || ''); j++; continue;
       }
       if (c === '{') depth++;
-      if (c === '}') depth--;
+      if (c === '}') { depth--; if (depth < 0) depth = 0; }
       cur += c;
     }
     out.push({ text: cur, start: curStart, gap: curGap });
@@ -1637,11 +1679,19 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
       var raw = c2.text.trim();
       var orig = raw;   // multicolumn 剥壳前的源码原文（面板按原文编辑）
       var span = 1;
-      var mc = raw.match(/\\multicolumn\{(\d+)\}\s*\{[^}]*\}\s*\{/);
-      if (mc) {
-        span = +mc[1];
-        var mcBe = braceEnd(raw, raw.indexOf('{', mc.index + mc[0].length - 1));
-        raw = mcBe > 0 ? raw.slice(mc.index + mc[0].length, mcBe) + raw.slice(mcBe + 1) : raw;
+      var mcIdx = raw.indexOf('\\multicolumn');
+      if (mcIdx >= 0) {
+        var g1 = readGroup(raw, mcIdx + 12);
+        if (g1 && /^\d+$/.test(g1.text.trim())) {
+          var g2 = readGroup(raw, g1.end + 1);
+          if (g2) {
+            var g3 = readGroup(raw, g2.end + 1);
+            if (g3) {
+              span = parseInt(g1.text.trim(), 10);
+              raw = raw.slice(0, mcIdx) + g3.text + raw.slice(g3.end + 1);
+            }
+          }
+        }
       }
       var cellStart = base + bodyStart + rr.start + consumed + c2.start + lead;
       rowInfo.cells.push({ start: cellStart, end: cellStart + orig.length, raw: orig });
@@ -1697,18 +1747,53 @@ function renderTabular(inner, ctx, base, widthArg, tableStyle, env) {
 }
 
 function splitTopLevel(s, sep) {
-  var out = [], depth = 0, cur = '', start = 0;
+  var out = [], depth = 0, envDepth = 0, cur = '', start = 0;
   for (var j = 0; j < s.length; j++) {
     var c = s.charAt(j);
+    if (c === '$') {
+      if (s.charAt(j + 1) === '$') {
+        var me = findMathEnd(s, j + 2, '$$');
+        if (me > 0) { cur += s.slice(j, me + 2); j = me + 1; continue; }
+      } else {
+        var me2 = findMathEnd(s, j + 1, '$');
+        if (me2 > 0) { cur += s.slice(j, me2 + 1); j = me2; continue; }
+      }
+    }
     if (c === '\\') {
+      if (s.substr(j, 2) === '\\(') {
+        var me3 = findMathEnd(s, j + 2, '\\)');
+        if (me3 > 0) { cur += s.slice(j, me3 + 2); j = me3 + 1; continue; }
+      }
+      if (s.substr(j, 2) === '\\[') {
+        var me4 = findMathEnd(s, j + 2, '\\]');
+        if (me4 > 0) { cur += s.slice(j, me4 + 2); j = me4 + 1; continue; }
+      }
+      if (s.substr(j, 6) === '\\begin') {
+        var bg = readGroup(s, j + 6);
+        if (bg && s.indexOf('\\end{' + bg.text + '}', bg.end) >= 0) {
+          envDepth++;
+          cur += s.slice(j, bg.end + 1);
+          j = bg.end;
+          continue;
+        }
+      }
+      if (s.substr(j, 4) === '\\end') {
+        var eg = readGroup(s, j + 4);
+        if (eg) {
+          if (envDepth > 0) envDepth--;
+          cur += s.slice(j, eg.end + 1);
+          j = eg.end;
+          continue;
+        }
+      }
       // \verb 定界符内的 & 属于内容，不是列分隔符
       var vb = verbAt(s, j);
       if (vb) { cur += s.slice(j, vb.next); j = vb.next - 1; continue; }
       cur += c + (s.charAt(j + 1) || ''); j++; continue;
     }
     if (c === '{') depth++;
-    if (c === '}') depth--;
-    if (c === sep && depth === 0) { out.push({ text: cur, start: start }); cur = ''; start = j + 1; continue; }
+    if (c === '}') { depth--; if (depth < 0) depth = 0; }
+    if (c === sep && depth === 0 && envDepth === 0) { out.push({ text: cur, start: start }); cur = ''; start = j + 1; continue; }
     cur += c;
   }
   out.push({ text: cur, start: start });

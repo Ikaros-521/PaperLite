@@ -404,4 +404,25 @@ assert.equal(stripToolBlocks('正文\n```tool\n{"tool":"a"'), '正文');
   assert.ok((await wide.executor('insert_text', { text: 'X' })).ok, '「完全访问」档放行');
 }
 
+// ---------- read_file：超长文件（>12KB）行区间局部读取不被提前截断 ----------
+{
+  const lines500 = Array.from({ length: 500 }, (_, i) => `Line ${i + 1}: ${'x'.repeat(40)}`).join('\n');
+  assert.ok(lines500.length > TOOL_RESULT_MAX_CHARS, '测试文件长度必须超过 TOOL_RESULT_MAX_CHARS');
+  const disk = { 'long.tex': lines500 };
+  const { executor } = makeDeps({ disk });
+
+  // 全量读：被 clampResult 截断
+  const full = await executor('read_file', { path: 'long.tex' });
+  assert.ok(full.ok);
+  assert.ok(full.result.includes('…'), '全量读取超过限制必须截断');
+
+  // 局部读后半段：如第 400 行起读 5 行，不能因全文截断而丢失
+  const slice = await executor('read_file', { path: 'long.tex', from_line: 400, max_lines: 5 });
+  assert.ok(slice.ok, '局部行读取必须成功');
+  assert.ok(slice.result.startsWith('Line 400:'), '读取内容必须从第 400 行开始：' + slice.result.slice(0, 50));
+  assert.equal(slice.result.split('\n').length, 5, '精确返回 5 行');
+  assert.ok(slice.result.endsWith('Line 404: ' + 'x'.repeat(40)));
+  assert.equal(slice.sig, full.sig, '整篇签名在局部读取时保持一致');
+}
+
 console.log('agentTools: all tests passed');

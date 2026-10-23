@@ -40,6 +40,11 @@ assert.ok(renderMarkdownFull('# 标题').html.includes('mdh-0'), '对照：预�
 
 assert.ok(renderChatMarkdown('把 `$x$` 原样留着').includes('<code>$x$</code>'), '代码里的 $ 不当公式');
 assert.ok(renderChatMarkdown('质能 $E=mc^2$ 守恒').includes('katex'), '行内公式走 KaTeX');
+const ineq = renderChatMarkdown('关系 $x < y$ 与 $a > b$');
+assert.ok(ineq.includes('katex') && !ineq.includes('katex-error'), '含 < > 的行内公式不被 md 转义实体打断');
+assert.ok(renderMarkdownFull('$0 < x < 1$').html.includes('katex') && !renderMarkdownFull('$0 < x < 1$').html.includes('katex-error'), '文档预览中含 < 的公式正常渲染');
+const aligned = renderChatMarkdown('$$\n\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}\n$$');
+assert.ok(aligned.includes('katex') && !aligned.includes('katex-error') && !aligned.includes('mathnormal">am</span>'), '对齐环境中的 & 正常解析，不泄漏为字面 am/p 文本');
 const disp = renderChatMarkdown('推导：\n\n$$\nL = \\frac{1}{2}mv^2\n$$\n');
 assert.ok(disp.includes('katex-display') && !disp.includes('katex-error'), '跨行 display 公式不被 breaks 注入的 <br> 打断');
 assert.ok(renderChatMarkdown('\\textbf{x} -- 与 "引号" (c)').includes('\\textbf{x}'), 'LaTeX 命令原样保留');

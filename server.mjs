@@ -72,12 +72,14 @@ const MAX_PDF = 50 * 1024 * 1024;
 const MAX_EMBED_INPUTS = 64, MAX_EMBED_CHARS = 200000;
 
 function killTree(p) {
+  if (!p || !p.pid) return;
   if (process.platform === 'win32') {
     // 只 kill 直接子进程在 Windows 上会留下 mktexpk / 字体子进程；/T 连同整棵树
-    if (!p.pid) return;
     try { spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); }
     catch (e) { try { p.kill(); } catch (e2) { /* 已经退出 */ } }
   } else {
+    // POSIX 下尝试通过 pkill -P 连同子进程树一并终结，再强制杀自身，避免留下孤儿进程
+    try { spawn('pkill', ['-9', '-P', String(p.pid)], { stdio: 'ignore' }); } catch (e) { /* 无 pkill 或已退出 */ }
     try { p.kill('SIGKILL'); } catch (e) { /* 已经退出 */ }
   }
 }
@@ -155,13 +157,18 @@ function parseLog(log) {
 // \openin15=…\relax 这类不带花括号的原语——真正的边界仍然是只监听 127.0.0.1 加
 // Origin 白名单（外部页面读不走响应），这条只是把本机文件内容进日志这扇门关上。
 const FILE_ARG_RE = /\\(?:input|include|subfile|subfileinclude|import|subimport|bibliography|addbibresource|includegraphics|VerbatimInput|verbatiminput|lstinputlisting|includepdf|InputIfFileExists)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
-// 花括号白名单漏掉两类写法：不带花括号的读文件（\input C:/win.ini、
+// 花括号白名单漏掉两类写法：不带花括号的读写文件（\input C:/win.ini、
 // \openin15=/etc/passwd\relax），以及把 @ 改成字母再用 \@@input 拼绕过的动作。
-// 相对路径的 \input main.tex 是合法常见用法，只有路径越界才拒
-const BARE_ARG_RES = [/\\input\s+([^\s{}]+)/g, /\\openin\s*\d+\s*=\s*([^\s{}]+)/g];
+// 相对路径的 \input main.tex 是合法常见用法，只有路径越界才拒；\openin / \openout 的等号在 TeX 里为可选。
+const BARE_ARG_RES = [
+  /\\input\s+([^\s{}]+)/g,
+  /\\openin\s*\d+\s*(?:=\s*)?([^\s{}]+)/g,
+  /\\openout\s*\d+\s*(?:=\s*)?([^\s{}]+)/g
+];
 const BANNED_RES = [[/\\@@input\b/, '\\@@input'], [/\\catcode\s*`?\\?@/, '\\catcode...@']];
 function escapingPath(a) {
-  const s = String(a || '').trim();
+  // 剥除首尾引号（LaTeX 支持带引号的路径，如 \input{"C:/..."}，不能让首部引号绕开 /^[A-Za-z]:/ 等边界判定）
+  const s = String(a || '').trim().replace(/^["']|["']$/g, '').trim();
   return s.includes('..') || /^[/\\]/.test(s) || /^[A-Za-z]:[\\/]/.test(s) || s.startsWith('~');
 }
 function findEscapingArgs(source) {
@@ -259,8 +266,9 @@ function sweepStaleTempDirs() {
 
 // ---------------- HTTP ----------------
 
-// 本机开发源：vite dev（任意端口）与自身（127.0.0.1:PORT）。
+// 本机开发源与 Host：vite dev（任意端口）与自身（127.0.0.1:PORT）。
 const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
 // CORS：仅放行本机开发源（vite dev server 等任意端口的 localhost/127.0.0.1）。
 // 不再回 *：任意网页都能跨源 POST /api/compile 驱动本机 TeX，等于把本机算力与
@@ -279,6 +287,13 @@ function corsHeaders(req) {
 function forbiddenOrigin(req) {
   const o = String(req.headers.origin || '');
   return !!o && !LOCAL_ORIGIN.test(o);
+}
+
+// 防御 DNS 重绑定：外部网页无法直接跨源 POST，但可以通过绑定到 127.0.0.1 的外部域名
+// 发起 GET 请求探测服务。校验 Host 头只认本机回环。
+function forbiddenHost(req) {
+  const h = String(req.headers.host || '').trim();
+  return !!h && !LOCAL_HOST.test(h);
 }
 
 function json(res, code, obj, extra) {
@@ -382,6 +397,7 @@ async function route(req, res) {
     return res.end();
   }
 
+  if (forbiddenHost(req)) return json(res, 403, { ok: false, error: 'forbidden host' });
   if (forbiddenOrigin(req)) return json(res, 403, { ok: false, error: 'forbidden origin' }, cors);
 
   // ---- API ----
@@ -515,6 +531,7 @@ async function route(req, res) {
   }
 
   // ---- 静态文件 ----
+  if (req.method !== 'GET' && req.method !== 'HEAD') return plain(res, 405, 'Method Not Allowed');
   // 非法 % 序列（GET /%）会抛 URIError：在 async 处理器里就是 unhandledRejection，
   // Node 15+ 默认直接结束进程 —— 一个 <img src="http://127.0.0.1:8788/%"> 就能打死本机服务
   let decoded;
@@ -584,22 +601,27 @@ function mockReply(q) {
 process.on('uncaughtException', (e) => console.error('[paperlite] 未捕获异常，服务继续运行：', (e && e.stack) || e));
 process.on('unhandledRejection', (e) => console.error('[paperlite] 未处理的 rejection：', (e && e.stack) || e));
 
-sweepStaleTempDirs();
-// 长时间挂着的实例：Windows 上 TeX 与杀软常常还攥着 main.log，compile 里的 rm 会失败
-// 留下 paperlite-* 僵尸目录。启动清一次不够，按小时再扫一遍（只动一小时前的）
-setInterval(sweepStaleTempDirs, 60 * 60 * 1000).unref?.();
+export { escapingPath, findEscapingArgs, forbiddenHost, forbiddenOrigin, killTree };
 
-// 端口被占时默认抛一整段栈然后退出；给一句能照着做的提示
-server.on('error', (e) => {
-  if (e && e.code === 'EADDRINUSE') console.error(`端口 ${PORT} 已被占用（可能已有一个 server.mjs 在跑）。换个端口：node server.mjs 8790`);
-  else console.error('[paperlite] 服务启动失败：', (e && e.message) || e);
-  process.exit(1);
-});
+const isDirectRun = !process.argv[1] || path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isDirectRun) {
+  sweepStaleTempDirs();
+  // 长时间挂着的实例：Windows 上 TeX 与杀软常常还攥着 main.log，compile 里的 rm 会失败
+  // 留下 paperlite-* 僵尸目录。启动清一次不够，按小时再扫一遍（只动一小时前的）
+  setInterval(sweepStaleTempDirs, 60 * 60 * 1000).unref?.();
 
-server.listen(PORT, '127.0.0.1', () => {
-  const eng = availableEngines();
-  const list = Object.keys(ENGINE_CMDS).filter(k => eng[k]);
-  console.log(`PaperLite → http://127.0.0.1:${PORT}/`);
-  console.log(`TeX 引擎：${list.length ? list.join(', ') : '未检测到（编译功能需安装 MiKTeX / TeX Live）'}`);
-  console.log('LLM Mock：/v1/chat/completions（离线演示渠道）');
-});
+  // 端口被占时默认抛一整段栈然后退出；给一句能照着做的提示
+  server.on('error', (e) => {
+    if (e && e.code === 'EADDRINUSE') console.error(`端口 ${PORT} 已被占用（可能已有一个 server.mjs 在跑）。换个端口：node server.mjs 8790`);
+    else console.error('[paperlite] 服务启动失败：', (e && e.message) || e);
+    process.exit(1);
+  });
+
+  server.listen(PORT, '127.0.0.1', () => {
+    const eng = availableEngines();
+    const list = Object.keys(ENGINE_CMDS).filter(k => eng[k]);
+    console.log(`PaperLite → http://127.0.0.1:${PORT}/`);
+    console.log(`TeX 引擎：${list.length ? list.join(', ') : '未检测到（编译功能需安装 MiKTeX / TeX Live）'}`);
+    console.log('LLM Mock：/v1/chat/completions（离线演示渠道）');
+  });
+}

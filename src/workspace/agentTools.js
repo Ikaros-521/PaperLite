@@ -221,18 +221,35 @@ export function makeAgentExecutor(deps) {
     // 用户明确放弃这层保护，才允许读隐藏路径。闸只管磁盘兜底是不够的——扫描会把点开头
     // 目录里的 .tex/.md/.bib 整份存进 folderIndex，已打开的标签同样可能是隐藏路径
     if (hiddenBlocked(path)) return fail(tr(L, 'agent.errHiddenPath', { path }), 'hidden_path');
+
+    function wrapReadFileResult(rawText) {
+      const s = String(rawText == null ? '' : rawText);
+      const sig = contentSig(s);
+      const from = args.from_line, count = args.max_lines;
+      let picked = s;
+      if (from || count) {
+        const lines = s.split('\n');
+        const a = Math.max(0, (from || 1) - 1);
+        const b = count ? a + count : lines.length;
+        picked = lines.slice(a, b).join('\n');
+      }
+      // sig 沿用整篇的签名：它只回答「底层内容变没变」，与这次截取的区间无关，
+      // 两次同区间重读因此能正确判重；切片后产物再过 clampResult
+      return { ok: true, result: clampResult(picked), sig };
+    }
+
     // 1) 打开的标签（拿编辑中的实时内容）
     const tab = (deps.tabs() || []).find(x => x && x.doc && deps.tabPath(x) === path);
-    if (tab) return sliceLines(ok(tab.id === deps.activeId() ? (deps.cm() ? deps.cm().getValue() : tab.doc.getValue()) : tab.doc.getValue()), args);
+    if (tab) return wrapReadFileResult(tab.id === deps.activeId() ? (deps.cm() ? deps.cm().getValue() : tab.doc.getValue()) : tab.doc.getValue());
     // 2) 文件夹索引（已扫描进内存的 .tex/.bib/.txt）
     const fi = deps.folderIndex() || {};
     const entry = [...(fi.texFiles || []), ...(fi.bibFiles || []), ...(fi.textFiles || [])].find(f => f.path === path);
-    if (entry && typeof entry.source === 'string') return sliceLines(ok(entry.source), args);
+    if (entry && typeof entry.source === 'string') return wrapReadFileResult(entry.source);
     // 3) 直读磁盘（未进索引的文件类型）；区分「不存在」与「读取失败」——
     //    权限/超大/非法路径等原因如实回传，避免模型误以为文件不存在而反复重读或盲目重建
     try {
       const text = await readFromDisk(path);
-      if (text != null) return sliceLines(ok(text), args);
+      if (text != null) return wrapReadFileResult(text);
     } catch (e) {
       if (e && e.name === 'NotFoundError') return fail(tr(L, 'agent.errFileNotFound', { path }), 'file_not_found');
       // 超大文件走 too_large：降级建议是「用行区间局部读」，不是「换工具」
@@ -240,20 +257,6 @@ export function makeAgentExecutor(deps) {
       return fail(tr(L, 'agent.toolCrashed', { msg: (e && e.message) || e }), 'tool_crashed');
     }
     return fail(tr(L, 'agent.errFileNotFound', { path }), 'file_not_found');
-  }
-
-  /** 行区间读取：长文档整篇进上下文是长任务最常见的一种浪费，给了区间模型才会分段看 */
-  function sliceLines(r, args) {
-    if (!r.ok) return r;
-    const from = args.from_line, count = args.max_lines;
-    if (!from && !count) return r;
-    const lines = r.result.split('\n');
-    const a = Math.max(0, (from || 1) - 1);
-    const b = count ? a + count : lines.length;
-    const picked = lines.slice(a, b);
-    // sig 沿用整篇的签名（ok() 里按截断前原文算的）：它只回答「底层内容变没变」，
-    // 与这次截取的区间无关，两次同区间重读因此能正确判重
-    return { ...r, result: picked.join('\n') };
   }
 
   function toolSearch(args) {

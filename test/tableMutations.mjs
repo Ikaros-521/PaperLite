@@ -113,5 +113,26 @@ for (const key of ['tb.openTip', 'tb.title', 'tb.note', 'tb.cell', 'tb.addRow', 
   ok(!/[\u4e00-\u9fff]/.test(DICT.en[key]), '英文无汉字: ' + key);
 }
 
+console.log('== 嵌套矩阵公式与 multicolumn 嵌套括号 ==');
+const MATRIX_SRC = [
+  '\\documentclass{article}',
+  '\\begin{document}',
+  '\\begin{tabular}{cc}',
+  '$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$ & 标量 \\tabularnewline',
+  '\\multicolumn{2}{|p{3cm}|}{长表头} \\\\',
+  '1 & 2 \\\\',
+  '\\end{tabular}',
+  '\\end{document}',
+].join('\n');
+const matrixRes = renderLatex(MATRIX_SRC);
+ok(matrixRes.tables.length === 1, '识别到矩阵表格');
+const mTbl = matrixRes.tables[0];
+ok(mTbl.rows.length === 3, '矩阵行内 \\\\ 与 \\tabularnewline 保持 3 行：' + mTbl.rows.length);
+ok(mTbl.rows[0].cells.length === 2, '矩阵内 & 不把单元格切成多列：' + mTbl.rows[0].cells.length);
+ok(mTbl.rows[0].cells[0].raw.includes('\\begin{pmatrix}'), '首格保留完整矩阵');
+ok(!matrixRes.html.includes('math-error'), 'KaTeX 正常渲染矩阵公式');
+ok(matrixRes.html.includes('colspan="2"'), '嵌套括号 p{3cm} 成功提取 colspan=2');
+ok(matrixRes.html.includes('长表头'), 'multicolumn 内部文本正常渲染');
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

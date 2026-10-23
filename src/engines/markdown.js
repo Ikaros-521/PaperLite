@@ -49,12 +49,24 @@ function atob64(s) {
   return Buffer.from(s, 'base64').toString('binary');
 }
 
+// markdown-it 会先将正文中的 < > & " 转义成 HTML 实体，还原后交给 KaTeX，
+// 避免 $x < y$、$a > b$、矩阵/对齐环境里的 & 变成实体导致 KaTeX 报语法错误
+function unescMdEntities(s) {
+  return String(s || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 // 把 mathPass 藏起来的 @@MDX...@@ 还原成 KaTeX。
 // 聊天那份 md 开了 breaks，段内换行已经变成 <br> 混进公式里了，先还原成空格再交给 KaTeX
 function mathBackfill(html, budget) {
   return html.replace(/@@MDX([A-Za-z0-9+/=]+)@@/g, (_, b64) => {
     let raw;
     try { raw = decodeURIComponent(escape(atob64(b64))).replace(/<br\s*\/?>/gi, ' '); } catch (e) { return ''; }
+    raw = unescMdEntities(raw);
     if (raw.startsWith('@@D@@')) return '<div class="equation"><span class="eq-body">' + renderMathSafe(raw.slice(5), true, budget) + '</span></div>';
     return renderMathSafe(raw.slice(5), false, budget);
   });
