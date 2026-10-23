@@ -393,10 +393,14 @@ export function expandMacros(text, macros, depth) {
       var pos = after, ok = true;
       var argsUsed = [];
       for (var a = 0; a < mac.argc; a++) {
-        if (a === 0 && mac.opt !== undefined && mac.opt !== null && out.charAt(skipWs(out, pos)) === '[') {
-          var og = readOpt(out, pos);
-          if (!og) { ok = false; break; }
-          argsUsed.push(og.text); pos = og.closeIdx + 1;
+        if (a === 0 && mac.opt !== undefined && mac.opt !== null) {
+          if (out.charAt(skipWs(out, pos)) === '[') {
+            var og = readOpt(out, pos);
+            if (!og) { ok = false; break; }
+            argsUsed.push(og.text); pos = og.closeIdx + 1;
+          } else {
+            argsUsed.push(mac.opt);
+          }
           continue;
         }
         var g = readGroup(out, pos);
@@ -944,10 +948,15 @@ function handleCommand(name, str, i, ctx, base, tokens, flushP) {
     var mrec = ctx.macros[name];
     var pos = afterName, argsUsed = [], okArgs = true;
     for (var a = 0; a < mrec.argc; a++) {
-      if (a === 0 && mrec.opt !== undefined && mrec.opt !== null && str.charAt(skipWs(str, pos)) === '[') {
-        var og = readOpt(str, pos);
-        if (!og) { okArgs = false; break; }
-        argsUsed.push(og.text); pos = og.closeIdx + 1; continue;
+      if (a === 0 && mrec.opt !== undefined && mrec.opt !== null) {
+        if (str.charAt(skipWs(str, pos)) === '[') {
+          var og = readOpt(str, pos);
+          if (!og) { okArgs = false; break; }
+          argsUsed.push(og.text); pos = og.closeIdx + 1;
+        } else {
+          argsUsed.push(mrec.opt);
+        }
+        continue;
       }
       var g0 = readGroup(str, pos);
       if (!g0) { okArgs = false; break; }

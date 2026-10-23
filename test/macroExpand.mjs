@@ -72,9 +72,23 @@ assert.equal(Ax(B + 'def' + B + 'd{DD}', B + 'd ' + B + 'dd'), 'DD ' + B + 'dd',
 assert.equal(Ax(B + 'newcommand{' + B + 'two}[2]{#1-#2}', B + 'two{a}{b}'), 'a-b', '双参按位置抓取');
 const dC = B + 'newcommand{' + B + 'c}[2][blue]{#1/#2}';
 assert.equal(Ax(dC, B + 'c[green]{red}'), 'green/red', '显式可选参数走 readOpt');
-// 引擎既有口径（旧实现同样如此，不在本次修改范围内）：参数不够时 readGroup 落空就
-// 放弃该宏这一遍，而没有任何改动 → 不会再有一遍去救，整条原样留着
-assert.equal(Ax(dC, B + 'c{red}'), B + 'c{red}', '缺第二参时整条宏不展开，与旧实现同口径');
+assert.equal(Ax(dC, B + 'c{red}'), 'blue/red', '省略可选参数时使用默认值');
+assert.equal(Ax(dC, B + 'c'), B + 'c', '真缺必选参数时整条宏不展开');
+assert.equal(Ax(B + 'newcommand{' + B + 'optOne}[1][dflt]{(#1)}', B + 'optOne'), '(dflt)', '单参可选宏省略参数展开为默认值');
+assert.equal(Ax(B + 'newcommand{' + B + 'optOne}[1][dflt]{(#1)}', B + 'optOne[custom]'), '(custom)', '单参可选宏提供参数展开为自定义值');
+{
+  const dBox = [
+    '\\documentclass{article}',
+    '\\newcommand{\\notebox}[2][提示]{\\textbf{#1}: #2}',
+    '\\begin{document}',
+    '\\notebox{正文内容}',
+    '\\notebox[警告]{严重错误}',
+    '\\end{document}',
+  ].join('\n');
+  const rBox = renderLatex(dBox);
+  assert.ok(rBox.html.includes('<strong>提示</strong>') && rBox.html.includes('正文内容'), '正文宏省略可选参数时使用默认值');
+  assert.ok(rBox.html.includes('<strong>警告</strong>') && rBox.html.includes('严重错误'), '正文宏显式提供可选参数时覆盖默认值');
+}
 assert.equal(Ax(B + 'newcommand{' + B + 'x}{X}', B + 'x' + B + 'x' + B + 'x'), 'XXX', '相邻 token 全部展开');
 assert.equal(Ax(B + 'newcommand{' + B + 'm}{$E$}', B + 'm'), '$E$', '宏体里的 $& 不该被当替换串解释');
 assert.equal(Ax(B + 'newcommand{' + B + 'p}{#1miss}', B + 'p'), 'miss', 'argc=0 时宏体里的 #1 按旧口径替换为空');
