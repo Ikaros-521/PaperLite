@@ -1,6 +1,6 @@
 /* PaperLite · 伴随服务器安全加固单测（路径逃逸拦截、Host 校验、原语防护） */
 import assert from 'node:assert';
-import { escapingPath, findEscapingArgs, forbiddenHost, forbiddenOrigin } from '../server.mjs';
+import { escapingPath, findEscapingArgs, forbiddenHost, forbiddenOrigin, killTree } from '../server.mjs';
 
 console.log('== escapingPath 路径边界判定 ==');
 assert.strictEqual(escapingPath('main.tex'), false, '当前目录正常文件放行');
@@ -51,5 +51,11 @@ assert.strictEqual(forbiddenOrigin({ headers: { origin: 'http://127.0.0.1:8788' 
 assert.strictEqual(forbiddenOrigin({ headers: {} }), false, '无 origin 头（非浏览器）放行');
 assert.strictEqual(forbiddenOrigin({ headers: { origin: 'https://evil.com' } }), true, '恶意跨域网站拦截');
 assert.strictEqual(forbiddenOrigin({ headers: { origin: 'null' } }), true, 'null 来源拦截');
+
+console.log('== killTree 进程安全终止与异常保护 ==');
+assert.doesNotThrow(() => killTree(null), '传 null 安全返回');
+assert.doesNotThrow(() => killTree({}), '无 pid 进程安全返回');
+assert.doesNotThrow(() => killTree({ pid: 0 }), 'pid 为 0 安全返回');
+assert.doesNotThrow(() => killTree({ pid: 999999999 }), '不存在的进程安全终止不抛出异常');
 
 console.log('serverHardening: all tests passed');

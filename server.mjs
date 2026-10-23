@@ -75,11 +75,11 @@ function killTree(p) {
   if (!p || !p.pid) return;
   if (process.platform === 'win32') {
     // 只 kill 直接子进程在 Windows 上会留下 mktexpk / 字体子进程；/T 连同整棵树
-    try { spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); }
+    try { spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => {}); }
     catch (e) { try { p.kill(); } catch (e2) { /* 已经退出 */ } }
   } else {
     // POSIX 下尝试通过 pkill -P 连同子进程树一并终结，再强制杀自身，避免留下孤儿进程
-    try { spawn('pkill', ['-9', '-P', String(p.pid)], { stdio: 'ignore' }); } catch (e) { /* 无 pkill 或已退出 */ }
+    try { spawn('pkill', ['-9', '-P', String(p.pid)], { stdio: 'ignore' }).on('error', () => {}); } catch (e) { /* 无 pkill 或已退出 */ }
     try { p.kill('SIGKILL'); } catch (e) { /* 已经退出 */ }
   }
 }
